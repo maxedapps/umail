@@ -118,6 +118,6 @@ pnpm exec alchemy deploy --stage prod --profile default
 
 Password changes require redeployment and invalidate existing sessions/grants. New Recovery cron triggers can take up to 15 minutes to start; verify a mail round trip after deployment. **Deleting a conversation hides it but does not erase its archived raw objects.**
 
-This project uses prerelease Alchemy/Effect dependencies and maintained patches. There are no stable release or support guarantees yet. See [operations and recovery limits](docs/operations.md) and the [security policy](SECURITY.md).
+This project uses prerelease Alchemy/Effect dependencies and maintained patches. There are no stable release or support guarantees yet. See [operations and recovery limits](docs/operations.md).
 
-Licensed under [MIT](LICENSE.md). Third-party notices remain with their respective code.
+Licensed under [MIT](LICENSE.md). The Oxlint plugin in `tools/oxlint/anti-slop` is vendored from [anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy (MIT).
