@@ -1,0 +1,110 @@
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+
+import { PublicApprovalApi, UmailApi } from "./api-spec.ts";
+
+export interface UmailClientConfig {
+  readonly baseUrl: string;
+  readonly accessToken: Redacted.Redacted<string>;
+}
+
+export interface UmailClientEnvironment {
+  readonly UMAIL_URL?: string | undefined;
+}
+
+export interface PublicApprovalClientConfig {
+  readonly baseUrl: string;
+}
+
+export interface PublicApprovalClientEnvironment {
+  readonly UMAIL_URL?: string | undefined;
+}
+
+interface UmailClientConfigurationErrorFields {
+  readonly message: string;
+}
+
+export class UmailClientConfigurationError extends Data.TaggedError(
+  "UmailClientConfigurationError",
+)<UmailClientConfigurationErrorFields> {}
+
+function parseBaseUrl(value: string) {
+  return Schema.decodeEffect(Schema.URLFromString)(value).pipe(
+    Effect.mapError(
+      () =>
+        new UmailClientConfigurationError({
+          message: "UMAIL_URL must be a valid HTTP(S) origin",
+        }),
+    ),
+    Effect.filterOrFail(
+      (url) =>
+        (url.protocol === "https:" || url.protocol === "http:") && url.href === `${url.origin}/`,
+      () =>
+        new UmailClientConfigurationError({
+          message: "UMAIL_URL must be a valid HTTP(S) origin",
+        }),
+    ),
+    Effect.filterOrFail(
+      (url) =>
+        url.protocol === "https:" ||
+        url.hostname === "localhost" ||
+        url.hostname === "127.0.0.1" ||
+        url.hostname === "[::1]",
+      () =>
+        new UmailClientConfigurationError({
+          message: "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
+        }),
+    ),
+    Effect.map((url) => url.origin),
+  );
+}
+
+export function configFromEnvironment(env: UmailClientEnvironment) {
+  const baseUrlValue = env.UMAIL_URL;
+  if (baseUrlValue === undefined) {
+    return Effect.fail(new UmailClientConfigurationError({ message: "UMAIL_URL is required" }));
+  }
+  return Effect.map(
+    parseBaseUrl(baseUrlValue),
+    (baseUrl) => ({ baseUrl }) satisfies PublicApprovalClientConfig,
+  );
+}
+
+export function publicApprovalConfigFromEnvironment(env: PublicApprovalClientEnvironment) {
+  return configFromEnvironment(env);
+}
+
+export function withUmailRequestHeaders(client: HttpClient.HttpClient, config: UmailClientConfig) {
+  return HttpClient.mapRequest(client, (request) =>
+    request.pipe(
+      HttpClientRequest.setHeader("content-type", "application/json"),
+      HttpClientRequest.bearerToken(config.accessToken),
+    ),
+  );
+}
+
+export function makeUmailClient(config: UmailClientConfig, httpClient: HttpClient.HttpClient) {
+  return HttpApiClient.makeWith(UmailApi, {
+    baseUrl: config.baseUrl,
+    httpClient: withUmailRequestHeaders(httpClient, config),
+  });
+}
+
+export function makePublicApprovalClient(
+  config: PublicApprovalClientConfig,
+  httpClient: HttpClient.HttpClient,
+) {
+  const manualRedirectClient = HttpClient.transform(httpClient, (response) =>
+    Effect.provideService(response, FetchHttpClient.RequestInit, { redirect: "manual" }),
+  );
+  return HttpApiClient.makeWith(PublicApprovalApi, {
+    baseUrl: config.baseUrl,
+    httpClient: manualRedirectClient,
+  });
+}

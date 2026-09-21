@@ -1,0 +1,66 @@
+diff --git a/dist/authorize-BmTe2VYG.mjs b/dist/authorize-BmTe2VYG.mjs
+index 42c943dd45aa3d297a14edcc056a14e7ddd54680..9e243729dcf257a0b45f42301bb80e2d06bd76bd 100644
+--- a/dist/authorize-BmTe2VYG.mjs
++++ b/dist/authorize-BmTe2VYG.mjs
+@@ -1627,12 +1627,24 @@
+ 	if (client.response_types) return client.response_types;
+ 	return grantTypes.includes("authorization_code") ? ["code"] : void 0;
+ }
+-function applyOAuthClientRegistrationDefaults(client, defaultApplicationType = "web") {
++const CURSOR_MCP_REDIRECT_URI = "cursor://anysphere.cursor-mcp/oauth/callback";
++const CURSOR_MCP_REDIRECT_URIS = new Set([
++	CURSOR_MCP_REDIRECT_URI,
++	"https://www.cursor.com/agents/mcp/oauth/callback",
++	"http://localhost:8787/callback"
++]);
++function isCursorMcpPublicClientRegistration(client) {
++	const redirectUris = client.redirect_uris;
++	const grantTypes = client.grant_types;
++	const responseTypes = client.response_types;
++	return (client.application_type === void 0 || client.application_type === "web" || client.application_type === "native") && client.token_endpoint_auth_method === "none" && Array.isArray(redirectUris) && redirectUris.length > 0 && redirectUris.includes(CURSOR_MCP_REDIRECT_URI) && redirectUris.every((redirectUri) => CURSOR_MCP_REDIRECT_URIS.has(redirectUri)) && grantTypes?.includes("authorization_code") === true && grantTypes.every((grantType) => grantType === "authorization_code" || grantType === "refresh_token") && responseTypes?.includes("code") === true && responseTypes.every((responseType) => responseType === "code");
++}
++function applyOAuthClientRegistrationDefaults(client, defaultApplicationType = "web", normalizeCursorMcpApplicationType = false) {
+ 	const grantTypes = resolveRegistrationGrantTypes(client);
+ 	return {
+ 		...client,
+ 		token_endpoint_auth_method: client.token_endpoint_auth_method ?? "client_secret_basic",
+-		application_type: client.application_type ?? (defaultApplicationType === null ? void 0 : defaultApplicationType),
++		application_type: normalizeCursorMcpApplicationType && isCursorMcpPublicClientRegistration(client) ? "native" : client.application_type ?? (defaultApplicationType === null ? void 0 : defaultApplicationType),
+ 		grant_types: grantTypes,
+ 		response_types: resolveRegistrationResponseTypes(client, grantTypes)
+ 	};
+@@ -1682,7 +1694,7 @@
+ 	}
+ 	return resources;
+ }
+-function validateClientRedirectUri(redirectUri, applicationType) {
++function validateClientRedirectUri(redirectUri, applicationType, client) {
+ 	let url;
+ 	try {
+ 		url = new URL(redirectUri);
+@@ -1708,6 +1720,7 @@
+ 		if (!isAllowedNativeHttpLoopback) invalidRedirectUri(`native clients may use http only on the exact loopback hosts localhost, 127.0.0.1, or [::1]: ${redirectUri}`);
+ 		return;
+ 	}
++	if (redirectUri === CURSOR_MCP_REDIRECT_URI && isCursorMcpPublicClientRegistration(client)) return;
+ 	if (FORBIDDEN_NATIVE_REDIRECT_SCHEMES.has(url.protocol) || !isReverseDomainPrivateUseRedirectUri(url)) invalidRedirectUri(`native private-use redirect URI schemes must be well-formed reverse-domain names, omit the naming authority, and must not use a reserved scheme: ${redirectUri}`);
+ }
+ function assertValidRegistrationJwks(jwks) {
+@@ -1775,7 +1788,7 @@
+ 		error: "invalid_redirect_uri",
+ 		error_description: "Redirect URIs are required for authorization_code and implicit grant types"
+ 	});
+-	for (const uri of clientWithDefaults.redirect_uris ?? []) validateClientRedirectUri(uri, applicationType ?? (isClientMetadataDocument ? "native" : "web"));
++	for (const uri of clientWithDefaults.redirect_uris ?? []) validateClientRedirectUri(uri, applicationType ?? (isClientMetadataDocument ? "native" : "web"), clientWithDefaults);
+ 	const supportedGrantTypes = new Set(getSupportedGrantTypes(opts));
+ 	if (isClientMetadataDocument) {
+ 		if (!grantTypes.some((grantType) => supportedGrantTypes.has(grantType))) throw new APIError("BAD_REQUEST", {
+@@ -1917,7 +1930,7 @@
+ 	const body = applyOAuthClientRegistrationDefaults(input.registrationSource === "dynamic" && !input.metadata.scope ? {
+ 		...input.metadata,
+ 		scope: (opts.clientRegistrationDefaultScopes ?? opts.scopes)?.join(" ")
+-	} : input.metadata, input.registrationSource === "clientMetadataDocument" ? null : "web");
++	} : input.metadata, input.registrationSource === "clientMetadataDocument" ? null : "web", input.registrationSource === "dynamic");
+ 	const isPublic = body.token_endpoint_auth_method === "none";
+ 	const isPrivateKeyJwt = body.token_endpoint_auth_method === "private_key_jwt";
+ 	const isExtensionAuthMethod = isExtensionTokenEndpointAuthMethod(opts, body.token_endpoint_auth_method);

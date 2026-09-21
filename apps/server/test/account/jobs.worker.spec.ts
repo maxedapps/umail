@@ -1,0 +1,453 @@
+/// <reference types="@cloudflare/vitest-plugin/types" />
+
+import {
+  generateApprovalToken,
+  hashApprovalToken,
+  NormalizedRfcMessageId,
+  parseExternalMailAddress,
+  parseMailDomain,
+  SubmissionRequestId,
+  type MailDomain,
+} from "@umail/api-contract";
+import * as Schema from "effect/Schema";
+import { describe, expect, it } from "vitest";
+
+import { accountStore } from "./harness.ts";
+import type { AccountStoreTestHost } from "./worker-host.ts";
+
+const NOW = "2026-01-01T00:00:00.000Z";
+const LATER = "2026-01-01T01:00:00.000Z";
+const EXPIRES = "2026-01-02T00:00:00.000Z";
+const CLAIM_EXPIRES = "2026-01-01T00:15:00.000Z";
+const DOMAIN = requireMailDomain("umail.example.com");
+const REQUEST_A = "ccccccca-cccc-4ccc-8ccc-cccccccccccc";
+const REQUEST_B = "dddddddb-dddd-4ddd-8ddd-dddddddddddd";
+const REQUEST_C = "eeeeeeec-eeee-4eee-8eee-eeeeeeeeeeee";
+const PROVIDER_ID = Schema.decodeSync(NormalizedRfcMessageId)("<provider-1@cf.example>");
+
+describe("account-store job execution", () => {
+  it("treats mixed To/CC exemptions as requiring approval and rechecks policy at claim", async () => {
+    const store = accountStore("jobs-mixed-exempt");
+    const mailbox = await requireAddress(store, "inbox");
+    await seedOauthPolicy(store, "agent", {
+      kind: "requireApproval",
+      allowlist: ["allowed@example.com", "exempt@example.com"],
+      preapproved: ["exempt@example.com"],
+    });
+    const mixed = await store.submitOutbound(
+      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
+        to: ["exempt@example.com"],
+        cc: ["allowed@example.com"],
+      }),
+    );
+    expect(mixed.job.state).toBe("waiting_approval");
+    const exemptOnly = await store.submitOutbound(
+      await mcpSubmit(store, mailbox.id, REQUEST_B, "agent", {
+        to: ["exempt@example.com"],
+      }),
+    );
+    expect(exemptOnly.job.state).toBe("ready");
+
+    await store.updateMcpOAuthPolicy({
+      clientId: "agent",
+      label: "Client agent",
+      policy: {
+        mailboxIds: "all",
+        canRead: true,
+        canDelete: false,
+        sendMode: { kind: "requireApproval", preapprovedRecipients: [] },
+        recipientAllowlist: [
+          requireExternal("allowed@example.com"),
+          requireExternal("exempt@example.com"),
+        ],
+        canAdmin: false,
+      },
+      updatedAt: LATER,
+    });
+    expect(
+      await store.claimDispatch({
+        jobId: exemptOnly.job.jobId,
+        nowIso: LATER,
+        claimExpiresAt: CLAIM_EXPIRES,
+      }),
+    ).toMatchObject({
+      kind: "rejected",
+      job: { state: "rejected", failureClass: "policy" },
+    });
+  });
+
+  it("rejects a ready job after post-creation revocation and never manufactures authority", async () => {
+    const store = accountStore("jobs-revoke");
+    const mailbox = await requireAddress(store, "inbox");
+    await seedOauthPolicy(store, "agent", { kind: "allow" });
+    const submitted = await store.submitOutbound(
+      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
+        to: ["recipient@example.com"],
+      }),
+    );
+    expect(submitted.job.state).toBe("ready");
+    await store.revokeMcpOAuthPolicy("agent", LATER);
+    expect(
+      await store.claimDispatch({
+        jobId: submitted.job.jobId,
+        nowIso: LATER,
+        claimExpiresAt: CLAIM_EXPIRES,
+      }),
+    ).toMatchObject({
+      kind: "rejected",
+      job: { state: "rejected", failureClass: "policy" },
+    });
+  });
+
+  it("keeps pre-dispatch preparation retryable and matches attempt ids on completion", async () => {
+    const store = accountStore("jobs-attempts");
+    const mailbox = await requireAddress(store, "inbox");
+    const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
+    expect(submitted.job.state).toBe("ready");
+    expect(await store.getOutboundJob(submitted.job.jobId, { kind: "operator" })).toMatchObject({
+      state: "ready",
+      attemptId: null,
+    });
+    const claimed = await store.claimDispatch({
+      jobId: submitted.job.jobId,
+      nowIso: NOW,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    expect(claimed.kind).toBe("claimed");
+    if (claimed.kind !== "claimed") {
+      throw new Error("expected claim");
+    }
+    expect(
+      await store.claimDispatch({
+        jobId: submitted.job.jobId,
+        nowIso: NOW,
+        claimExpiresAt: CLAIM_EXPIRES,
+      }),
+    ).toMatchObject({ kind: "not_claimable", job: { state: "in_flight" } });
+    expect(
+      await store.completeAttempt({
+        jobId: submitted.job.jobId,
+        attemptId: "00000000-0000-4000-8000-000000000000",
+        nowIso: NOW,
+        outcome: { kind: "accepted", providerMessageId: "stale", rfcMessageId: null },
+      }),
+    ).toMatchObject({ kind: "stale", job: { state: "in_flight" } });
+    expect(
+      await store.completeAttempt({
+        jobId: submitted.job.jobId,
+        attemptId: claimed.attemptId,
+        nowIso: NOW,
+        outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: null },
+      }),
+    ).toMatchObject({
+      kind: "applied",
+      job: { state: "accepted", providerMessageId: "prov-1" },
+    });
+    expect(
+      await store.completeAttempt({
+        jobId: submitted.job.jobId,
+        attemptId: claimed.attemptId,
+        nowIso: LATER,
+        outcome: { kind: "unknown" },
+      }),
+    ).toMatchObject({ kind: "applied", job: { state: "accepted", providerMessageId: "prov-1" } });
+  });
+
+  it("settles expired in-flight work as unknown and never returns it to ready", async () => {
+    const store = accountStore("jobs-unknown");
+    const mailbox = await requireAddress(store, "inbox");
+    const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
+    const claimed = await store.claimDispatch({
+      jobId: submitted.job.jobId,
+      nowIso: NOW,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    expect(claimed.kind).toBe("claimed");
+    if (claimed.kind !== "claimed") {
+      throw new Error("expected claim");
+    }
+    expect(
+      await store.settleExpiredInFlight({
+        jobId: submitted.job.jobId,
+        attemptId: claimed.attemptId,
+        nowIso: LATER,
+      }),
+    ).toMatchObject({ kind: "applied", job: { state: "unknown" } });
+    expect(
+      await store.claimDispatch({
+        jobId: submitted.job.jobId,
+        nowIso: LATER,
+        claimExpiresAt: CLAIM_EXPIRES,
+      }),
+    ).toMatchObject({ kind: "not_claimable", job: { state: "unknown" } });
+    expect(await store.getOutboundJob(submitted.job.jobId, { kind: "operator" })).toMatchObject({
+      state: "unknown",
+    });
+  });
+
+  it("bounds job status to the operator or originating client and hides notification secrets", async () => {
+    const store = accountStore("jobs-status");
+    const mailbox = await requireAddress(store, "inbox");
+    await seedOauthPolicy(store, "agent", { kind: "requireApproval" });
+    await seedOauthPolicy(store, "other", { kind: "allow" });
+    const pending = await store.submitOutbound(
+      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
+        to: ["recipient@example.com"],
+      }),
+    );
+    const other = await store.submitOutbound(
+      await mcpSubmit(store, mailbox.id, REQUEST_C, "other", {
+        to: ["recipient@example.com"],
+      }),
+    );
+    expect(pending.job.state).toBe("waiting_approval");
+    const visible = await store.getOutboundJob(pending.job.jobId, {
+      kind: "mcp",
+      clientId: "agent",
+    });
+    expect(visible?.jobId).toBe(pending.job.jobId);
+    expect(JSON.stringify(visible)).not.toContain("secret-capability-ciphertext");
+    expect(JSON.stringify(visible)).not.toContain("ciphertext");
+    expect(
+      await store.getOutboundJob(pending.job.jobId, { kind: "mcp", clientId: "other" }),
+    ).toBeNull();
+    const listed = await store.listOutboundJobs({
+      viewer: { kind: "mcp", clientId: "agent" },
+      limit: 50,
+    });
+    const listedIds = listed.items.map((item) => item.jobId);
+    expect(listedIds).toContain(pending.job.jobId);
+    expect(listedIds).not.toContain(other.job.jobId);
+    expect(listed.items.some((item) => item.purpose === "approval_notification")).toBe(true);
+    expect(JSON.stringify(listed)).not.toContain("secret-capability-ciphertext");
+    const operatorPage = await store.listOutboundJobs({
+      viewer: { kind: "operator" },
+      limit: 1,
+    });
+    expect(operatorPage.items).toHaveLength(1);
+    expect(operatorPage.nextCursor).not.toBeNull();
+    const operatorAll = await store.listOutboundJobs({
+      viewer: { kind: "operator" },
+      limit: 50,
+    });
+    expect(operatorAll.items.map((item) => item.purpose).sort()).toEqual(
+      ["approval_notification", "message", "message"].sort(),
+    );
+    expect(operatorAll.items.map((item) => item.jobId)).toContain(pending.job.jobId);
+    expect(operatorAll.items.map((item) => item.jobId)).toContain(other.job.jobId);
+  });
+
+  it("claims the accepted Message-ID so a later reply threads onto the sent message", async () => {
+    const store = accountStore("jobs-rfc-claim");
+    const mailbox = await requireAddress(store, "inbox");
+    const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
+    const claimed = await store.claimDispatch({
+      jobId: submitted.job.jobId,
+      nowIso: NOW,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    if (claimed.kind !== "claimed") {
+      throw new Error("expected claim");
+    }
+    expect(
+      await store.completeAttempt({
+        jobId: submitted.job.jobId,
+        attemptId: claimed.attemptId,
+        nowIso: NOW,
+        outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_ID },
+      }),
+    ).toMatchObject({ kind: "applied", job: { state: "accepted", rfcMessageId: PROVIDER_ID } });
+    const lookup = await store.inspectRfcLookup(PROVIDER_ID);
+    expect(lookup).toEqual({
+      rfcMessageId: PROVIDER_ID,
+      nodeId: nodeIdOf(submitted.job.threadHandle),
+      claimantNodeId: nodeIdOf(submitted.job.threadHandle),
+    });
+
+    await store.acceptInboundWithReceipt({
+      messageId: "inbound-reply",
+      mailboxId: mailbox.id,
+      rfcMessageId: "<reply@example.com>",
+      inReplyToHeader: PROVIDER_ID,
+      referencesHeader: PROVIDER_ID,
+      occurredAt: LATER,
+      nowIso: LATER,
+      parsedDate: null,
+    });
+    const page = await store.listThreadMessageSummaries(submitted.job.threadHandle, {
+      mailboxScope: "all",
+    });
+    expect(page.items.map((item) => item.id).sort()).toEqual(
+      ["inbound-reply", submitted.job.messageId].sort(),
+    );
+    expect(page.items.find((item) => item.id === "inbound-reply")?.parentMessageId).toBe(
+      submitted.job.messageId,
+    );
+    expect(page.items.find((item) => item.id === submitted.job.messageId)?.rfcMessageId).toBe(
+      PROVIDER_ID,
+    );
+
+    const repeat = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_B));
+    const repeatClaim = await store.claimDispatch({
+      jobId: repeat.job.jobId,
+      nowIso: LATER,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    if (repeatClaim.kind !== "claimed") {
+      throw new Error("expected claim");
+    }
+    await store.completeAttempt({
+      jobId: repeat.job.jobId,
+      attemptId: repeatClaim.attemptId,
+      nowIso: LATER,
+      outcome: { kind: "accepted", providerMessageId: "prov-2", rfcMessageId: PROVIDER_ID },
+    });
+    expect(await store.inspectRfcLookup(PROVIDER_ID)).toEqual(lookup);
+    expect(
+      (
+        await store.listThreadMessageSummaries(repeat.job.threadHandle, { mailboxScope: "all" })
+      ).items.map((item) => item.id),
+    ).toEqual([repeat.job.messageId]);
+  });
+});
+
+function nodeIdOf(threadHandle: string) {
+  return threadHandle.slice("node:".length);
+}
+
+function operatorSubmit(mailboxId: string, requestId: string) {
+  return {
+    requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
+    mailboxId,
+    mailDomain: DOMAIN,
+    subject: "Direct",
+    textBody: "body",
+    htmlBody: null,
+    hasRemoteImages: false,
+    to: [contact("recipient@example.com")],
+    cc: [],
+    inReplyToHeader: null,
+    referencesHeader: null,
+    nowIso: NOW,
+  };
+}
+
+async function mcpSubmit(
+  store: DurableObjectStub<AccountStoreTestHost>,
+  mailboxId: string,
+  requestId: string,
+  clientId: string,
+  options: {
+    readonly to?: ReadonlyArray<string>;
+    readonly cc?: ReadonlyArray<string>;
+  },
+) {
+  const policy = await store.getMcpOAuthPolicy(clientId);
+  const sendMode = policy?.policy.sendMode;
+  const to = options.to ?? ["recipient@example.com"];
+  const cc = options.cc ?? [];
+  const needsApproval =
+    sendMode?.kind === "requireApproval" &&
+    [...to, ...cc].some(
+      (address) => !sendMode.preapprovedRecipients.includes(requireExternal(address)),
+    );
+  const input = {
+    requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    requester: { kind: "mcp" as const, clientId, label: `Client ${clientId}` },
+    mailboxId,
+    mailDomain: DOMAIN,
+    subject: "Hello",
+    textBody: "body",
+    htmlBody: null,
+    hasRemoteImages: false,
+    to: to.map(contact),
+    cc: cc.map(contact),
+    inReplyToHeader: null,
+    referencesHeader: null,
+    nowIso: NOW,
+  };
+  if (!needsApproval) {
+    return input;
+  }
+  return {
+    ...input,
+    approval: {
+      tokenHash: await hashApprovalToken(generateApprovalToken()),
+      expiresAt: EXPIRES,
+      notification: {
+        keyVersion: "v1",
+        nonce: "n1",
+        ciphertext: "secret-capability-ciphertext",
+      },
+    },
+  };
+}
+
+async function seedOauthPolicy(
+  store: DurableObjectStub<AccountStoreTestHost>,
+  clientId: string,
+  options: {
+    readonly kind: "allow" | "requireApproval";
+    readonly allowlist?: ReadonlyArray<string> | "any";
+    readonly preapproved?: ReadonlyArray<string>;
+  },
+) {
+  await store.ensureMcpOAuthPolicy({
+    clientId,
+    label: `Client ${clientId}`,
+    createdAt: NOW,
+  });
+  const sendMode =
+    options.kind === "requireApproval"
+      ? {
+          kind: "requireApproval" as const,
+          preapprovedRecipients: (options.preapproved ?? []).map(requireExternal),
+        }
+      : { kind: "allow" as const };
+  const recipientAllowlist =
+    options.allowlist === undefined || options.allowlist === "any"
+      ? "any"
+      : options.allowlist.map((address) => requireExternal(address));
+  await store.updateMcpOAuthPolicy({
+    clientId,
+    label: `Client ${clientId}`,
+    policy: {
+      mailboxIds: "all",
+      canRead: true,
+      canDelete: false,
+      sendMode,
+      recipientAllowlist,
+      canAdmin: false,
+    },
+    updatedAt: NOW,
+  });
+}
+
+async function requireAddress(store: DurableObjectStub<AccountStoreTestHost>, localPart: string) {
+  const created = await store.createAddress(localPart, DOMAIN, localPart, NOW);
+  if (created === null) {
+    throw new Error(`expected address ${localPart}`);
+  }
+  return created;
+}
+
+function contact(address: string) {
+  return { address: requireExternal(address), displayName: null };
+}
+
+function requireMailDomain(raw: string): MailDomain {
+  const parsed = parseMailDomain(raw);
+  if (parsed.kind !== "ok") {
+    throw new Error("expected mail domain");
+  }
+  return parsed.domain;
+}
+
+function requireExternal(raw: string) {
+  const parsed = parseExternalMailAddress(raw);
+  if (parsed.kind !== "ok") {
+    throw new Error("expected external address");
+  }
+  return parsed.address;
+}

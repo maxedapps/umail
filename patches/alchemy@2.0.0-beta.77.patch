@@ -1,0 +1,38 @@
+diff --git a/lib/Apply.js b/lib/Apply.js
+index c099d206676c04d44aa68d30f1178c31ce1a03f4..191fba9fa35347420da8be7cc60ef64610d7a747 100644
+--- a/lib/Apply.js
++++ b/lib/Apply.js
+@@ -391,13 +391,13 @@ const executeNode = (fqn, node, tracker, ready, readyStable, terminalStatuses, s
+         if (policyChanged && node.state.removalPolicy !== undefined) {
+             yield* scopedSession.note(`removal policy ${node.state.removalPolicy} → ${node.resource.RemovalPolicy}`);
+         }
+-        yield* signalReadyStable;
+         yield* storeAndSignal({
+             output: node.state.attr,
+             props: node.state.props,
+             bindings: node.state.bindings ?? [],
+             instanceId: node.state.instanceId,
+         });
++        yield* signalReadyStable;
+         return;
+     }
+     const allUpstreamFqns = () => {
+diff --git a/src/Apply.ts b/src/Apply.ts
+index 4e056c4e52c2a6f9b4d8ed08bb35d900171c4d07..22972b6053639a83c2dd1c1dc2964892e7eada9a 100644
+--- a/src/Apply.ts
++++ b/src/Apply.ts
+@@ -747,13 +747,13 @@ const executeNode = (
+           `removal policy ${node.state.removalPolicy} → ${node.resource.RemovalPolicy}`,
+         );
+       }
+-      yield* signalReadyStable;
+       yield* storeAndSignal({
+         output: node.state.attr,
+         props: node.state.props,
+         bindings: node.state.bindings ?? [],
+         instanceId: node.state.instanceId,
+       });
++      yield* signalReadyStable;
+       return;
+     }
+ 

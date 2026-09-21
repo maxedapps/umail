@@ -1,0 +1,88 @@
+import * as Schema from "effect/Schema";
+
+export const HumanPageBrowserFixture = Schema.Literals([
+  "login",
+  "consent",
+  "pending",
+  "accepted",
+  "failed",
+  "queued",
+  "denied",
+  "expired",
+  "unknown",
+]);
+export type HumanPageBrowserFixture = typeof HumanPageBrowserFixture.Type;
+
+export const HumanPageBrowserColorScheme = Schema.Literals(["light", "dark"]);
+export type HumanPageBrowserColorScheme = typeof HumanPageBrowserColorScheme.Type;
+
+export class HumanPageBrowserVisit extends Schema.Class<HumanPageBrowserVisit>(
+  "HumanPageBrowserVisit",
+)({
+  fixture: HumanPageBrowserFixture,
+  colorScheme: HumanPageBrowserColorScheme,
+  viewportWidth: Schema.Finite,
+  viewportHeight: Schema.Finite,
+  search: Schema.optionalKey(Schema.String),
+}) {}
+
+const BrowserFormButtonObservation = Schema.Struct({
+  name: Schema.String,
+  type: Schema.String,
+  formAction: Schema.String,
+});
+
+export const HumanPageBrowserObservation = Schema.Struct({
+  status: Schema.Finite,
+  contentType: Schema.NullOr(Schema.String),
+  contentSecurityPolicy: Schema.NullOr(Schema.String),
+  frameOptions: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  heading: Schema.String,
+  bodyText: Schema.String,
+  formCount: Schema.Finite,
+  formMethod: Schema.NullOr(Schema.String),
+  formAction: Schema.NullOr(Schema.String),
+  buttons: Schema.Array(BrowserFormButtonObservation),
+  keyboardFocusId: Schema.NullOr(Schema.String),
+  keyboardFocusText: Schema.NullOr(Schema.String),
+  focusOutlineStyle: Schema.NullOr(Schema.String),
+  focusOutlineWidth: Schema.NullOr(Schema.String),
+  controlHeight: Schema.NullOr(Schema.Finite),
+  scriptNonce: Schema.NullOr(Schema.String),
+  clientId: Schema.NullOr(Schema.String),
+  scope: Schema.NullOr(Schema.String),
+  statusText: Schema.NullOr(Schema.String),
+  authRequestPath: Schema.NullOr(Schema.String),
+  authRequestMethod: Schema.NullOr(Schema.String),
+  authRequestBody: Schema.NullOr(Schema.String),
+  finalPath: Schema.String,
+  secretValue: Schema.NullOr(Schema.String),
+  hostileElementCount: Schema.Finite,
+  metadataText: Schema.NullOr(Schema.String),
+  metadataBidiControlCount: Schema.Finite,
+  automaticIsolationCount: Schema.Finite,
+  addressIsolationCount: Schema.Finite,
+  sectionsSeparated: Schema.NullOr(Schema.Boolean),
+  documentClientWidth: Schema.Finite,
+  documentScrollWidth: Schema.Finite,
+  bodyBackground: Schema.String,
+  bodyColor: Schema.String,
+  darkSchemeMatches: Schema.Boolean,
+  iframeSandbox: Schema.NullOr(Schema.String),
+  previewContentSecurityPolicy: Schema.NullOr(Schema.String),
+  previewFrameOptions: Schema.NullOr(Schema.String),
+  previewBodyText: Schema.NullOr(Schema.String),
+  previewUrlBeforeActivation: Schema.NullOr(Schema.String),
+  previewUrlAfterActivation: Schema.NullOr(Schema.String),
+  externalRequests: Schema.Array(Schema.String),
+  openedPageCount: Schema.Finite,
+  consoleMessages: Schema.Array(Schema.String),
+});
+export type HumanPageBrowserObservation = typeof HumanPageBrowserObservation.Type;
+
+declare module "vitest/browser" {
+  interface BrowserCommands {
+    observeHumanPage(visit: HumanPageBrowserVisit): Promise<HumanPageBrowserObservation>;
+  }
+}

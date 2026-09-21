@@ -1,0 +1,984 @@
+diff --git a/dist/base64-decoder.cjs b/dist/base64-decoder.cjs
+index a54764a21489341924859b51364c71c43c5067be..57135715691ddec803c8b6bb864d264a28473924 100644
+--- a/dist/base64-decoder.cjs
++++ b/dist/base64-decoder.cjs
+@@ -22,17 +22,18 @@ __export(base64_decoder_exports, {
+ });
+ module.exports = __toCommonJS(base64_decoder_exports);
+ var import_decode_strings = require("./decode-strings.cjs");
++var import_decoded_byte_accumulator = require("./decoded-byte-accumulator.cjs");
+ class Base64Decoder {
+   constructor(opts) {
+     opts = opts || {};
+     this.decoder = opts.decoder || new TextDecoder();
+     this.maxChunkSize = 100 * 1024;
+-    this.chunks = [];
++    this.output = new import_decoded_byte_accumulator.default();
+     this.remainder = "";
+   }
+   pushChunk(base64Str) {
+     if (base64Str.length) {
+-      this.chunks.push((0, import_decode_strings.decodeBase64)(base64Str));
++      this.output.write(new Uint8Array((0, import_decode_strings.decodeBase64)(base64Str)));
+     }
+   }
+   flushRemainder() {
+@@ -56,7 +57,7 @@ class Base64Decoder {
+   }
+   finalize() {
+     this.flushRemainder();
+-    return (0, import_decode_strings.blobToArrayBuffer)(new Blob(this.chunks, { type: "application/octet-stream" }));
++    return this.output.finalize();
+   }
+ }
+ 
+@@ -75,4 +76,3 @@ if (module.exports.default) {
+     Object.defineProperty(module.exports, '__esModule', { value: true });
+     module.exports.default = defaultExport;
+ }
+-
+diff --git a/dist/decoded-byte-accumulator.cjs b/dist/decoded-byte-accumulator.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b301e26fa5b3bd9de9a6cf0e40208ae45d8fcd9c
+--- /dev/null
++++ b/dist/decoded-byte-accumulator.cjs
+@@ -0,0 +1,88 @@
++"use strict";
++var __defProp = Object.defineProperty;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, { get: all[name], enumerable: true });
++};
++var __copyProps = (to, from, except, desc) => {
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (let key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(to, key) && key !== except)
++        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
++  }
++  return to;
++};
++var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
++var decoded_byte_accumulator_exports = {};
++__export(decoded_byte_accumulator_exports, {
++  default: () => DecodedByteAccumulator
++});
++module.exports = __toCommonJS(decoded_byte_accumulator_exports);
++const BLOCK_SIZE = 64 * 1024;
++class DecodedByteAccumulator {
++  constructor() {
++    this.completedBlocks = [];
++    this.block = new Uint8Array(BLOCK_SIZE);
++    this.blockPos = 0;
++    this.byteLength = 0;
++  }
++  writeByte(byte) {
++    this.ensureAvailableBlock();
++    this.block[this.blockPos++] = byte;
++    this.byteLength++;
++  }
++  write(bytes) {
++    let readPos = 0;
++    while (readPos < bytes.length) {
++      this.ensureAvailableBlock();
++      const count = Math.min(bytes.length - readPos, this.block.length - this.blockPos);
++      this.block.set(bytes.subarray(readPos, readPos + count), this.blockPos);
++      this.blockPos += count;
++      this.byteLength += count;
++      readPos += count;
++    }
++  }
++  ensureAvailableBlock() {
++    if (this.blockPos < this.block.length) {
++      return;
++    }
++    this.completedBlocks.push(this.block);
++    this.block = new Uint8Array(BLOCK_SIZE);
++    this.blockPos = 0;
++  }
++  finalize() {
++    const output = new Uint8Array(this.byteLength);
++    let writePos = 0;
++    for (let i = 0; i < this.completedBlocks.length; i++) {
++      const block = this.completedBlocks[i];
++      output.set(block, writePos);
++      writePos += block.length;
++      this.completedBlocks[i] = null;
++    }
++    output.set(this.block.subarray(0, this.blockPos), writePos);
++    this.completedBlocks.length = 0;
++    this.block = null;
++    this.blockPos = 0;
++    return output.buffer;
++  }
++}
++
++// Make default export work naturally with require()
++if (module.exports.default) {
++    var defaultExport = module.exports.default;
++    var namedExports = {};
++    for (var key in module.exports) {
++        if (key !== 'default' && key !== '__esModule') {
++            namedExports[key] = module.exports[key];
++        }
++    }
++    module.exports = defaultExport;
++    Object.assign(module.exports, namedExports);
++    // Preserve __esModule and .default for bundler/transpiler interop
++    Object.defineProperty(module.exports, '__esModule', { value: true });
++    module.exports.default = defaultExport;
++}
++
+diff --git a/dist/mime-node.cjs b/dist/mime-node.cjs
+index 5d59c9930fdc6be7cd2208d4dc05c68394f3c31d..bc9911e975cc762666af6bc594f5dbc0374c0ced 100644
+--- a/dist/mime-node.cjs
++++ b/dist/mime-node.cjs
+@@ -48,6 +48,7 @@ class MimeNode {
+   constructor(options) {
+     this.options = options || {};
+     this.postalMime = this.options.postalMime;
++    this.postalMime.chargePart();
+     this.childNodes = [];
+     this.finalizedChildCount = 0;
+     if (this.options.parentNode) {
+@@ -369,6 +370,7 @@ class MimeNode {
+         this.headerLines.push(headerDecoder.decode(line));
+         break;
+       case "body": {
++        this.postalMime.chargeDecodedBytes(line.length + 1);
+         this.contentDecoder.update(line);
+       }
+     }
+diff --git a/dist/pass-through-decoder.cjs b/dist/pass-through-decoder.cjs
+index 4cfbb54efd526e650e465184eecbc4d9275c980e..79f7224d4231bbe3a1fb047354c95d40eeaee6d8 100644
+--- a/dist/pass-through-decoder.cjs
++++ b/dist/pass-through-decoder.cjs
+@@ -21,17 +21,17 @@ __export(pass_through_decoder_exports, {
+   default: () => PassThroughDecoder
+ });
+ module.exports = __toCommonJS(pass_through_decoder_exports);
+-var import_decode_strings = require("./decode-strings.cjs");
++var import_decoded_byte_accumulator = require("./decoded-byte-accumulator.cjs");
+ class PassThroughDecoder {
+   constructor() {
+-    this.chunks = [];
++    this.output = new import_decoded_byte_accumulator.default();
+   }
+   update(line) {
+-    this.chunks.push(line);
+-    this.chunks.push("\n");
++    this.output.write(line);
++    this.output.writeByte(10);
+   }
+   finalize() {
+-    return (0, import_decode_strings.blobToArrayBuffer)(new Blob(this.chunks, { type: "application/octet-stream" }));
++    return this.output.finalize();
+   }
+ }
+ 
+@@ -50,4 +50,3 @@ if (module.exports.default) {
+     Object.defineProperty(module.exports, '__esModule', { value: true });
+     module.exports.default = defaultExport;
+ }
+-
+diff --git a/dist/postal-mime.cjs b/dist/postal-mime.cjs
+index 7611d6767939f9d6043a2f9db5657b47a17ca4f9..4e9b613268fc0eabce458c25921dacda28c45be1 100644
+--- a/dist/postal-mime.cjs
++++ b/dist/postal-mime.cjs
+@@ -53,6 +53,12 @@ function parseLimitOption(value, defaultValue, name) {
+   }
+   return value;
+ }
++function parseOptionalLimitOption(value, name) {
++  if (value === void 0 || value === null) {
++    return null;
++  }
++  return parseLimitOption(value, 0, name);
++}
+ class PostalMime {
+   // async so that an invalid option rejects the returned promise instead of throwing
+   // synchronously, which would escape a `.catch()` chain
+@@ -63,11 +69,19 @@ class PostalMime {
+   // rfc822NestingDepth is internal state that nested parsers receive from their parent.
+   // It is deliberately a separate argument rather than an option, so that forwarding a
+   // caller supplied options object can not seed it and switch the recursion limit off.
+-  constructor(options, rfc822NestingDepth = 0) {
++  constructor(options, rfc822NestingDepth = 0, budgetState = null) {
+     this.options = options || {};
+     this.mimeOptions = {
+       maxNestingDepth: parseLimitOption(this.options.maxNestingDepth, MAX_NESTING_DEPTH, "maxNestingDepth"),
+-      maxHeadersSize: parseLimitOption(this.options.maxHeadersSize, MAX_HEADERS_SIZE, "maxHeadersSize")
++      maxHeadersSize: parseLimitOption(this.options.maxHeadersSize, MAX_HEADERS_SIZE, "maxHeadersSize"),
++      maxRawBytes: parseOptionalLimitOption(this.options.maxRawBytes, "maxRawBytes"),
++      maxLineCount: parseOptionalLimitOption(this.options.maxLineCount, "maxLineCount"),
++      maxLineLength: parseOptionalLimitOption(this.options.maxLineLength, "maxLineLength"),
++      maxParts: parseOptionalLimitOption(this.options.maxParts, "maxParts"),
++      maxDecodedBytes: parseOptionalLimitOption(this.options.maxDecodedBytes, "maxDecodedBytes"),
++      maxTextExpansionBytes: parseOptionalLimitOption(this.options.maxTextExpansionBytes, "maxTextExpansionBytes"),
++      maxHtmlBytes: parseOptionalLimitOption(this.options.maxHtmlBytes, "maxHtmlBytes"),
++      maxReferencesBytes: parseOptionalLimitOption(this.options.maxReferencesBytes, "maxReferencesBytes")
+     };
+     this.maxRfc822NestingDepth = parseLimitOption(
+       this.options.maxRfc822NestingDepth,
+@@ -75,6 +89,12 @@ class PostalMime {
+       "maxRfc822NestingDepth"
+     );
+     this.rfc822NestingDepth = rfc822NestingDepth;
++    this.budgetState = budgetState || {
++      lineCount: 0,
++      partCount: 0,
++      decodedBytes: 0,
++      textBytes: 0
++    };
+     this.root = this.currentNode = new import_mime_node.default({
+       postalMime: this,
+       ...this.mimeOptions
+@@ -86,6 +106,37 @@ class PostalMime {
+     this.attachmentEncoding = (this.options.attachmentEncoding || "").toString().replace(/[-_\s]/g, "").trim().toLowerCase() || "arraybuffer";
+     this.started = false;
+   }
++  chargeLine(lineLength) {
++    if (this.mimeOptions.maxLineLength !== null && lineLength > this.mimeOptions.maxLineLength) {
++      throw new Error(`Maximum MIME line length of ${this.mimeOptions.maxLineLength} bytes exceeded`);
++    }
++    this.budgetState.lineCount += 1;
++    if (this.mimeOptions.maxLineCount !== null && this.budgetState.lineCount > this.mimeOptions.maxLineCount) {
++      throw new Error(`Maximum MIME line count of ${this.mimeOptions.maxLineCount} exceeded`);
++    }
++  }
++  chargePart() {
++    this.budgetState.partCount += 1;
++    if (this.mimeOptions.maxParts !== null && this.budgetState.partCount > this.mimeOptions.maxParts) {
++      throw new Error(`Maximum MIME part count of ${this.mimeOptions.maxParts} exceeded`);
++    }
++  }
++  chargeDecodedBytes(size) {
++    this.budgetState.decodedBytes += size;
++    if (this.mimeOptions.maxDecodedBytes !== null && this.budgetState.decodedBytes > this.mimeOptions.maxDecodedBytes) {
++      throw new Error(`Maximum decoded size of ${this.mimeOptions.maxDecodedBytes} bytes exceeded`);
++    }
++  }
++  chargeTextBytes(size) {
++    this.budgetState.textBytes += size;
++    if (this.mimeOptions.maxTextExpansionBytes !== null && this.budgetState.textBytes > this.mimeOptions.maxTextExpansionBytes) {
++      throw new Error(`Maximum text expansion of ${this.mimeOptions.maxTextExpansionBytes} bytes exceeded`);
++    }
++  }
++  boundedText(value) {
++    this.chargeTextBytes(value.length);
++    return value;
++  }
+   async finalize() {
+     await this.root.finalize();
+   }
+@@ -155,14 +206,18 @@ class PostalMime {
+         endPos = this.readPos;
+       }
+       if (c === 10) {
++        const lineLength = endPos - startPos;
++        this.chargeLine(lineLength);
+         return {
+-          bytes: new Uint8Array(this.buf, startPos, endPos - startPos),
++          bytes: new Uint8Array(this.buf, startPos, lineLength),
+           done: this.readPos >= this.av.length
+         };
+       }
+     }
++    const lineLength = endPos - startPos;
++    this.chargeLine(lineLength);
+     return {
+-      bytes: new Uint8Array(this.buf, startPos, endPos - startPos),
++      bytes: new Uint8Array(this.buf, startPos, lineLength),
+       done: this.readPos >= this.av.length
+     };
+   }
+@@ -188,7 +243,8 @@ class PostalMime {
+               // attachments are encoded by the parent parser, keep raw buffers here
+               attachmentEncoding: "arraybuffer"
+             },
+-            this.rfc822NestingDepth + 1
++            this.rfc822NestingDepth + 1,
++            this.budgetState
+           );
+           node.subMessage = await subParser.parse(node.content);
+           if (!textMap.has(node)) {
+@@ -220,8 +276,10 @@ class PostalMime {
+             textMap.set(selectorNode, {});
+           }
+           let textEntry = textMap.get(selectorNode);
++          const textValue = node.getTextContent();
++          this.chargeTextBytes(textValue.length);
+           textEntry[textType] = textEntry[textType] || [];
+-          textEntry[textType].push({ type: "text", value: node.getTextContent() });
++          textEntry[textType].push({ type: "text", value: textValue });
+           textTypes.add(textType);
+         } else if (node.content) {
+           const filename = ((_c = (_b = (_a = node.contentDisposition) == null ? void 0 : _a.parsed) == null ? void 0 : _b.params) == null ? void 0 : _c.filename) || node.contentType.parsed.params.name || null;
+@@ -284,10 +342,10 @@ class PostalMime {
+                 {
+                   switch (textType) {
+                     case "html":
+-                      textContent[textType].push((0, import_text_format.formatHtmlHeader)(textEntry.value));
++                      textContent[textType].push(this.boundedText((0, import_text_format.formatHtmlHeader)(textEntry.value)));
+                       break;
+                     case "plain":
+-                      textContent[textType].push((0, import_text_format.formatTextHeader)(textEntry.value));
++                      textContent[textType].push(this.boundedText((0, import_text_format.formatTextHeader)(textEntry.value)));
+                       break;
+                   }
+                 }
+@@ -309,10 +367,10 @@ class PostalMime {
+               case "text":
+                 switch (textType) {
+                   case "html":
+-                    textContent[textType].push((0, import_text_format.textToHtml)(textEntry.value));
++                    textContent[textType].push(this.boundedText((0, import_text_format.textToHtml)(textEntry.value)));
+                     break;
+                   case "plain":
+-                    textContent[textType].push((0, import_text_format.htmlToText)(textEntry.value));
++                    textContent[textType].push(this.boundedText((0, import_text_format.htmlToText)(textEntry.value)));
+                     break;
+                 }
+                 break;
+@@ -320,10 +378,10 @@ class PostalMime {
+                 {
+                   switch (textType) {
+                     case "html":
+-                      textContent[textType].push((0, import_text_format.formatHtmlHeader)(textEntry.value));
++                      textContent[textType].push(this.boundedText((0, import_text_format.formatHtmlHeader)(textEntry.value)));
+                       break;
+                     case "plain":
+-                      textContent[textType].push((0, import_text_format.formatTextHeader)(textEntry.value));
++                      textContent[textType].push(this.boundedText((0, import_text_format.formatTextHeader)(textEntry.value)));
+                       break;
+                   }
+                 }
+@@ -391,6 +449,7 @@ class PostalMime {
+       }
+       chunks.push(value);
+       chunkLen += value.length;
++      this.assertRawSize(chunkLen);
+     }
+     const result = new Uint8Array(chunkLen);
+     let chunkPointer = 0;
+@@ -419,6 +478,7 @@ class PostalMime {
+     if (ArrayBuffer.isView(buf)) {
+       buf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+     }
++    this.assertRawSize(buf.byteLength);
+     this.buf = buf;
+     this.av = new Uint8Array(buf);
+     this.readPos = 0;
+@@ -465,6 +525,9 @@ class PostalMime {
+     for (const key of ["subject", "message-id", "in-reply-to", "references"]) {
+       const header = this.root.headers.find((line) => line.key === key);
+       if (header && header.value) {
++        if (key === "references") {
++          this.assertReferencesSize(header.value);
++        }
+         const camelKey = toCamelCase(key);
+         message[camelKey] = (0, import_decode_strings.decodeWords)(header.value);
+       }
+@@ -480,6 +543,7 @@ class PostalMime {
+       message.date = date;
+     }
+     if ((_a = this.textContent) == null ? void 0 : _a.html) {
++      this.assertHtmlSize(this.textContent.html);
+       message.html = this.textContent.html;
+     }
+     if ((_b = this.textContent) == null ? void 0 : _b.plain) {
+@@ -512,6 +576,26 @@ class PostalMime {
+     }
+     return message;
+   }
++  assertRawSize(size) {
++    if (this.rfc822NestingDepth !== 0) {
++      return;
++    }
++    if (this.mimeOptions.maxRawBytes !== null && size > this.mimeOptions.maxRawBytes) {
++      throw new Error(`Maximum raw size of ${this.mimeOptions.maxRawBytes} bytes exceeded`);
++    }
++  }
++  assertHtmlSize(html) {
++    const size = import_decode_strings.textEncoder.encode(html).byteLength;
++    if (this.mimeOptions.maxHtmlBytes !== null && size > this.mimeOptions.maxHtmlBytes) {
++      throw new Error(`Maximum HTML size of ${this.mimeOptions.maxHtmlBytes} bytes exceeded`);
++    }
++  }
++  assertReferencesSize(value) {
++    const size = import_decode_strings.textEncoder.encode(value).byteLength;
++    if (this.mimeOptions.maxReferencesBytes !== null && size > this.mimeOptions.maxReferencesBytes) {
++      throw new Error(`Maximum References size of ${this.mimeOptions.maxReferencesBytes} bytes exceeded`);
++    }
++  }
+ }
+ // Annotate the CommonJS export names for ESM import in node:
+ 0 && (module.exports = {
+diff --git a/dist/qp-decoder.cjs b/dist/qp-decoder.cjs
+index f82d785c86f8cb72fa6ca123c5024265f48b0b41..3dfb61a51a12a172a42d6aef1b5b8975588e7c52 100644
+--- a/dist/qp-decoder.cjs
++++ b/dist/qp-decoder.cjs
+@@ -22,39 +22,20 @@ __export(qp_decoder_exports, {
+ });
+ module.exports = __toCommonJS(qp_decoder_exports);
+ var import_decode_strings = require("./decode-strings.cjs");
++var import_decoded_byte_accumulator = require("./decoded-byte-accumulator.cjs");
+ const CHR_EQUALS = 61;
+ const CHR_LF = 10;
+ class QPDecoder {
+   constructor() {
+-    this.maxChunkSize = 100 * 1024;
+-    this.buffer = new Uint8Array(this.maxChunkSize);
+-    this.bufferPos = 0;
+-    this.chunks = [];
++    this.output = new import_decoded_byte_accumulator.default();
+   }
+   writeByte(byte) {
+-    if (this.bufferPos >= this.buffer.length) {
+-      this.flushBuffer();
+-    }
+-    this.buffer[this.bufferPos++] = byte;
++    this.output.writeByte(byte);
+   }
+   // Literal text is the bulk of a typical body, so it is copied in runs rather than a
+   // byte at a time
+   writeBytes(line, start, end) {
+-    while (start < end) {
+-      if (this.bufferPos >= this.buffer.length) {
+-        this.flushBuffer();
+-      }
+-      const count = Math.min(end - start, this.buffer.length - this.bufferPos);
+-      this.buffer.set(line.subarray(start, start + count), this.bufferPos);
+-      this.bufferPos += count;
+-      start += count;
+-    }
+-  }
+-  flushBuffer() {
+-    if (this.bufferPos) {
+-      this.chunks.push(this.buffer.slice(0, this.bufferPos));
+-      this.bufferPos = 0;
+-    }
++    this.output.write(line.subarray(start, end));
+   }
+   // Quoted-printable source is 7 bit by definition, so it is decoded byte by byte and
+   // the result is handed on as bytes. Running the body charset over the encoded source
+@@ -87,8 +68,7 @@ class QPDecoder {
+     }
+   }
+   finalize() {
+-    this.flushBuffer();
+-    return (0, import_decode_strings.blobToArrayBuffer)(new Blob(this.chunks, { type: "application/octet-stream" }));
++    return this.output.finalize();
+   }
+ }
+ 
+@@ -107,4 +87,3 @@ if (module.exports.default) {
+     Object.defineProperty(module.exports, '__esModule', { value: true });
+     module.exports.default = defaultExport;
+ }
+-
+diff --git a/postal-mime.d.ts b/postal-mime.d.ts
+index 363bd334e0aa34b66ef77993e5c55044ca81ad63..196cf6b95f19868da442c6b0c997f4f83af9c889 100644
+--- a/postal-mime.d.ts
++++ b/postal-mime.d.ts
+@@ -84,6 +84,22 @@ export type PostalMimeOptions = {
+     maxNestingDepth?: number;
+     maxHeadersSize?: number;
+     maxRfc822NestingDepth?: number;
++    /** Maximum raw input size in bytes. Checked before MIME parsing. */
++    maxRawBytes?: number;
++    /** Maximum number of lines across the whole message, including nested rfc822 parts. */
++    maxLineCount?: number;
++    /** Maximum length of a single line in bytes. */
++    maxLineLength?: number;
++    /** Maximum MIME part count across the whole message, including nested rfc822 parts. */
++    maxParts?: number;
++    /** Maximum decoded body bytes charged before decoder copies. */
++    maxDecodedBytes?: number;
++    /** Maximum produced text/HTML expansion in UTF-16 code units. */
++    maxTextExpansionBytes?: number;
++    /** Maximum HTML body size in UTF-8 bytes. */
++    maxHtmlBytes?: number;
++    /** Maximum References header size in UTF-8 bytes, before encoded-word decoding. */
++    maxReferencesBytes?: number;
+ };
+ 
+ export default class PostalMime {
+diff --git a/src/base64-decoder.js b/src/base64-decoder.js
+index 93c2aeadfc2907f41922cf2b1e810c44211c1897..61a0e6f0d618907cb0f0a9ecf66392121a1d0a90 100644
+--- a/src/base64-decoder.js
++++ b/src/base64-decoder.js
+@@ -1,4 +1,5 @@
+-import { decodeBase64, blobToArrayBuffer } from './decode-strings.js';
++import { decodeBase64 } from './decode-strings.js';
++import DecodedByteAccumulator from './decoded-byte-accumulator.js';
+ 
+ export default class Base64Decoder {
+     constructor(opts) {
+@@ -8,14 +9,14 @@ export default class Base64Decoder {
+ 
+         this.maxChunkSize = 100 * 1024;
+ 
+-        this.chunks = [];
++        this.output = new DecodedByteAccumulator();
+ 
+         this.remainder = '';
+     }
+ 
+     pushChunk(base64Str) {
+         if (base64Str.length) {
+-            this.chunks.push(decodeBase64(base64Str));
++            this.output.write(new Uint8Array(decodeBase64(base64Str)));
+         }
+     }
+ 
+@@ -49,6 +50,6 @@ export default class Base64Decoder {
+     finalize() {
+         this.flushRemainder();
+ 
+-        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
++        return this.output.finalize();
+     }
+ }
+diff --git a/src/decoded-byte-accumulator.js b/src/decoded-byte-accumulator.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..b8112c34430781358523279da3dc328062bce231
+--- /dev/null
++++ b/src/decoded-byte-accumulator.js
+@@ -0,0 +1,54 @@
++const BLOCK_SIZE = 64 * 1024;
++
++export default class DecodedByteAccumulator {
++    constructor() {
++        this.completedBlocks = [];
++        this.block = new Uint8Array(BLOCK_SIZE);
++        this.blockPos = 0;
++        this.byteLength = 0;
++    }
++
++    writeByte(byte) {
++        this.ensureAvailableBlock();
++        this.block[this.blockPos++] = byte;
++        this.byteLength++;
++    }
++
++    write(bytes) {
++        let readPos = 0;
++        while (readPos < bytes.length) {
++            this.ensureAvailableBlock();
++            const count = Math.min(bytes.length - readPos, this.block.length - this.blockPos);
++            this.block.set(bytes.subarray(readPos, readPos + count), this.blockPos);
++            this.blockPos += count;
++            this.byteLength += count;
++            readPos += count;
++        }
++    }
++
++    ensureAvailableBlock() {
++        if (this.blockPos < this.block.length) {
++            return;
++        }
++        this.completedBlocks.push(this.block);
++        this.block = new Uint8Array(BLOCK_SIZE);
++        this.blockPos = 0;
++    }
++
++    finalize() {
++        const output = new Uint8Array(this.byteLength);
++        let writePos = 0;
++        for (let i = 0; i < this.completedBlocks.length; i++) {
++            const block = this.completedBlocks[i];
++            output.set(block, writePos);
++            writePos += block.length;
++            // Drop each source block as soon as its bytes are in the exact final buffer.
++            this.completedBlocks[i] = null;
++        }
++        output.set(this.block.subarray(0, this.blockPos), writePos);
++        this.completedBlocks.length = 0;
++        this.block = null;
++        this.blockPos = 0;
++        return output.buffer;
++    }
++}
+diff --git a/src/mime-node.js b/src/mime-node.js
+index 86e393bff57439e502c19d71fd4fb0e661da0df3..e5bc5c3fda9b0d3473cca9ecc2ca218ee9d1442c 100644
+--- a/src/mime-node.js
++++ b/src/mime-node.js
+@@ -31,6 +31,7 @@ export default class MimeNode {
+         this.options = options || {};
+ 
+         this.postalMime = this.options.postalMime;
++        this.postalMime.chargePart();
+ 
+         this.childNodes = [];
+         // Cursor into childNodes for finalizeChildNodes. Every new part of a multipart
+@@ -519,7 +520,9 @@ export default class MimeNode {
+                 this.headerLines.push(headerDecoder.decode(line));
+                 break;
+             case 'body': {
+-                // add line to body
++                // Charge encoded line bytes plus the restored newline before the decoder
++                // copies them. This is an upper bound on decoded output.
++                this.postalMime.chargeDecodedBytes(line.length + 1);
+                 this.contentDecoder.update(line);
+             }
+         }
+diff --git a/src/pass-through-decoder.js b/src/pass-through-decoder.js
+index ad1c2229fa5b1cf0315719368bb87c3e268f865a..b5b4e1e544bbdfcce04434c3ef3a23ed13a7bfd8 100644
+--- a/src/pass-through-decoder.js
++++ b/src/pass-through-decoder.js
+@@ -1,17 +1,16 @@
+-import { blobToArrayBuffer } from './decode-strings.js';
++import DecodedByteAccumulator from './decoded-byte-accumulator.js';
+ 
+ export default class PassThroughDecoder {
+     constructor() {
+-        this.chunks = [];
++        this.output = new DecodedByteAccumulator();
+     }
+ 
+     update(line) {
+-        this.chunks.push(line);
+-        this.chunks.push('\n');
++        this.output.write(line);
++        this.output.writeByte(0x0a);
+     }
+ 
+     finalize() {
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
++        return this.output.finalize();
+     }
+ }
+diff --git a/src/postal-mime.js b/src/postal-mime.js
+index 1551334d7630b92fde689cccc85f31f1e3986e30..22aaa37a4daa0461f8c3eb739184bc9df42ec482 100644
+--- a/src/postal-mime.js
++++ b/src/postal-mime.js
+@@ -35,6 +35,16 @@ function parseLimitOption(value, defaultValue, name) {
+     return value;
+ }
+ 
++// Opt-in aggregate budgets. Undefined keeps the historical unlimited behaviour so
++// existing callers are unchanged; `0` is a literal zero, not "disabled".
++function parseOptionalLimitOption(value, name) {
++    if (value === undefined || value === null) {
++        return null;
++    }
++
++    return parseLimitOption(value, 0, name);
++}
++
+ export default class PostalMime {
+     // async so that an invalid option rejects the returned promise instead of throwing
+     // synchronously, which would escape a `.catch()` chain
+@@ -43,14 +53,22 @@ export default class PostalMime {
+         return parser.parse(buf);
+     }
+ 
+-    // rfc822NestingDepth is internal state that nested parsers receive from their parent.
+-    // It is deliberately a separate argument rather than an option, so that forwarding a
+-    // caller supplied options object can not seed it and switch the recursion limit off.
+-    constructor(options, rfc822NestingDepth = 0) {
++    // rfc822NestingDepth and budgetState are internal state nested parsers receive from
++    // their parent. They are deliberately separate arguments rather than options, so that
++    // forwarding a caller supplied options object can not seed them and switch the limits off.
++    constructor(options, rfc822NestingDepth = 0, budgetState = null) {
+         this.options = options || {};
+         this.mimeOptions = {
+             maxNestingDepth: parseLimitOption(this.options.maxNestingDepth, MAX_NESTING_DEPTH, 'maxNestingDepth'),
+-            maxHeadersSize: parseLimitOption(this.options.maxHeadersSize, MAX_HEADERS_SIZE, 'maxHeadersSize')
++            maxHeadersSize: parseLimitOption(this.options.maxHeadersSize, MAX_HEADERS_SIZE, 'maxHeadersSize'),
++            maxRawBytes: parseOptionalLimitOption(this.options.maxRawBytes, 'maxRawBytes'),
++            maxLineCount: parseOptionalLimitOption(this.options.maxLineCount, 'maxLineCount'),
++            maxLineLength: parseOptionalLimitOption(this.options.maxLineLength, 'maxLineLength'),
++            maxParts: parseOptionalLimitOption(this.options.maxParts, 'maxParts'),
++            maxDecodedBytes: parseOptionalLimitOption(this.options.maxDecodedBytes, 'maxDecodedBytes'),
++            maxTextExpansionBytes: parseOptionalLimitOption(this.options.maxTextExpansionBytes, 'maxTextExpansionBytes'),
++            maxHtmlBytes: parseOptionalLimitOption(this.options.maxHtmlBytes, 'maxHtmlBytes'),
++            maxReferencesBytes: parseOptionalLimitOption(this.options.maxReferencesBytes, 'maxReferencesBytes')
+         };
+ 
+         // A limit of 0 disables inline parsing entirely, so every message/rfc822 part
+@@ -61,6 +79,13 @@ export default class PostalMime {
+             'maxRfc822NestingDepth'
+         );
+         this.rfc822NestingDepth = rfc822NestingDepth;
++        // Shared with nested rfc822 parsers so line/part/decoded/text budgets are aggregate.
++        this.budgetState = budgetState || {
++            lineCount: 0,
++            partCount: 0,
++            decodedBytes: 0,
++            textBytes: 0
++        };
+ 
+         this.root = this.currentNode = new MimeNode({
+             postalMime: this,
+@@ -84,6 +109,40 @@ export default class PostalMime {
+         this.started = false;
+     }
+ 
++    chargeLine(lineLength) {
++        if (this.mimeOptions.maxLineLength !== null && lineLength > this.mimeOptions.maxLineLength) {
++            throw new Error(`Maximum MIME line length of ${this.mimeOptions.maxLineLength} bytes exceeded`);
++        }
++        this.budgetState.lineCount += 1;
++        if (this.mimeOptions.maxLineCount !== null && this.budgetState.lineCount > this.mimeOptions.maxLineCount) {
++            throw new Error(`Maximum MIME line count of ${this.mimeOptions.maxLineCount} exceeded`);
++        }
++    }
++
++    chargePart() {
++        this.budgetState.partCount += 1;
++        if (this.mimeOptions.maxParts !== null && this.budgetState.partCount > this.mimeOptions.maxParts) {
++            throw new Error(`Maximum MIME part count of ${this.mimeOptions.maxParts} exceeded`);
++        }
++    }
++
++    chargeDecodedBytes(size) {
++        this.budgetState.decodedBytes += size;
++        if (this.mimeOptions.maxDecodedBytes !== null && this.budgetState.decodedBytes > this.mimeOptions.maxDecodedBytes) {
++            throw new Error(`Maximum decoded size of ${this.mimeOptions.maxDecodedBytes} bytes exceeded`);
++        }
++    }
++
++    chargeTextBytes(size) {
++        this.budgetState.textBytes += size;
++        if (
++            this.mimeOptions.maxTextExpansionBytes !== null &&
++            this.budgetState.textBytes > this.mimeOptions.maxTextExpansionBytes
++        ) {
++            throw new Error(`Maximum text expansion of ${this.mimeOptions.maxTextExpansionBytes} bytes exceeded`);
++        }
++    }
++
+     async finalize() {
+         // close all pending nodes
+         await this.root.finalize();
+@@ -183,15 +242,19 @@ export default class PostalMime {
+             }
+ 
+             if (c === 0x0a) {
++                const lineLength = endPos - startPos;
++                this.chargeLine(lineLength);
+                 return {
+-                    bytes: new Uint8Array(this.buf, startPos, endPos - startPos),
++                    bytes: new Uint8Array(this.buf, startPos, lineLength),
+                     done: this.readPos >= this.av.length
+                 };
+             }
+         }
+ 
++        const lineLength = endPos - startPos;
++        this.chargeLine(lineLength);
+         return {
+-            bytes: new Uint8Array(this.buf, startPos, endPos - startPos),
++            bytes: new Uint8Array(this.buf, startPos, lineLength),
+             done: this.readPos >= this.av.length
+         };
+     }
+@@ -225,7 +288,8 @@ export default class PostalMime {
+                             // attachments are encoded by the parent parser, keep raw buffers here
+                             attachmentEncoding: 'arraybuffer'
+                         },
+-                        this.rfc822NestingDepth + 1
++                        this.rfc822NestingDepth + 1,
++                        this.budgetState
+                     );
+                     node.subMessage = await subParser.parse(node.content);
+ 
+@@ -269,8 +333,10 @@ export default class PostalMime {
+                     }
+ 
+                     let textEntry = textMap.get(selectorNode);
++                    const textValue = node.getTextContent();
++                    this.chargeTextBytes(textValue.length);
+                     textEntry[textType] = textEntry[textType] || [];
+-                    textEntry[textType].push({ type: 'text', value: node.getTextContent() });
++                    textEntry[textType].push({ type: 'text', value: textValue });
+                     textTypes.add(textType);
+                 }
+ 
+@@ -363,10 +429,10 @@ export default class PostalMime {
+                                 {
+                                     switch (textType) {
+                                         case 'html':
+-                                            textContent[textType].push(formatHtmlHeader(textEntry.value));
++                                            textContent[textType].push(this.boundedText(formatHtmlHeader(textEntry.value)));
+                                             break;
+                                         case 'plain':
+-                                            textContent[textType].push(formatTextHeader(textEntry.value));
++                                            textContent[textType].push(this.boundedText(formatTextHeader(textEntry.value)));
+                                             break;
+                                     }
+                                 }
+@@ -389,10 +455,10 @@ export default class PostalMime {
+                             case 'text':
+                                 switch (textType) {
+                                     case 'html':
+-                                        textContent[textType].push(textToHtml(textEntry.value));
++                                        textContent[textType].push(this.boundedText(textToHtml(textEntry.value)));
+                                         break;
+                                     case 'plain':
+-                                        textContent[textType].push(htmlToText(textEntry.value));
++                                        textContent[textType].push(this.boundedText(htmlToText(textEntry.value)));
+                                         break;
+                                 }
+                                 break;
+@@ -401,10 +467,10 @@ export default class PostalMime {
+                                 {
+                                     switch (textType) {
+                                         case 'html':
+-                                            textContent[textType].push(formatHtmlHeader(textEntry.value));
++                                            textContent[textType].push(this.boundedText(formatHtmlHeader(textEntry.value)));
+                                             break;
+                                         case 'plain':
+-                                            textContent[textType].push(formatTextHeader(textEntry.value));
++                                            textContent[textType].push(this.boundedText(formatTextHeader(textEntry.value)));
+                                             break;
+                                     }
+                                 }
+@@ -422,6 +488,11 @@ export default class PostalMime {
+         this.textContent = textContent;
+     }
+ 
++    boundedText(value) {
++        this.chargeTextBytes(value.length);
++        return value;
++    }
++
+     isInlineTextNode(node) {
+         if (node.contentDisposition?.parsed?.value === 'attachment') {
+             // no matter the type, this is an attachment
+@@ -486,6 +557,8 @@ export default class PostalMime {
+             }
+             chunks.push(value);
+             chunkLen += value.length;
++            // This is a size guard on the concatenated copy, not incremental MIME parsing.
++            this.assertRawSize(chunkLen);
+         }
+ 
+         const result = new Uint8Array(chunkLen);
+@@ -530,6 +603,8 @@ export default class PostalMime {
+             buf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+         }
+ 
++        this.assertRawSize(buf.byteLength);
++
+         this.buf = buf;
+ 
+         this.av = new Uint8Array(buf);
+@@ -590,6 +665,9 @@ export default class PostalMime {
+         for (const key of ['subject', 'message-id', 'in-reply-to', 'references']) {
+             const header = this.root.headers.find(line => line.key === key);
+             if (header && header.value) {
++                if (key === 'references') {
++                    this.assertReferencesSize(header.value);
++                }
+                 const camelKey = toCamelCase(key);
+                 message[camelKey] = decodeWords(header.value);
+             }
+@@ -608,6 +686,7 @@ export default class PostalMime {
+         }
+ 
+         if (this.textContent?.html) {
++            this.assertHtmlSize(this.textContent.html);
+             message.html = this.textContent.html;
+         }
+ 
+@@ -649,4 +728,29 @@ export default class PostalMime {
+ 
+         return message;
+     }
++
++    assertRawSize(size) {
++        // Nested rfc822 parsers re-read already-decoded part bytes. The top-level raw
++        // budget applies once; decoded-byte/text budgets cover nested expansion.
++        if (this.rfc822NestingDepth !== 0) {
++            return;
++        }
++        if (this.mimeOptions.maxRawBytes !== null && size > this.mimeOptions.maxRawBytes) {
++            throw new Error(`Maximum raw size of ${this.mimeOptions.maxRawBytes} bytes exceeded`);
++        }
++    }
++
++    assertHtmlSize(html) {
++        const size = textEncoder.encode(html).byteLength;
++        if (this.mimeOptions.maxHtmlBytes !== null && size > this.mimeOptions.maxHtmlBytes) {
++            throw new Error(`Maximum HTML size of ${this.mimeOptions.maxHtmlBytes} bytes exceeded`);
++        }
++    }
++
++    assertReferencesSize(value) {
++        const size = textEncoder.encode(value).byteLength;
++        if (this.mimeOptions.maxReferencesBytes !== null && size > this.mimeOptions.maxReferencesBytes) {
++            throw new Error(`Maximum References size of ${this.mimeOptions.maxReferencesBytes} bytes exceeded`);
++        }
++    }
+ }
+diff --git a/src/qp-decoder.js b/src/qp-decoder.js
+index adee72ccbfa7dda05bb8c29005fa8f0bb75800bc..80dd3133012e6bf594c6daf6a4ea99949c4c982e 100644
+--- a/src/qp-decoder.js
++++ b/src/qp-decoder.js
+@@ -1,44 +1,22 @@
+-import { blobToArrayBuffer, hexNibble } from './decode-strings.js';
++import DecodedByteAccumulator from './decoded-byte-accumulator.js';
++import { hexNibble } from './decode-strings.js';
+ 
+ const CHR_EQUALS = 0x3d;
+ const CHR_LF = 0x0a;
+ 
+ export default class QPDecoder {
+     constructor() {
+-        this.maxChunkSize = 100 * 1024;
+-
+-        this.buffer = new Uint8Array(this.maxChunkSize);
+-        this.bufferPos = 0;
+-
+-        this.chunks = [];
++        this.output = new DecodedByteAccumulator();
+     }
+ 
+     writeByte(byte) {
+-        if (this.bufferPos >= this.buffer.length) {
+-            this.flushBuffer();
+-        }
+-        this.buffer[this.bufferPos++] = byte;
++        this.output.writeByte(byte);
+     }
+ 
+     // Literal text is the bulk of a typical body, so it is copied in runs rather than a
+     // byte at a time
+     writeBytes(line, start, end) {
+-        while (start < end) {
+-            if (this.bufferPos >= this.buffer.length) {
+-                this.flushBuffer();
+-            }
+-            const count = Math.min(end - start, this.buffer.length - this.bufferPos);
+-            this.buffer.set(line.subarray(start, start + count), this.bufferPos);
+-            this.bufferPos += count;
+-            start += count;
+-        }
+-    }
+-
+-    flushBuffer() {
+-        if (this.bufferPos) {
+-            this.chunks.push(this.buffer.slice(0, this.bufferPos));
+-            this.bufferPos = 0;
+-        }
++        this.output.write(line.subarray(start, end));
+     }
+ 
+     // Quoted-printable source is 7 bit by definition, so it is decoded byte by byte and
+@@ -80,9 +58,6 @@ export default class QPDecoder {
+     }
+ 
+     finalize() {
+-        this.flushBuffer();
+-
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
++        return this.output.finalize();
+     }
+ }

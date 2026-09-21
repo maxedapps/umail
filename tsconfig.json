@@ -1,0 +1,57 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["esnext"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": false
+      }
+    ]
+  },
+  "include": [
+    "alchemy.run.ts",
+    "oxlint.config.ts",
+    "vitest.config.ts",
+    "vitest.worker.config.ts",
+    "vitest.e2e.config.ts",
+    "vitest.mail-capacity.config.ts",
+    "tsdown.config.ts",
+    "scripts/**/*.ts",
+    "apps/cli/src/**/*.ts",
+    "apps/cli/test/**/*.ts",
+    "packages/api-contract/src/**/*.ts",
+    "packages/api-contract/test/**/*.ts",
+    "tests/**/*.ts",
+    "packages/mail-content/src/**/*.d.ts",
+    "packages/mcp-tools/src/**/*.ts",
+    "apps/server/src/**/*.ts",
+    "apps/server/test/**/*.ts"
+  ],
+  "exclude": [
+    "tests/**/*.worker.spec.ts",
+    "tests/**/*.worker.ts",
+    "tests/**/*.browser.spec.ts",
+    "tests/redesign-e2e-model.ts",
+    "apps/server/test/**/*.worker.spec.ts",
+    "apps/server/test/**/worker-host.ts",
+    "apps/server/test/account/harness.ts",
+    "apps/server/test/api/human-pages.browser.spec.ts",
+    "apps/server/test/api/human-pages-browser-fixture.ts"
+  ]
+}

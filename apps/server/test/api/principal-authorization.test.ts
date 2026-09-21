@@ -1,0 +1,88 @@
+import * as Effect from "effect/Effect";
+import { describe, expect, it } from "vitest";
+
+import {
+  MailContact,
+  operatorOAuthPrincipal,
+  parseExternalMailAddress,
+  type Principal,
+  requireApprovalSendMode,
+  type ExternalMailAddress,
+} from "@umail/api-contract";
+import {
+  mailboxAllowed,
+  mailboxScopeOf,
+  recipientsAllowed,
+  requireAdmin,
+  requireDelete,
+  requireRead,
+  requireSend,
+} from "../../src/api/principal.ts";
+
+const MCP_PRINCIPAL = {
+  authority: "mcp",
+  identity: {
+    kind: "oauth",
+    userId: "operator-1",
+    clientId: "client-1",
+    clientLabel: "Reader",
+  },
+  policy: {
+    mailboxIds: ["mailbox-1"],
+    canRead: true,
+    canDelete: false,
+    sendMode: requireApprovalSendMode(),
+    recipientAllowlist: [mailAddress("recipient@example.com")],
+    canAdmin: false,
+  },
+} as const satisfies Principal;
+
+describe("OAuth principal authorization", () => {
+  it("constructs the fixed full-authority operator policy", () => {
+    expect(operatorOAuthPrincipal("operator-1", "cli-1")).toEqual({
+      authority: "operator",
+      identity: {
+        kind: "oauth",
+        userId: "operator-1",
+        clientId: "cli-1",
+        clientLabel: "AgentMail CLI",
+      },
+      policy: {
+        mailboxIds: "all",
+        canRead: true,
+        canDelete: true,
+        sendMode: { kind: "allow" },
+        recipientAllowlist: "any",
+        canAdmin: true,
+      },
+    });
+  });
+
+  it("enforces live MCP mailbox, recipient, delete, and admin policy", async () => {
+    expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-1")).toBe(true);
+    expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-2")).toBe(false);
+    expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
+    expect(recipientsAllowed(MCP_PRINCIPAL, [mailContact("recipient@example.com")])).toBe(true);
+    expect(recipientsAllowed(MCP_PRINCIPAL, [mailContact("other@example.com")])).toBe(false);
+    await expect(Effect.runPromise(requireRead(MCP_PRINCIPAL))).resolves.toBeUndefined();
+    await expect(Effect.runPromise(requireSend(MCP_PRINCIPAL))).resolves.toBeUndefined();
+    await expect(Effect.runPromise(requireDelete(MCP_PRINCIPAL))).rejects.toMatchObject({
+      _tag: "Forbidden",
+    });
+    await expect(Effect.runPromise(requireAdmin(MCP_PRINCIPAL))).rejects.toMatchObject({
+      _tag: "Forbidden",
+    });
+  });
+});
+
+function mailAddress(raw: string): ExternalMailAddress {
+  const parsed = parseExternalMailAddress(raw);
+  if (parsed.kind !== "ok") {
+    throw new Error(`Invalid test address: ${raw}`);
+  }
+  return parsed.address;
+}
+
+function mailContact(raw: string): MailContact {
+  return new MailContact({ address: mailAddress(raw), displayName: null });
+}

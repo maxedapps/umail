@@ -1,0 +1,47 @@
+{
+  "name": "umail",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.e2e.json && pnpm --filter @umail/server typecheck",
+    "lint": "oxlint --type-aware",
+    "fmt": "oxfmt .",
+    "test": "vitest run && pnpm test:worker && pnpm -r --if-present test:worker && pnpm -r --if-present test:browser",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "test:e2e:local": "vitest run --config vitest.e2e.config.ts",
+    "build:clients": "tsdown",
+    "alchemy": "alchemy",
+    "umail": "node apps/cli/src/bin.ts",
+    "deploy:dev": "alchemy deploy --stage dev",
+    "deploy:prod": "alchemy deploy --stage prod",
+    "prepare": "effect-tsgo patch --typescript-package @typescript/native --oxlint"
+  },
+  "devDependencies": {
+    "@alchemy.run/better-auth": "2.0.0-beta.77",
+    "@cloudflare/vitest-plugin": "1.1.7",
+    "@cloudflare/workers-types": "5.20260901.1",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/tsgo": "0.36.4",
+    "@effect/vitest": "4.0.0-rc.112",
+    "@oxlint/plugins": "1.77.0",
+    "@types/node": "24.13.3",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "@vitest/browser-playwright": "4.1.10",
+    "alchemy": "2.0.0-beta.77",
+    "better-auth": "1.7.2",
+    "effect": "4.0.0-rc.112",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.77.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "playwright": "1.63.0",
+    "tsdown": "0.23.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "pnpm@11.13.1"
+}

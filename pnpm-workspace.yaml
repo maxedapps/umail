@@ -1,0 +1,50 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  workerd: true
+  esbuild: true
+  msgpackr-extract: false
+  sharp: false
+overrides:
+  "@better-auth/oauth-provider": 1.7.2
+  "@cloudflare/workers-types": 5.20260901.1
+patchedDependencies:
+  "@better-auth/oauth-provider@1.7.2": patches/@better-auth__oauth-provider@1.7.2.patch
+  alchemy@2.0.0-beta.77: patches/alchemy@2.0.0-beta.77.patch
+  postal-mime@3.0.0: patches/postal-mime@3.0.0.patch
+minimumReleaseAgeExclude:
+  - "@cloudflare/vitest-plugin@1.1.7"
+  - miniflare@5.20260910.0-alpha
+  - wrangler@4.131.0
+  - "@cloudflare/workers-types@5.20260901.1"
+  - "@better-auth/core@1.7.2"
+  - "@better-auth/drizzle-adapter@1.7.2"
+  - "@better-auth/kysely-adapter@1.7.2"
+  - "@better-auth/mcp@1.7.2"
+  - "@better-auth/memory-adapter@1.7.2"
+  - "@better-auth/mongo-adapter@1.7.2"
+  - "@better-auth/oauth-provider@1.7.2"
+  - "@better-auth/prisma-adapter@1.7.2"
+  - "@better-auth/telemetry@1.7.2"
+  - better-auth@1.7.2
+  - "@alchemy.run/better-auth@2.0.0-beta.77"
+  - "@alchemy.run/cloudflare-runtime@2.0.0-beta.77"
+  - "@alchemy.run/floci@2.0.0-beta.77"
+  - "@alchemy.run/node-utils@2.0.0-beta.77"
+  - "@distilled.cloud/aws@1.0.0-rc.9"
+  - "@distilled.cloud/axiom@1.0.0-rc.9"
+  - "@distilled.cloud/cloudflare@1.0.0-rc.9"
+  - "@distilled.cloud/core@1.0.0-rc.9"
+  - "@distilled.cloud/fly-io@1.0.0-rc.9"
+  - "@distilled.cloud/hetzner@1.0.0-rc.9"
+  - "@distilled.cloud/neon@1.0.0-rc.9"
+  - "@distilled.cloud/planetscale@1.0.0-rc.9"
+  - "@distilled.cloud/railway@1.0.0-rc.9"
+  - alchemy@2.0.0-beta.77
+  - "@cloudflare/workerd-darwin-64@1.20260910.1"
+  - "@cloudflare/workerd-darwin-arm64@1.20260910.1"
+  - "@cloudflare/workerd-linux-64@1.20260910.1"
+  - "@cloudflare/workerd-linux-arm64@1.20260910.1"
+  - "@cloudflare/workerd-windows-64@1.20260910.1"
+  - workerd@1.20260910.1

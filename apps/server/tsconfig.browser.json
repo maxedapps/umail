@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "dom", "dom.iterable"]
+  },
+  "include": [
+    "test/api/human-pages.browser.spec.ts",
+    "test/api/human-pages-browser-fixture.ts",
+    "test/api/human-pages-browser-model.ts",
+    "vitest.browser.config.ts",
+    "../../packages/mail-content/src/css-tree-subpaths.d.ts"
+  ],
+  "exclude": []
+}

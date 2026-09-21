@@ -1,0 +1,19 @@
+{
+  "name": "cli",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "umail": "./src/bin.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@umail/api-contract": "workspace:*",
+    "effect": "4.0.0-rc.112"
+  }
+}
