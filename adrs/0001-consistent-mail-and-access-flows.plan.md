@@ -1,6 +1,6 @@
 # Plan: consistent mail and access flows (ADR 0001)
 
-- **Status:** In progress
+- **Status:** Done, except the owner's live send and forwarding checks after login
 - **Review:** an independent adversarial review found 4 material and 8 minor findings, none blocking. All were applied except: the icon cleanup stays in (the owner asked for dead files to go), and the `SendClient` switch was dropped rather than patched.
 - **Goal:** implement ADR 0001.
   - One Worker, whose mail store drives its own due work through its Durable Object (DO) alarm.
@@ -252,7 +252,20 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 - Forwarding to an unverified address records `failure`.
 - **Owner steps:** sign in; `pnpm umail login`; re-connect MCP clients, choosing their scope on the consent screen; recreate the addresses and forwarding; `pnpm build:clients`.
 
-**Done:** no
+**Done:** yes, apart from the checks that need the owner's login (2026-09-24).
+- Committed `72d3cdf` on `cleanup/codebase-refactor` and pushed it.
+- Only `uMail/prod` existed. The destroy dry-run, then the real destroy (17 operations), removed the 5 Workers, both queues, the catch-all, `MailSending` and the secret. The shared zone routing and the routing-domain registration were kept.
+- Deleted the retained D1 `uMail-AuthDb-prod-z5xvon3emio7gww4` and R2 `umail-mailarchive-prod-xmyhxxlukcmpqkw2` (already empty) by exact id. Re-inventory: no uMail Workers, queues, D1 or R2 left.
+- The deploy dry-run, then the real deploy (11 operations), created the single Worker `umail-app-prod-gchxrjximuwaaqf2`.
+- Live checks:
+  - `/login` 200; `/mcp` 401 with `WWW-Authenticate` resource metadata; `/consent` 200;
+  - an unknown approval token returns 404 (not 500), so the store starts cleanly;
+  - the catch-all points to the App Worker, which is also the only MailIndex consumer (batch 1);
+  - routing adopted `mail.schwarzmueller.sh` with no DNS errors;
+  - D1 has `mcpPolicy` with `ON DELETE CASCADE`, and `PRAGMA foreign_keys` is 1;
+  - the static clients are `cursor-grok-bot` (MCP) and `umail-cli` (REST);
+  - Workers Logs show every invocation `ok`.
+- **Pending the owner's login:** a test send reaching `accepted` within seconds (the alarm path), and a forward to an unverified inbox being recorded as `failure`.
 
 ## Review
 
