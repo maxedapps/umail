@@ -2,19 +2,21 @@ import type { BetterAuthInstance, BetterAuthProps } from "@alchemy.run/better-au
 import { mcp } from "@better-auth/mcp";
 import {
   DEVICE_CODE_GRANT_TYPE,
+  getOAuthProviderState,
   oauthDeviceAuthorization,
   type ClientDiscovery,
   type OAuthProviderExtension,
   type Scope,
   type SchemaClient,
 } from "@better-auth/oauth-provider";
-import type { BetterAuthPlugin, GenericEndpointContext } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import type { BetterAuthPlugin, GenericEndpointContext, HookEndpointContext } from "better-auth";
+import { APIError, createAuthMiddleware, isAPIError } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
 import type * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { MCP_POLICY_MODEL, encodePolicy, policyFromForm } from "./access.ts";
 import { DISABLED_AUTH_PATHS } from "./runtime-surface.ts";
 
 const AuthorizeQuery = Schema.Struct({
@@ -61,38 +63,139 @@ export const OFFLINE_ACCESS_SCOPE = "offline_access" as const;
 export const FIRST_PARTY_CLIENT_DISCOVERY_ID = "umail-first-party" as const;
 
 export const CURSOR_GROK_BOT_CLIENT_ID = "cursor-grok-bot" as const;
+export const UMAIL_CLI_CLIENT_ID = "umail-cli" as const;
 
 export const FIRST_PARTY_CLIENT_METADATA_JSON = '{"owner":"umail-provision"}' as const;
 
-type FirstPartyClient = SchemaClient<Scope[]>;
+export type FirstPartyClient = SchemaClient<Scope[]>;
 
-export function cursorGrokBotClient(): FirstPartyClient {
-  return {
-    clientId: CURSOR_GROK_BOT_CLIENT_ID,
+// Clients whose definition lives here. Provisioning writes their rows and links each to its one
+// resource; the discovery below makes this definition authoritative at runtime.
+export function firstPartyClients(): ReadonlyArray<{
+  readonly client: FirstPartyClient;
+  readonly resource: "rest" | "mcp";
+}> {
+  const shared = {
     clientDiscoveryId: FIRST_PARTY_CLIENT_DISCOVERY_ID,
-    name: "Cursor / Grok Bot",
     tokenEndpointAuthMethod: "none",
-    grantTypes: ["authorization_code", "refresh_token"],
-    responseTypes: ["code"],
-    redirectUris: [CURSOR_CLOUD_CALLBACK_URI],
     scopes: [UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE],
-    requirePKCE: true,
     disabled: false,
     metadata: FIRST_PARTY_CLIENT_METADATA_JSON,
-  };
+  } satisfies Partial<FirstPartyClient>;
+  return [
+    {
+      resource: "mcp",
+      client: {
+        ...shared,
+        clientId: CURSOR_GROK_BOT_CLIENT_ID,
+        name: "Cursor / Grok Bot",
+        grantTypes: ["authorization_code", "refresh_token"],
+        responseTypes: ["code"],
+        redirectUris: [CURSOR_CLOUD_CALLBACK_URI],
+        requirePKCE: true,
+      },
+    },
+    {
+      resource: "rest",
+      client: {
+        ...shared,
+        clientId: UMAIL_CLI_CLIENT_ID,
+        name: "AgentMail CLI",
+        grantTypes: [DEVICE_CODE_GRANT_TYPE, "refresh_token"],
+        responseTypes: [],
+        redirectUris: [],
+        requirePKCE: false,
+      },
+    },
+  ];
 }
 
 export function firstPartyClientExtension(): OAuthProviderExtension {
+  const clients = new Map(firstPartyClients().map(({ client }) => [client.clientId, client]));
   const discovery: ClientDiscovery = {
     id: FIRST_PARTY_CLIENT_DISCOVERY_ID,
-    matches: (clientId) => clientId === CURSOR_GROK_BOT_CLIENT_ID,
-    resolve: async (_ctx, _clientId, existing) => {
-      if (existing === null) return null;
-      const client = cursorGrokBotClient();
+    matches: (clientId) => clients.has(clientId),
+    resolve: async (_ctx, clientId, existing) => {
+      const client = clients.get(clientId);
+      if (existing === null || client === undefined) return null;
       return { ...client, disabled: existing.disabled ?? false };
     },
   };
   return { clientDiscovery: [discovery] };
+}
+
+// The operator's grant to an MCP client, chosen on the consent screen. Better Auth creates the table,
+// and its reference to the consent cascades, so deleting the consent deletes the policy.
+function mcpPolicyPlugin(operatorId: string): BetterAuthPlugin {
+  const isAcceptedConsent = (ctx: HookEndpointContext) =>
+    ctx.path === "/oauth2/consent" && ctx.body?.accept === true;
+  return {
+    id: "umail-mcp-policy",
+    schema: {
+      [MCP_POLICY_MODEL]: {
+        fields: {
+          consentId: {
+            type: "string",
+            required: true,
+            unique: true,
+            references: { model: "oauthConsent", field: "id", onDelete: "cascade" },
+          },
+          policy: { type: "string", required: true },
+        },
+      },
+    },
+    hooks: {
+      // Rejected before the consent exists, so no consent is left without a policy.
+      before: [
+        {
+          matcher: isAcceptedConsent,
+          handler: createAuthMiddleware(async (ctx) => {
+            if (policyFromForm(ctx.body) === null) {
+              throw new APIError("BAD_REQUEST", {
+                message: "Choose which mailboxes this client may use and how it may send.",
+              });
+            }
+          }),
+        },
+      ],
+      after: [
+        {
+          matcher: isAcceptedConsent,
+          handler: createAuthMiddleware(async (ctx) => {
+            const policy = policyFromForm(ctx.body);
+            const clientId = new URLSearchParams((await getOAuthProviderState())?.query ?? "").get(
+              "client_id",
+            );
+            if (isAPIError(ctx.context.returned) || policy === null || clientId === null) return;
+            const consent = await ctx.context.adapter.findOne<{ id: string }>({
+              model: "oauthConsent",
+              where: [
+                { field: "clientId", value: clientId },
+                { field: "userId", value: operatorId },
+              ],
+            });
+            if (consent === null) return;
+            const existing = await ctx.context.adapter.findOne<{ id: string }>({
+              model: MCP_POLICY_MODEL,
+              where: [{ field: "consentId", value: consent.id }],
+            });
+            if (existing === null) {
+              await ctx.context.adapter.create({
+                model: MCP_POLICY_MODEL,
+                data: { consentId: consent.id, policy: encodePolicy(policy) },
+              });
+            } else {
+              await ctx.context.adapter.update({
+                model: MCP_POLICY_MODEL,
+                where: [{ field: "id", value: existing.id }],
+                update: { policy: encodePolicy(policy) },
+              });
+            }
+          }),
+        },
+      ],
+    },
+  };
 }
 
 export type AuthSite = { readonly apiHostname: string };
@@ -137,7 +240,7 @@ export function makeAuthOptions(
           assertCursorRedirectPolicy(decoded.success);
           const normalized = normalizeDynamicRegistration(decoded.success);
           assertUsableRedirectUris(decoded.success, normalized);
-          assertDynamicRegistration(normalized, origin, mcpResource);
+          assertDynamicRegistration(normalized, mcpResource);
           return { context: { body: normalized } };
         }
       }),
@@ -151,21 +254,7 @@ export function makeAuthOptions(
         consentPage: "/consent",
         allowDynamicClientRegistration: true,
         allowUnauthenticatedClientRegistration: true,
-        clientRegistrationAllowedResources: [origin],
         scopes: [UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE],
-        resources: [
-          {
-            identifier: origin,
-            accessTokenTtl: 300,
-            allowedScopes: [UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE],
-          },
-          {
-            identifier: mcpResource,
-            accessTokenTtl: 300,
-            allowedScopes: [UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE],
-          },
-        ],
-        resourceSeedMode: "insertOnly",
         enforcePerClientResources: true,
         grantTypes: ["authorization_code", "refresh_token", DEVICE_CODE_GRANT_TYPE],
         refreshTokenReuseInterval: 30,
@@ -179,6 +268,7 @@ export function makeAuthOptions(
         },
       }),
       oauthDevicePlugin({ verificationUri: "/device" }),
+      mcpPolicyPlugin(operatorId),
     ],
   } satisfies BetterAuthProps;
 }
@@ -267,47 +357,28 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
+// Dynamic registration only admits public authorization-code clients for the MCP resource; the CLI
+// is the static `umail-cli` client.
 function assertDynamicRegistration(
   registration: NormalizedRegistration,
-  origin: string,
   mcpResource: string,
 ): void {
+  const grants = new Set(registration.grant_types);
+  const responses = registration.response_types;
+  const redirects = registration.redirect_uris;
+  const resources = registration.resources;
   if (
     registration.token_endpoint_auth_method !== "none" ||
     (registration.subject_type !== undefined && registration.subject_type !== "public") ||
-    registration.dpop_bound_access_tokens === true
-  ) {
-    throw invalidRegistration();
-  }
-
-  const grants = new Set(registration.grant_types);
-  const hasRefresh = grants.has("refresh_token");
-  if (grants.size !== (hasRefresh ? 2 : 1)) throw invalidRegistration();
-
-  if (grants.has("authorization_code")) {
-    const responses = registration.response_types;
-    const redirects = registration.redirect_uris;
-    const resources = registration.resources;
-    if (
-      responses === undefined ||
-      responses.length !== 1 ||
-      responses[0] !== "code" ||
-      redirects === undefined ||
-      redirects.length === 0 ||
-      (resources !== undefined && (resources.length !== 1 || resources[0] !== mcpResource))
-    ) {
-      throw invalidRegistration();
-    }
-    return;
-  }
-
-  if (
-    !grants.has(DEVICE_CODE_GRANT_TYPE) ||
-    registration.application_type !== "native" ||
-    registration.response_types !== undefined ||
-    registration.redirect_uris !== undefined ||
-    registration.resources?.length !== 1 ||
-    registration.resources[0] !== origin
+    registration.dpop_bound_access_tokens === true ||
+    !grants.has(AUTHORIZATION_CODE_GRANT_TYPE) ||
+    grants.size !== (grants.has("refresh_token") ? 2 : 1) ||
+    responses === undefined ||
+    responses.length !== 1 ||
+    responses[0] !== "code" ||
+    redirects === undefined ||
+    redirects.length === 0 ||
+    (resources !== undefined && (resources.length !== 1 || resources[0] !== mcpResource))
   ) {
     throw invalidRegistration();
   }

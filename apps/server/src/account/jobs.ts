@@ -1,15 +1,15 @@
 import {
-  OPERATOR_POLICY,
   approvalNotificationIdempotencyKey,
   comparisonKey,
   parseExternalMailAddress,
   type ApprovalTokenHash,
+  type OutboundJobFailureClass,
   type OutboundJobPurpose,
   type PrincipalPolicy,
 } from "@umail/api-contract";
 import * as Schema from "effect/Schema";
 
-import { getMcpOAuthPolicy, resolveSendingIdentity } from "./administration.ts";
+import { resolveSendingIdentity } from "./administration.ts";
 import {
   emptyParticipants,
   loadParticipantsByMessageIds,
@@ -24,8 +24,8 @@ import {
   type ApprovalCapabilityWrite,
   type ApprovalDecisionResult,
   type ApprovalLookupResult,
-  type ClaimDispatchInput,
-  type ClaimDispatchResult,
+  type ClaimJobInput,
+  type ClaimJobResult,
   type CompleteAttemptInput,
   type CompleteAttemptResult,
   type DecideApprovalInput,
@@ -35,8 +35,6 @@ import {
   type OutboundJob,
   type OutboundJobPage,
   type OutboundRequester,
-  type RejectReadyDispatchInput,
-  type RejectReadyDispatchResult,
   type StoredApproval,
   type SubmitOutboundInput,
   type SubmitOutboundResult,
@@ -86,7 +84,7 @@ export function submitOutbound(
       throw new JobAuthorizationError({ reason: "mailbox_forbidden" });
     }
     const recipients = [...to, ...cc];
-    const authorization = authorizeOutbound(storage, input.requester, identity.id, recipients);
+    const authorization = authorizeOutbound(input.policy, identity.id, recipients);
     if (authorization.kind === "denied") {
       throw new JobAuthorizationError({ reason: authorization.reason });
     }
@@ -220,20 +218,9 @@ export function decideApproval(
     if (approval.state !== "pending") {
       return resolvedDecision(storage, approval);
     }
-    // A due approval expires on its POST; Recovery's `recoverOutbound` sweeps the rest.
-    if (approval.expiresAt <= input.nowIso) {
-      storage.sql.exec(
-        `UPDATE approval_requests
-         SET state = 'expired', resolved_at = ?
-         WHERE id = ? AND state = 'pending'`,
-        input.nowIso,
-        approval.id,
-      );
-      rejectJob(storage, approval.jobId, input.nowIso, "expired", null);
-      return resolvedDecision(storage, { ...approval, state: "expired" });
-    }
+    // A due approval can no longer be decided; the store's alarm is its only expiry writer.
     const job = readJob(storage, "j.id = ?", approval.jobId);
-    if (job === null || job.state !== "waiting_approval") {
+    if (approval.expiresAt <= input.nowIso || job === null || job.state !== "waiting_approval") {
       return { kind: "unavailable", state: "pending" };
     }
     storage.sql.exec(
@@ -254,7 +241,7 @@ export function decideApproval(
         approval.jobId,
       );
     } else {
-      rejectJob(storage, approval.jobId, input.nowIso, "denied", null);
+      rejectUndispatched(storage, [job.message_id], { failureClass: "denied" }, input.nowIso);
     }
     return {
       kind: "claimed",
@@ -264,10 +251,9 @@ export function decideApproval(
   });
 }
 
-export function claimDispatch(
-  storage: AccountSqliteStorage,
-  input: ClaimDispatchInput,
-): ClaimDispatchResult {
+// The `state = 'ready'` guard makes a send at-most-once: only the claim moves a job out of `ready`,
+// and an expired claim settles `unknown`, never back to `ready`.
+export function claimJob(storage: AccountSqliteStorage, input: ClaimJobInput): ClaimJobResult {
   return storage.transactionSync(() => {
     const current = readJob(storage, "j.id = ?", input.jobId);
     if (current === null) {
@@ -276,34 +262,16 @@ export function claimDispatch(
     if (current.state !== "ready") {
       return { kind: "not_claimable", job: toOutboundJob(current) };
     }
-    const participants =
-      loadParticipantsByMessageIds(storage, [current.message_id]).get(current.message_id) ??
-      emptyParticipants();
-    const authorization = authorizeOutbound(
-      storage,
-      requesterFromRow(current),
-      current.mailbox_id,
-      [...participants.to, ...participants.cc],
-    );
-    if (authorization.kind === "denied") {
-      rejectJob(storage, current.id, input.nowIso, "policy", authorization.reason);
-      cancelApprovalOfFailedNotification(storage, current, input.nowIso);
-      return {
-        kind: "rejected",
-        job: toOutboundJob(requireJob(storage, current.id)),
-      };
+    const rejection = claimRejection(storage, current, input.policy);
+    if (rejection !== null) {
+      rejectUndispatched(
+        storage,
+        [current.message_id],
+        { failureClass: "policy", failureDetail: rejection },
+        input.nowIso,
+      );
+      return { kind: "rejected", job: toOutboundJob(requireJob(storage, current.id)) };
     }
-    if (current.purpose !== "approval_notification" && authorization.kind === "require_approval") {
-      const approval = readApproval(storage, "job_id", current.id);
-      if (approval === null || approval.state !== "approved") {
-        rejectJob(storage, current.id, input.nowIso, "policy", "approval_required");
-        return {
-          kind: "rejected",
-          job: toOutboundJob(requireJob(storage, current.id)),
-        };
-      }
-    }
-    // The `state = 'ready'` guard is what makes a send at-most-once.
     const attemptId = crypto.randomUUID();
     storage.sql.exec(
       `UPDATE outbound_jobs
@@ -322,6 +290,33 @@ export function claimDispatch(
       job: toOutboundJob(requireJob(storage, current.id)),
     };
   });
+}
+
+// Rechecks the requester's current policy; the job may have waited for approval since submit.
+function claimRejection(
+  storage: AccountSqliteStorage,
+  job: OutboundJobRow,
+  policy: PrincipalPolicy | null,
+): JobAuthorizationReason | "approval_required" | null {
+  const participants =
+    loadParticipantsByMessageIds(storage, [job.message_id]).get(job.message_id) ??
+    emptyParticipants();
+  const authorization = authorizeOutbound(policy, job.mailbox_id, [
+    ...participants.to,
+    ...participants.cc,
+  ]);
+  if (authorization.kind === "denied") {
+    return authorization.reason;
+  }
+  // An approval notification needs no approval itself; a message that does is sent once approved.
+  if (
+    job.purpose === "message" &&
+    authorization.kind === "require_approval" &&
+    readApproval(storage, "job_id", job.id)?.state !== "approved"
+  ) {
+    return "approval_required";
+  }
+  return null;
 }
 
 export function completeAttempt(
@@ -375,7 +370,16 @@ export function completeAttempt(
         current.id,
         input.attemptId,
       );
-      cancelApprovalOfFailedNotification(storage, current, input.nowIso);
+      // Without its notification nobody can decide the approval. A notification that settled
+      // `unknown` may have arrived, so only a rejected one gives up on the message.
+      if (current.purpose === "approval_notification") {
+        rejectUndispatched(
+          storage,
+          [current.message_id],
+          { failureClass: "notification_failed", failureDetail: outcome.failureDetail },
+          input.nowIso,
+        );
+      }
     } else {
       storage.sql.exec(
         `UPDATE outbound_jobs
@@ -394,28 +398,7 @@ export function completeAttempt(
   });
 }
 
-export function rejectReadyDispatch(
-  storage: AccountSqliteStorage,
-  input: RejectReadyDispatchInput,
-): RejectReadyDispatchResult {
-  return storage.transactionSync(() => {
-    const current = readJob(storage, "j.id = ?", input.jobId);
-    if (current === null) {
-      return { kind: "missing" };
-    }
-    if (current.state !== "ready") {
-      return { kind: "stale", job: toOutboundJob(current) };
-    }
-    rejectJob(storage, current.id, input.nowIso, "provider", input.failureDetail);
-    cancelApprovalOfFailedNotification(storage, current, input.nowIso);
-    return {
-      kind: "rejected",
-      job: toOutboundJob(requireJob(storage, current.id)),
-    };
-  });
-}
-
-export function getOutboundDispatch(
+export function readDispatch(
   storage: AccountSqliteStorage,
   jobId: string,
 ): OutboundDispatch | null {
@@ -450,48 +433,61 @@ export function getOutboundDispatch(
   });
 }
 
-// One Recovery pass over outbound work. An expired claim settles `unknown` and never returns to
-// `ready`, so a job is never sent twice; due approvals expire; the oldest ready jobs are returned
-// for publishing. SendConsumer's claim makes a repeated publish harmless.
-export function recoverOutbound(
-  storage: AccountSqliteStorage,
-  input: { readonly nowIso: string; readonly limit: number },
-): ReadonlyArray<string> {
-  return storage.transactionSync(() => {
+// The oldest ready jobs, for the store's due-work pass to send.
+export function readyJobIds(storage: AccountSqliteStorage, limit: number): ReadonlyArray<string> {
+  return Schema.decodeUnknownSync(Schema.Array(JobIdRow))(
+    storage.sql
+      .exec(
+        `SELECT id FROM outbound_jobs
+         WHERE state = 'ready'
+         ORDER BY created_at, id
+         LIMIT ?`,
+        limit,
+      )
+      .toArray(),
+  ).map((row) => row.id);
+}
+
+// Expires every due approval and rejects the work still waiting on it.
+export function expireDueApprovals(storage: AccountSqliteStorage, nowIso: string): void {
+  storage.transactionSync(() => {
+    const expired = Schema.decodeUnknownSync(Schema.Array(MessageIdRow))(
+      storage.sql
+        .exec(
+          `SELECT j.message_id AS message_id
+           FROM approval_requests a
+           JOIN outbound_jobs j ON j.id = a.job_id
+           WHERE a.state = 'pending' AND a.expires_at <= ?`,
+          nowIso,
+        )
+        .toArray(),
+    );
     storage.sql.exec(
-      `UPDATE outbound_jobs
-       SET state = 'unknown', updated_at = ?
-       WHERE state = 'in_flight' AND claim_expires_at <= ?`,
-      input.nowIso,
-      input.nowIso,
+      `UPDATE approval_requests
+       SET state = 'expired', resolved_at = ?
+       WHERE state = 'pending' AND expires_at <= ?`,
+      nowIso,
+      nowIso,
     );
-    const expired = Schema.decodeUnknownSync(Schema.Array(ApprovalJobIdRow))(
-      storage.sql
-        .exec(
-          `UPDATE approval_requests
-           SET state = 'expired', resolved_at = ?
-           WHERE state = 'pending' AND expires_at <= ?
-           RETURNING job_id`,
-          input.nowIso,
-          input.nowIso,
-        )
-        .toArray(),
+    rejectUndispatched(
+      storage,
+      expired.map((row) => row.message_id),
+      { failureClass: "expired" },
+      nowIso,
     );
-    for (const row of expired) {
-      rejectJob(storage, row.job_id, input.nowIso, "expired", null);
-    }
-    return Schema.decodeUnknownSync(Schema.Array(JobIdRow))(
-      storage.sql
-        .exec(
-          `SELECT id FROM outbound_jobs
-           WHERE state = 'ready'
-           ORDER BY created_at, id
-           LIMIT ?`,
-          input.limit,
-        )
-        .toArray(),
-    ).map((row) => row.id);
   });
+}
+
+// A claim that outlived its expiry was interrupted mid-send, so the mail may have gone out. It
+// settles `unknown` and is never sent again.
+export function settleAbandonedClaims(storage: AccountSqliteStorage, nowIso: string): void {
+  storage.sql.exec(
+    `UPDATE outbound_jobs
+     SET state = 'unknown', updated_at = ?
+     WHERE state = 'in_flight' AND claim_expires_at <= ?`,
+    nowIso,
+    nowIso,
+  );
 }
 
 export function getOutboundJob(
@@ -553,10 +549,16 @@ export function listOutboundJobs(
   });
 }
 
-export function cancelUndispatchedJobsForMessages(
+// Rejects every job of these messages that has not been sent, and cancels the approvals they
+// wait on. Jobs already claimed or settled are left alone.
+export function rejectUndispatched(
   storage: AccountSqliteStorage,
   messageIds: ReadonlyArray<string>,
-  cancelledAt: string,
+  failure: {
+    readonly failureClass: Exclude<OutboundJobFailureClass, "provider">;
+    readonly failureDetail?: string | undefined;
+  },
+  nowIso: string,
 ): void {
   if (messageIds.length === 0) {
     return;
@@ -564,25 +566,24 @@ export function cancelUndispatchedJobsForMessages(
   const boundIds = bindJsonStringArray(messageIds);
   storage.sql.exec(
     `UPDATE approval_requests
-     SET state = ?, resolved_at = ?
+     SET state = 'cancelled', resolved_at = ?
      WHERE state = 'pending'
        AND job_id IN (
          SELECT id FROM outbound_jobs
          WHERE message_id IN (SELECT value FROM json_each(?))
            AND state IN ('waiting_approval', 'ready')
        )`,
-    "cancelled",
-    cancelledAt,
+    nowIso,
     boundIds,
   );
   storage.sql.exec(
     `UPDATE outbound_jobs
-     SET state = ?, failure_class = ?, updated_at = ?
+     SET state = 'rejected', failure_class = ?, failure_detail = ?, updated_at = ?
      WHERE message_id IN (SELECT value FROM json_each(?))
        AND state IN ('waiting_approval', 'ready')`,
-    "rejected",
-    "cancelled",
-    cancelledAt,
+    failure.failureClass,
+    failure.failureDetail ?? null,
+    nowIso,
     boundIds,
   );
 }
@@ -643,34 +644,6 @@ function insertJobRow(
   );
 }
 
-// Without its notification nobody can decide the approval, so a rejected notification cancels it and
-// rejects the parked message. A notification that settled `unknown` may have arrived, so it keeps
-// the approval waiting.
-function cancelApprovalOfFailedNotification(
-  storage: AccountSqliteStorage,
-  job: OutboundJobRow,
-  nowIso: string,
-): void {
-  if (job.purpose !== "approval_notification") {
-    return;
-  }
-  const cancelled = Schema.decodeUnknownSync(Schema.Array(ApprovalJobIdRow))(
-    storage.sql
-      .exec(
-        `UPDATE approval_requests
-         SET state = 'cancelled', resolved_at = ?
-         WHERE notification_job_id = ? AND state = 'pending'
-         RETURNING job_id`,
-        nowIso,
-        job.id,
-      )
-      .toArray(),
-  );
-  for (const row of cancelled) {
-    rejectJob(storage, row.job_id, nowIso, "notification_failed", null);
-  }
-}
-
 function resolvedDecision(
   storage: AccountSqliteStorage,
   approval: StoredApproval,
@@ -686,68 +659,33 @@ function resolvedDecision(
   };
 }
 
-function rejectJob(
-  storage: AccountSqliteStorage,
-  jobId: string,
-  nowIso: string,
-  failureClass: "denied" | "expired" | "cancelled" | "notification_failed" | "policy" | "provider",
-  failureDetail: string | null,
-): void {
-  storage.sql.exec(
-    `UPDATE outbound_jobs
-     SET state = ?, failure_class = ?, failure_detail = ?, updated_at = ?
-     WHERE id = ? AND state IN ('waiting_approval', 'ready')`,
-    "rejected",
-    failureClass,
-    failureDetail,
-    nowIso,
-    jobId,
-  );
-}
-
 function authorizeOutbound(
-  storage: AccountSqliteStorage,
-  requester: OutboundRequester,
+  policy: PrincipalPolicy | null,
   mailboxId: string,
   recipients: ReadonlyArray<AccountMailContact>,
 ):
   | { readonly kind: "allow" }
   | { readonly kind: "require_approval" }
   | { readonly kind: "denied"; readonly reason: JobAuthorizationReason } {
-  const policy = loadRequesterPolicy(storage, requester);
-  if (policy === null || policy.state !== "active") {
+  if (policy === null) {
     return { kind: "denied", reason: "client_inactive" };
   }
-  if (!mailboxInPolicy(policy.policy.mailboxIds, mailboxId)) {
+  if (!mailboxInPolicy(policy.mailboxIds, mailboxId)) {
     return { kind: "denied", reason: "mailbox_forbidden" };
   }
-  if (policy.policy.sendMode.kind === "deny") {
+  if (policy.sendMode.kind === "deny") {
     return { kind: "denied", reason: "send_denied" };
   }
-  if (!recipientsAllowed(policy.policy.recipientAllowlist, recipients)) {
+  if (!recipientsAllowed(policy.recipientAllowlist, recipients)) {
     return { kind: "denied", reason: "recipient_not_allowed" };
   }
-  if (policy.policy.sendMode.kind === "allow") {
+  if (policy.sendMode.kind === "allow") {
     return { kind: "allow" };
   }
-  if (recipientsPreapproved(policy.policy.sendMode.preapprovedRecipients, recipients)) {
+  if (recipientsPreapproved(policy.sendMode.preapprovedRecipients, recipients)) {
     return { kind: "allow" };
   }
   return { kind: "require_approval" };
-}
-
-function loadRequesterPolicy(
-  storage: AccountSqliteStorage,
-  requester: OutboundRequester,
-): { readonly state: "active" | "disabled" | "revoked"; readonly policy: PrincipalPolicy } | null {
-  if (requester.kind === "operator") {
-    return { state: "active", policy: OPERATOR_POLICY };
-  }
-  const stored = getMcpOAuthPolicy(storage, requester.clientId);
-  if (stored === null) {
-    return null;
-  }
-  return { state: stored.state, policy: stored.policy };
 }
 
 function mailboxInPolicy(mailboxIds: PrincipalPolicy["mailboxIds"], mailboxId: string): boolean {
@@ -968,7 +906,7 @@ function firstContact(contacts: ReadonlyArray<AccountMailContact>): AccountMailC
 
 const JobIdRow = Schema.Struct({ id: Schema.String });
 
-const ApprovalJobIdRow = Schema.Struct({ job_id: Schema.String });
+const MessageIdRow = Schema.Struct({ message_id: Schema.String });
 
 const NotificationApprovalRow = Schema.Struct({
   id: Schema.String,

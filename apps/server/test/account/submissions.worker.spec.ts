@@ -1,17 +1,19 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
 
 import {
+  OPERATOR_POLICY,
   approvalNotificationIdempotencyKey,
   parseExternalMailAddress,
   parseMailDomain,
   SubmissionRequestId,
   type MailDomain,
+  type PrincipalPolicy,
 } from "@umail/api-contract";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import type { SubmitOutboundInput } from "../../src/account/domain.ts";
-import { accountStore, approvalMaterial, failureOf, taggedName } from "./harness.ts";
+import { accountStore, approvalMaterial, failureOf, taggedName, testPolicy } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -19,6 +21,7 @@ const EXPIRES = "2026-01-02T00:00:00.000Z";
 const DOMAIN = requireMailDomain("umail.example.com");
 const REQUEST_A = "11111111-1111-4111-8111-111111111111";
 const REQUEST_B = "22222222-2222-4222-8222-222222222222";
+const ALLOW = testPolicy({ kind: "allow" });
 
 describe("account-store outbound submissions", () => {
   it("replays an identical principal-scoped key and conflicts on a changed payload", async () => {
@@ -59,17 +62,17 @@ describe("account-store outbound submissions", () => {
   it("scopes keys per requester so two clients may reuse the same request id", async () => {
     const store = accountStore("submit-scoped-key");
     const mailbox = await requireAddress(store, "inbox");
-    await seedOauthPolicy(store, "client-a", { kind: "allow" });
-    await seedOauthPolicy(store, "client-b", { kind: "allow" });
     const first = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("client-a"),
+        policy: ALLOW,
         to: ["recipient@example.com"],
       }),
     );
     const second = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("client-b"),
+        policy: ALLOW,
         to: ["recipient@example.com"],
       }),
     );
@@ -81,7 +84,6 @@ describe("account-store outbound submissions", () => {
     const store = accountStore("submit-cross-authority-key");
     const mailbox = await requireAddress(store, "inbox");
     const clientId = "shared-client";
-    await seedOauthPolicy(store, clientId, { kind: "allow" });
 
     const operator = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
@@ -91,11 +93,13 @@ describe("account-store outbound submissions", () => {
     const mcp = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester(clientId),
+        policy: ALLOW,
       }),
     );
     const replay = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester(clientId),
+        policy: ALLOW,
       }),
     );
 
@@ -117,14 +121,19 @@ describe("account-store outbound submissions", () => {
   it("validates the allowlist before preapproval and never returns accepted on create", async () => {
     const store = accountStore("submit-allowlist");
     const mailbox = await requireAddress(store, "inbox");
-    await seedOauthPolicy(store, "agent", {
-      kind: "requireApproval",
-      allowlist: ["allowed@example.com", "exempt@example.com"],
-      preapproved: ["exempt@example.com"],
-    });
+    const policy = testPolicy(
+      { kind: "requireApproval", preapprovedRecipients: [requireExternal("exempt@example.com")] },
+      {
+        recipientAllowlist: [
+          requireExternal("allowed@example.com"),
+          requireExternal("exempt@example.com"),
+        ],
+      },
+    );
 
     const deniedInput = composeInput(mailbox.id, REQUEST_A, {
       requester: mcpRequester("agent"),
+      policy,
       to: ["exempt@example.com"],
       cc: ["blocked@example.com"],
     });
@@ -134,6 +143,7 @@ describe("account-store outbound submissions", () => {
     const waiting = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_B, {
         requester: mcpRequester("agent"),
+        policy,
         to: ["allowed@example.com"],
         cc: ["exempt@example.com"],
       }),
@@ -155,10 +165,11 @@ describe("account-store outbound submissions", () => {
       messageId: waiting.job.messageId,
     });
     expect(ready[0]?.jobId).not.toBe(waiting.job.jobId);
-    const claimed = await store.claimDispatch({
+    const claimed = await store.claimJob({
       jobId: ready[0]?.jobId ?? "",
       nowIso: NOW,
       claimExpiresAt: "2026-01-01T00:15:00.000Z",
+      policy,
     });
     expect(claimed.kind).toBe("claimed");
     expect(await store.getOutboundJob(waiting.job.jobId, { kind: "operator" })).toMatchObject({
@@ -166,23 +177,22 @@ describe("account-store outbound submissions", () => {
     });
   });
 
-  it("rejects an identical replay after requester revocation without changing the original job", async () => {
+  it("rejects an identical replay once the requester may no longer send, keeping the original job", async () => {
     const store = accountStore("submit-retry-after-revoke");
     const mailbox = await requireAddress(store, "inbox");
-    await seedOauthPolicy(store, "agent", { kind: "allow" });
     const first = await store.submitOutbound(
       composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("agent"),
+        policy: ALLOW,
         to: ["recipient@example.com"],
       }),
     );
     expect(first.created).toBe(true);
     expect(first.job.state).toBe("ready");
 
-    await store.revokeMcpOAuthPolicy("agent", NOW);
-
     const deniedInput = composeInput(mailbox.id, REQUEST_A, {
       requester: mcpRequester("agent"),
+      policy: testPolicy({ kind: "deny" }),
       to: ["recipient@example.com"],
     });
     const denied = await failureOf(store, (host) => host.submitOutbound(deniedInput));
@@ -193,21 +203,20 @@ describe("account-store outbound submissions", () => {
     });
   });
 
-  it("fails closed for unknown, disabled, or revoked clients and deny send mode", async () => {
+  it("fails closed on deny send mode and on mailboxes outside the policy", async () => {
     const store = accountStore("submit-closed");
     const mailbox = await requireAddress(store, "inbox");
-    const missingInput = composeInput(mailbox.id, REQUEST_A, {
-      requester: mcpRequester("missing"),
-    });
-    const missing = await failureOf(store, (host) => host.submitOutbound(missingInput));
-    expect(taggedName(missing)).toBe("JobAuthorizationError");
-
-    await seedOauthPolicy(store, "denied", { kind: "deny" });
-    const sendDeniedInput = composeInput(mailbox.id, REQUEST_B, {
-      requester: mcpRequester("denied"),
-    });
-    const sendDenied = await failureOf(store, (host) => host.submitOutbound(sendDeniedInput));
-    expect(taggedName(sendDenied)).toBe("JobAuthorizationError");
+    for (const policy of [
+      testPolicy({ kind: "deny" }),
+      testPolicy({ kind: "allow" }, { mailboxIds: ["another-mailbox"] }),
+    ]) {
+      const input = composeInput(mailbox.id, REQUEST_A, {
+        requester: mcpRequester("agent"),
+        policy,
+      });
+      const failure = await failureOf(store, (host) => host.submitOutbound(input));
+      expect(taggedName(failure)).toBe("JobAuthorizationError");
+    }
   });
 });
 
@@ -216,6 +225,7 @@ function composeInput(
   requestId: string,
   options: {
     readonly requester?: { kind: "operator" | "mcp"; clientId: string; label: string };
+    readonly policy?: PrincipalPolicy;
     readonly subject?: string;
     readonly to?: readonly [string, ...string[]];
     readonly cc?: ReadonlyArray<string>;
@@ -225,6 +235,7 @@ function composeInput(
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: options.requester ?? operatorRequester(),
+    policy: options.policy ?? OPERATOR_POLICY,
     mailboxId,
     subject: options.subject ?? "Hello",
     textBody: "body",
@@ -237,46 +248,6 @@ function composeInput(
     nowIso: NOW,
     approval: approvalMaterial(EXPIRES),
   };
-}
-
-async function seedOauthPolicy(
-  store: DurableObjectStub<AccountStoreTestHost>,
-  clientId: string,
-  options: {
-    readonly kind: "allow" | "deny" | "requireApproval";
-    readonly allowlist?: ReadonlyArray<string> | "any";
-    readonly preapproved?: ReadonlyArray<string>;
-  },
-) {
-  await store.ensureMcpOAuthPolicy({
-    clientId,
-    label: `Client ${clientId}`,
-    createdAt: NOW,
-  });
-  const sendMode =
-    options.kind === "requireApproval"
-      ? {
-          kind: "requireApproval" as const,
-          preapprovedRecipients: (options.preapproved ?? []).map(requireExternal),
-        }
-      : { kind: options.kind };
-  const recipientAllowlist =
-    options.allowlist === undefined || options.allowlist === "any"
-      ? "any"
-      : options.allowlist.map((address) => requireExternal(address));
-  await store.updateMcpOAuthPolicy({
-    clientId,
-    label: `Client ${clientId}`,
-    policy: {
-      mailboxIds: "all",
-      canRead: true,
-      canDelete: false,
-      sendMode,
-      recipientAllowlist,
-      canAdmin: false,
-    },
-    updatedAt: NOW,
-  });
 }
 
 async function requireAddress(store: DurableObjectStub<AccountStoreTestHost>, localPart: string) {

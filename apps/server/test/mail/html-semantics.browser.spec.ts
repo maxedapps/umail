@@ -5,7 +5,7 @@ import {
   createMailHtmlPolicy,
   type MailHtmlAttachment,
   type StoredMailHtml,
-} from "../src/index.ts";
+} from "../../src/mail/html-policy.ts";
 
 const MESSAGE_ID = "in_browser_semantics";
 const APPLICATION_URL = new URL("https://mail.umail.test/inbox");
@@ -24,7 +24,7 @@ const FORBIDDEN_TAGS = [
 
 const hosts: HTMLElement[] = [];
 
-describe("mail-content browser program", () => {
+describe("mail HTML policy in a real browser", () => {
   it("imports the public package without running the sanitizer", () => {
     expect(createMailHtmlPolicy).toEqual(expect.any(Function));
   });
@@ -180,7 +180,7 @@ function attachment(id: string, contentId: string, mimeType: string): MailHtmlAt
 function mount(html: string): HTMLElement {
   const host = document.createElement("div");
   host.innerHTML = html;
-  document.body.append(host);
+  document.body.appendChild(host);
   hosts.push(host);
   return host;
 }

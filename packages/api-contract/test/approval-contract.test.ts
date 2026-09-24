@@ -1,5 +1,6 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { describe, expect, it } from "vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -15,7 +16,7 @@ import {
   PublicApprovalApi,
   UmailApi,
 } from "../src/api-spec.ts";
-import { configFromEnvironment, makePublicApprovalClient } from "../src/client.ts";
+import { makePublicApprovalClient, umailBaseUrl } from "../src/client.ts";
 
 const TOKEN = "a".repeat(64);
 const TRUSTED_HEADERS = {
@@ -92,9 +93,9 @@ describe("public approval API contract", () => {
   it("uses only UMAIL_URL and sends neither bearer nor global JSON headers", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const config = yield* configFromEnvironment({
-          UMAIL_URL: "https://umail.example.test/",
-        });
+        const config = {
+          baseUrl: yield* baseUrlFrom({ UMAIL_URL: "https://umail.example.test/" }),
+        };
         const captured: Array<CapturedApprovalRequest> = [];
         const client = yield* makePublicApprovalClient(
           config,
@@ -181,18 +182,23 @@ describe("public approval API contract", () => {
   it("rejects missing, non-origin, and non-HTTP public client URLs", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const missing = yield* Effect.flip(configFromEnvironment({}));
+        const missing = yield* Effect.flip(baseUrlFrom({}));
         expect(missing.message).toBe("UMAIL_URL is required");
         const path = yield* Effect.flip(
-          configFromEnvironment({
+          baseUrlFrom({
             UMAIL_URL: "https://umail.example.test/api",
           }),
         );
         expect(path.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
-        const protocol = yield* Effect.flip(
-          configFromEnvironment({ UMAIL_URL: "file:///tmp/umail" }),
-        );
+        const protocol = yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "file:///tmp/umail" }));
         expect(protocol.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
       }),
     ));
 });
+
+// Reads UMAIL_URL from the given environment instead of the process's.
+function baseUrlFrom(env: Record<string, string>) {
+  return umailBaseUrl.pipe(
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
+  );
+}

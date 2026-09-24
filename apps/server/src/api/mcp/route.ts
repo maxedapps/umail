@@ -15,7 +15,6 @@ import {
   verifyOAuthResourceRequest,
   type OAuthAccess,
 } from "../../auth/oauth-resource.ts";
-import { currentIso } from "../operations.ts";
 import { registerTools } from "./tools.ts";
 
 const LEGACY_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18"] as const;
@@ -62,25 +61,22 @@ export function serveMcpRequest(deps: ApiDeps) {
   });
 }
 
+// Only the operator's grants count, and only while the operator's consent for the client has a
+// policy; anything else is 403.
 function mcpPrincipalForAccess(deps: ApiDeps, access: OAuthAccess) {
   return Effect.gen(function* () {
-    const stored = yield* deps.account
-      .ensureMcpOAuthPolicy({
-        clientId: access.clientId,
-        label: `OAuth client ${access.clientId.slice(0, 12)}`,
-        createdAt: yield* currentIso(deps),
-      })
-      .pipe(Effect.orDie);
-    if (stored.state !== "active") return yield* Effect.fail("forbidden" as const);
+    const policy =
+      access.subject === deps.operatorId ? yield* deps.access.mcpPolicy(access.clientId) : null;
+    if (policy === null) return yield* Effect.fail("forbidden" as const);
     return {
       authority: "mcp",
       identity: {
         kind: "oauth",
         userId: access.subject,
         clientId: access.clientId,
-        clientLabel: stored.label,
+        clientLabel: `OAuth client ${access.clientId.slice(0, 12)}`,
       },
-      policy: stored.policy,
+      policy,
     } satisfies McpPrincipal;
   });
 }

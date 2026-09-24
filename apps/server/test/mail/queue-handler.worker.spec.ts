@@ -1,11 +1,11 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
 
 import { parseMailboxAddress } from "@umail/api-contract";
-import { createMailHtmlPolicy } from "@umail/mail-content";
 import { env, reset } from "cloudflare:test";
 import * as Effect from "effect/Effect";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 import type { MessageConflictError } from "../../src/account/errors.ts";
 import { inboundMessageId } from "../../src/mail/archive.ts";
 import { INBOUND_MIME_LIMITS, rawObjectKey, sha256Hex } from "../../src/mail/policy.ts";

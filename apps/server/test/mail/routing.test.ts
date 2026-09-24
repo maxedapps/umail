@@ -2,585 +2,197 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { Unowned } from "alchemy/AdoptPolicy";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
-  EmailRoutingDomainApiError,
-  EmailRoutingDomainsApi,
-  EmailRoutingDomainsApiLive,
-  type EmailRoutingDomainIdentity,
-  type EmailRoutingDomainInspection,
-  type EmailRoutingDomainsApiService,
-} from "../../src/mail/routing-api.ts";
-import {
+  diffEmailRoutingDomain,
   EmailRoutingDomainNotReady,
-  makeEmailRoutingDomainLifecycle,
+  readEmailRoutingDomain,
+  reconcileEmailRoutingDomain,
 } from "../../src/mail/routing.ts";
 
-interface CapturedCloudflareRequest {
-  readonly method: string;
-  readonly url: string;
-  readonly authorization: string | undefined;
-  readonly apiKey: string | undefined;
-  readonly body: string | undefined;
-}
-
-interface LifecycleMutation {
-  readonly operation: "enable" | "enable-apex";
-  readonly identity: EmailRoutingDomainIdentity;
-}
-
 const zoneName = "example.com";
+const domain = { zoneId: "zone-1", name: "mail.example.com" };
+const apex = { zoneId: "zone-1", name: zoneName };
+const routingPath = "/client/v4/zones/zone-1/email/routing";
 
-const identity = {
-  zoneId: "zone-1",
-  name: "dev-mail.umail.example.com",
-} as const satisfies EmailRoutingDomainIdentity;
-
-const apexIdentity = {
-  zoneId: "zone-1",
-  name: zoneName,
-} as const satisfies EmailRoutingDomainIdentity;
-
-const readyRegistration = {
-  ...identity,
-  subdomainId: "routing-domain-1",
-  enabled: true,
-  status: "ready",
-  dnsReady: true,
-} as const;
-
-const apexReadyRegistration = {
-  ...apexIdentity,
-  subdomainId: "routing-settings-1",
-  enabled: true,
-  status: "ready",
-  dnsReady: true,
-} as const;
-
-const readyInspection = {
-  zoneName,
-  apexEnabled: true,
-  exact: readyRegistration,
-} as const satisfies EmailRoutingDomainInspection;
-
-const apexReadyInspection = {
-  zoneName,
-  apexEnabled: true,
-  exact: apexReadyRegistration,
-} as const satisfies EmailRoutingDomainInspection;
-
-const missingInspection = {
-  zoneName,
-  apexEnabled: true,
-  exact: undefined,
-} as const satisfies EmailRoutingDomainInspection;
-
-const disabledInspection = {
-  zoneName,
-  apexEnabled: true,
-  exact: {
-    ...readyRegistration,
-    enabled: false,
-    dnsReady: false,
-  },
-} as const satisfies EmailRoutingDomainInspection;
-
-const unreadyInspection = {
-  zoneName,
-  apexEnabled: true,
-  exact: {
-    ...readyRegistration,
-    status: "misconfigured",
-    dnsReady: false,
-  },
-} as const satisfies EmailRoutingDomainInspection;
-
-const apexUnreadyInspection = {
-  zoneName,
-  apexEnabled: false,
-  exact: {
-    ...apexReadyRegistration,
-    enabled: false,
-    status: "unconfigured",
-    dnsReady: false,
-  },
-} as const satisfies EmailRoutingDomainInspection;
-
-const settingsSuccessJson = `{"success":true,"result":{"id":"routing-settings-1","name":"example.com","enabled":true,"status":"ready","subdomains":[{"id":"routing-domain-1","name":"${identity.name}","enabled":true,"status":"ready"},{"id":"routing-domain-2","name":"sibling-mail.umail.example.com","enabled":true,"status":"ready"}]}}`;
-const dnsReadyJson = `{"success":true,"result":{"errors":null,"records":[{"content":"route1.mx.cloudflare.net.","name":"${identity.name}","priority":28,"ttl":1,"type":"MX"}]}}`;
-const dnsUnreadyJson = `{"success":true,"result":{"errors":[{"code":"missing","missing":{"content":"route1.mx.cloudflare.net.","name":"${identity.name}","priority":28,"ttl":1,"type":"MX"}}],"records":[]}}`;
-const mutationSuccessJson = '{"success":true,"result":{}}';
-const emptySubdomainsJson =
-  '{"success":true,"result":{"id":"routing-settings-1","name":"example.com","enabled":true,"status":"ready"}}';
-const invalidSubdomainsJson =
-  '{"success":true,"result":{"id":"routing-settings-1","name":"example.com","enabled":true,"status":"ready","subdomains":"not-a-list"}}';
-const routingDomainMutationJson = `{"name":"${identity.name}"}`;
-const deploymentToken = "deployment-token";
-
-type TestCredentialsResolver = Effect.Success<typeof Cloudflare.Credentials>;
-
-const deploymentTokenCredentials = Effect.succeed({
-  type: "apiToken" as const,
-  apiToken: Redacted.make(deploymentToken),
-  apiBaseUrl: "https://api.cloudflare.test/client/v4",
-});
-
-function requestBody(request: HttpClientRequest.HttpClientRequest) {
-  if (request.body._tag !== "Uint8Array") return undefined;
-  return new TextDecoder().decode(request.body.body);
+interface FakeReadiness {
+  // Each readiness probe takes the next answer; the last one repeats.
+  readonly apex?: Array<boolean>;
+  readonly subdomain?: Array<boolean>;
 }
 
-function cloudflareHttpClient(
-  captured: Array<CapturedCloudflareRequest>,
-  responseFor: (request: HttpClientRequest.HttpClientRequest, url: URL) => Response,
-) {
-  return HttpClient.make((request, url) => {
-    captured.push({
-      method: request.method,
-      url: url.toString(),
-      authorization: request.headers.authorization,
-      apiKey: request.headers["x-auth-key"],
-      body: requestBody(request),
-    });
-    return Effect.succeed(HttpClientResponse.fromWeb(request, responseFor(request, url)));
+function envelope(result: unknown) {
+  return JSON.stringify({ success: true, errors: [], messages: [], result });
+}
+
+// Fakes the Cloudflare API that the SDK talks to at deploy time.
+function fakeCloudflare({ apex = [true], subdomain = [true] }: FakeReadiness) {
+  const requests: Array<string> = [];
+  const authorizations = new Set<string | undefined>();
+  const next = (answers: Array<boolean>) =>
+    answers.length > 1 ? answers.shift() === true : answers[0] === true;
+  const settings = (ready: boolean) => ({
+    id: "settings-1",
+    name: zoneName,
+    enabled: ready,
+    status: ready ? "ready" : "unconfigured",
   });
-}
-
-function jsonResponse(encodedBody: string, status = 200) {
-  return new Response(encodedBody, {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function runLiveApi<A>(
-  effect: Effect.Effect<A, EmailRoutingDomainApiError, EmailRoutingDomainsApi>,
-  http: HttpClient.HttpClient,
-  credentials: TestCredentialsResolver = deploymentTokenCredentials,
-) {
-  return effect.pipe(
-    Effect.provide(EmailRoutingDomainsApiLive),
-    Effect.provideService(HttpClient.HttpClient, http),
-    Effect.provideService(Cloudflare.Credentials, credentials),
-  );
-}
-
-function fakeApi(
-  observations: Array<EmailRoutingDomainInspection>,
-  mutations: Array<LifecycleMutation>,
-): EmailRoutingDomainsApiService {
-  return {
-    inspect: () => {
-      const observation = observations.shift();
-      return observation === undefined
-        ? Effect.die("Unexpected Email Routing inspection")
-        : Effect.succeed(observation);
-    },
-    enableApex: (target) => {
-      mutations.push({ operation: "enable-apex", identity: target });
-      return Effect.void;
-    },
-    enable: (target) => {
-      mutations.push({ operation: "enable", identity: target });
-      return Effect.void;
-    },
+  const resultFor = (route: string, url: URL) => {
+    if (route === `GET ${routingPath}`) return settings(next(apex));
+    if (route === `POST ${routingPath}/dns`) return settings(true);
+    if (route !== `GET ${routingPath}/dns`) return undefined;
+    const missing = {
+      code: "missing",
+      missing: { type: "MX", name: url.searchParams.get("subdomain") },
+    };
+    return { errors: next(subdomain) ? null : [missing], records: [] };
   };
+
+  const http = HttpClient.make((request, url) => {
+    const body =
+      request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+    requests.push(`${request.method} ${url.pathname}${url.search} ${body}`.trim());
+    authorizations.add(request.headers.authorization);
+    const route = `${request.method} ${url.pathname}`;
+    const result = resultFor(route, url);
+    if (result === undefined) return Effect.die(`Unexpected Cloudflare request: ${route}`);
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(envelope(result), { headers: { "content-type": "application/json" } }),
+      ),
+    );
+  });
+
+  const layer = Layer.mergeAll(
+    Layer.succeed(HttpClient.HttpClient, http),
+    Layer.succeed(
+      Cloudflare.Credentials,
+      Effect.succeed({
+        type: "apiToken" as const,
+        apiToken: Redacted.make("deploy-token"),
+        apiBaseUrl: "https://api.cloudflare.test/client/v4",
+      }),
+    ),
+  );
+  return { requests, authorizations, layer };
 }
 
-describe("Email Routing domain Cloudflare API adapter", () => {
-  it.effect("uses the exact documented read and create routes", () =>
+const dnsCheck = `GET ${routingPath}/dns?subdomain=${domain.name}`;
+const settingsRead = `GET ${routingPath}`;
+
+describe("Email Routing domain provider", () => {
+  it.effect("marks an existing ready registration as unowned for adoption", () =>
     Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, (request, url) => {
-        if (request.method === "GET" && url.pathname.endsWith("/email/routing")) {
-          return jsonResponse(settingsSuccessJson);
-        }
-        if (request.method === "GET" && url.pathname.endsWith("/email/routing/dns")) {
-          return jsonResponse(dnsReadyJson);
-        }
-        return jsonResponse(mutationSuccessJson);
-      });
+      const cloudflare = fakeCloudflare({ subdomain: [true] });
 
-      const inspection = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          const current = yield* api.inspect(identity);
-          yield* api.enable(identity);
-          return current;
-        }),
-        http,
+      const observed = yield* readEmailRoutingDomain(domain, undefined).pipe(
+        Effect.provide(cloudflare.layer),
       );
 
-      expect(inspection).toEqual({
-        zoneName,
-        apexEnabled: true,
-        exact: readyRegistration,
-      });
-      expect(captured.map(({ method }) => method)).toEqual(["GET", "GET", "POST"]);
-      expect(captured.every(({ method }) => method !== "DELETE")).toBe(true);
-      expect(new URL(captured[0]?.url ?? "").pathname).toBe(
-        "/client/v4/zones/zone-1/email/routing",
-      );
-      const dnsUrl = new URL(captured[1]?.url ?? "");
-      expect(dnsUrl.pathname).toBe("/client/v4/zones/zone-1/email/routing/dns");
-      expect(dnsUrl.searchParams.get("subdomain")).toBe(identity.name);
-      expect(new URL(captured[2]?.url ?? "").pathname).toBe(
-        "/client/v4/zones/zone-1/email/routing/dns",
-      );
-      expect(captured[2]?.body).toBe(routingDomainMutationJson);
-      for (const request of captured) {
-        expect(request.authorization).toBe(`Bearer ${deploymentToken}`);
-      }
+      expect(observed).toEqual(domain);
+      expect(Unowned.is(observed)).toBe(true);
+      expect(cloudflare.requests).toEqual([settingsRead, dnsCheck]);
+      expect([...cloudflare.authorizations]).toEqual(["Bearer deploy-token"]);
     }),
   );
 
-  it.effect("normalizes Cloudflare's omitted zero-subdomain field to an empty collection", () =>
+  it.effect("reports a domain whose DNS is not ready as missing", () =>
     Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () => jsonResponse(emptySubdomainsJson));
-      const inspection = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          return yield* api.inspect(identity);
-        }),
-        http,
+      const cloudflare = fakeCloudflare({ subdomain: [false] });
+
+      const observed = yield* readEmailRoutingDomain(domain, undefined).pipe(
+        Effect.provide(cloudflare.layer),
       );
 
-      expect(inspection).toEqual({
-        zoneName,
-        apexEnabled: true,
-        exact: undefined,
-      });
+      expect(observed).toBeUndefined();
     }),
   );
 
-  it.effect(
-    "reports the exact registration unready when Cloudflare lists missing DNS records",
-    () =>
-      Effect.gen(function* () {
-        const captured: Array<CapturedCloudflareRequest> = [];
-        const http = cloudflareHttpClient(captured, (request, url) =>
-          request.method === "GET" && url.pathname.endsWith("/email/routing/dns")
-            ? jsonResponse(dnsUnreadyJson)
-            : jsonResponse(settingsSuccessJson),
-        );
-        const inspection = yield* runLiveApi(
-          Effect.gen(function* () {
-            const api = yield* EmailRoutingDomainsApi;
-            return yield* api.inspect(identity);
-          }),
-          http,
-        );
-
-        expect(inspection.exact).toEqual({
-          ...readyRegistration,
-          dnsReady: false,
-        });
-      }),
-  );
-
-  it.effect("fails closed when the undocumented subdomains contract is malformed", () =>
+  it.effect("leaves a ready domain alone", () =>
     Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () => jsonResponse(invalidSubdomainsJson));
-      const error = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          return yield* api.inspect(identity);
-        }),
-        http,
-      ).pipe(Effect.flip);
+      const cloudflare = fakeCloudflare({ subdomain: [true] });
 
-      expect(error).toMatchObject({
-        _tag: "EmailRoutingDomainApiError",
-        operation: "read-routing-settings",
-        status: 200,
-        reason: "invalid-success-response",
-      });
+      const diff = yield* diffEmailRoutingDomain(domain, domain, domain).pipe(
+        Effect.provide(cloudflare.layer),
+      );
+      const result = yield* reconcileEmailRoutingDomain(domain).pipe(
+        Effect.provide(cloudflare.layer),
+      );
+
+      expect(diff).toBeUndefined();
+      expect(result).toEqual(domain);
+      expect(cloudflare.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
     }),
   );
 
-  it.effect("treats the resolved zone name as apex routing, not a missing child", () =>
+  it.effect("registers a domain that is not ready and waits for its DNS", () =>
     Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () => jsonResponse(settingsSuccessJson));
-      const inspection = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          return yield* api.inspect(apexIdentity);
-        }),
-        http,
-      );
+      const cloudflare = fakeCloudflare({ subdomain: [false, false, false, true] });
 
-      expect(inspection).toEqual(apexReadyInspection);
-      expect(captured.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
-        ["GET", "/client/v4/zones/zone-1/email/routing"],
+      const diff = yield* diffEmailRoutingDomain(domain, domain, domain).pipe(
+        Effect.provide(cloudflare.layer),
+      );
+      const fiber = yield* reconcileEmailRoutingDomain(domain).pipe(
+        Effect.provide(cloudflare.layer),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 minute");
+      const result = yield* Fiber.join(fiber);
+
+      expect(diff).toEqual({ action: "update" });
+      expect(result).toEqual(domain);
+      expect(cloudflare.requests.filter((request) => request !== settingsRead)).toEqual([
+        dnsCheck,
+        dnsCheck,
+        `POST ${routingPath}/dns {"name":"${domain.name}"}`,
+        dnsCheck,
+        dnsCheck,
       ]);
     }),
   );
 
-  it.effect("reports apex routing unready from the routing settings status", () =>
+  it.effect("fails when DNS does not become ready in time", () =>
     Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () =>
-        jsonResponse(
-          JSON.stringify({
-            success: true,
-            result: { id: "settings-1", name: zoneName, enabled: true, status: "misconfigured" },
-          }),
-        ),
-      );
-      const inspection = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          return yield* api.inspect(apexIdentity);
-        }),
-        http,
-      );
-      expect(inspection.exact?.dnsReady).toBe(false);
-      expect(inspection.exact?.status).toBe("misconfigured");
-    }),
-  );
+      const cloudflare = fakeCloudflare({ subdomain: [false] });
 
-  it.effect("enables apex routing without child-domain registration semantics", () =>
-    Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () => jsonResponse(mutationSuccessJson));
-      yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          yield* api.enableApex(apexIdentity);
-        }),
-        http,
-      );
-
-      expect(captured).toHaveLength(1);
-      expect(captured[0]?.method).toBe("POST");
-      expect(new URL(captured[0]?.url ?? "").pathname).toBe(
-        "/client/v4/zones/zone-1/email/routing/dns",
-      );
-      expect(captured[0]?.body).toBeUndefined();
-    }),
-  );
-
-  it.effect("rejects HTTP 200 success:false envelopes as Cloudflare failures", () =>
-    Effect.gen(function* () {
-      const captured: Array<CapturedCloudflareRequest> = [];
-      const http = cloudflareHttpClient(captured, () =>
-        jsonResponse(
-          '{"success":false,"errors":[{"code":2007,"message":"must be a subdomains of example.com"}]}',
-        ),
-      );
-      const error = yield* runLiveApi(
-        Effect.gen(function* () {
-          const api = yield* EmailRoutingDomainsApi;
-          return yield* api.enable(identity);
-        }),
-        http,
-      ).pipe(Effect.flip);
-
-      expect(error).toMatchObject({
-        _tag: "EmailRoutingDomainApiError",
-        operation: "enable-routing-domain",
-        status: 200,
-        reason: "cloudflare-rejected-request",
-        message: "must be a subdomains of example.com",
-      });
-    }),
-  );
-
-  it.effect("never retains bearer or global API-key credentials in adapter errors", () =>
-    Effect.gen(function* () {
-      const bearerRequests: Array<CapturedCloudflareRequest> = [];
-      const bearerHttp = cloudflareHttpClient(bearerRequests, () => jsonResponse("{}"));
-      const inspect = Effect.gen(function* () {
-        const api = yield* EmailRoutingDomainsApi;
-        return yield* api.inspect(identity);
-      });
-      const bearerError = yield* runLiveApi(inspect, bearerHttp).pipe(Effect.flip);
-
-      expect(bearerRequests[0]?.authorization).toBe(`Bearer ${deploymentToken}`);
-      const bearerErrorJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-        bearerError,
-      );
-      expect(bearerErrorJson).not.toContain(deploymentToken);
-      expect(bearerError.reason).toBe("invalid-success-response");
-
-      const globalApiKey = "global-api-key-secret";
-      const apiKeyRequests: Array<CapturedCloudflareRequest> = [];
-      const apiKeyHttp = cloudflareHttpClient(apiKeyRequests, () => jsonResponse("{}"));
-      const apiKeyCredentials = Effect.succeed({
-        type: "apiKey" as const,
-        apiKey: Redacted.make(globalApiKey),
-        email: "operator@example.com",
-        apiBaseUrl: "https://api.cloudflare.test/client/v4",
-      });
-      const apiKeyError = yield* runLiveApi(inspect, apiKeyHttp, apiKeyCredentials).pipe(
+      const fiber = yield* reconcileEmailRoutingDomain(domain).pipe(
+        Effect.provide(cloudflare.layer),
         Effect.flip,
+        Effect.forkChild,
       );
-
-      expect(apiKeyRequests[0]?.apiKey).toBe(globalApiKey);
-      const apiKeyErrorJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-        apiKeyError,
-      );
-      expect(apiKeyErrorJson).not.toContain(globalApiKey);
-      expect(apiKeyError.reason).toBe("invalid-success-response");
-    }),
-  );
-});
-
-function registerRepairTest(description: string, initial: EmailRoutingDomainInspection) {
-  it.effect(`repairs a ${description} exact registration`, () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const observations = [initial, initial, readyInspection];
-      const lifecycle = makeEmailRoutingDomainLifecycle(fakeApi(observations, mutations));
-
-      const diff = yield* lifecycle.diff(identity, identity, {
-        ...readyRegistration,
-        apexEnabled: true,
-      });
-      const result = yield* lifecycle.reconcile(identity);
-
-      expect(diff).toEqual({ action: "update" });
-      expect(result).toEqual({ ...readyRegistration, apexEnabled: true });
-      expect(mutations).toEqual([{ operation: "enable", identity }]);
-    }),
-  );
-}
-
-describe("Email Routing domain lifecycle", () => {
-  it.effect("brands a cold exact-name match as unowned for explicit adoption", () =>
-    Effect.gen(function* () {
-      const lifecycle = makeEmailRoutingDomainLifecycle(fakeApi([readyInspection], []));
-      const observed = yield* lifecycle.read(identity, undefined);
-
-      expect(observed).toEqual({ ...readyRegistration, apexEnabled: true });
-      expect(Unowned.is(observed)).toBe(true);
-    }),
-  );
-
-  it.effect("creates a missing domain and waits for exact DNS readiness", () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const lifecycle = makeEmailRoutingDomainLifecycle(
-        fakeApi([missingInspection, readyInspection], mutations),
-      );
-
-      const result = yield* lifecycle.reconcile(identity);
-
-      expect(result).toEqual({ ...readyRegistration, apexEnabled: true });
-      expect(mutations).toEqual([{ operation: "enable", identity }]);
-    }),
-  );
-
-  registerRepairTest("disabled", disabledInspection);
-  registerRepairTest("not DNS-ready", unreadyInspection);
-
-  it.effect("leaves a healthy unchanged registration alone", () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const lifecycle = makeEmailRoutingDomainLifecycle(
-        fakeApi([readyInspection, readyInspection], mutations),
-      );
-      const output = { ...readyRegistration, apexEnabled: true };
-
-      const diff = yield* lifecycle.diff(identity, identity, output);
-      const result = yield* lifecycle.reconcile(identity);
-
-      expect(diff).toBeUndefined();
-      expect(result).toEqual(output);
-      expect(mutations).toEqual([]);
-    }),
-  );
-
-  it.effect("fails after the bounded readiness window", () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const observations = Array.from({ length: 20 }, () => unreadyInspection);
-      const lifecycle = makeEmailRoutingDomainLifecycle(fakeApi(observations, mutations));
-
-      const fiber = yield* lifecycle.reconcile(identity).pipe(Effect.flip, Effect.forkChild);
       yield* TestClock.adjust("1 minute");
       const error = yield* Fiber.join(fiber);
 
       expect(error).toBeInstanceOf(EmailRoutingDomainNotReady);
-      expect(mutations).toEqual([{ operation: "enable", identity }]);
+      expect(cloudflare.requests.filter((request) => request.startsWith("POST"))).toHaveLength(1);
     }),
   );
 
-  it.effect("refreshes state when Cloudflare replaces the exact registration id", () =>
+  it.effect("enables apex routing from the zone's routing settings", () =>
     Effect.gen(function* () {
-      const lifecycle = makeEmailRoutingDomainLifecycle(fakeApi([readyInspection], []));
-      const staleOutput = {
-        ...readyRegistration,
-        subdomainId: "stale-routing-domain-id",
-        apexEnabled: true,
-      };
+      const cloudflare = fakeCloudflare({ apex: [false, false, true] });
 
-      const diff = yield* lifecycle.diff(identity, identity, staleOutput);
-
-      expect(diff).toEqual({ action: "update" });
-    }),
-  );
-
-  it.effect("replaces immutable zone/name identity changes without touching the API", () =>
-    Effect.gen(function* () {
-      const lifecycle = makeEmailRoutingDomainLifecycle(fakeApi([], []));
-      const output = { ...readyRegistration, apexEnabled: true };
-
-      const renamed = yield* lifecycle.diff(
-        identity,
-        { ...identity, name: "renamed.umail.example.com" },
-        output,
+      const fiber = yield* reconcileEmailRoutingDomain(apex).pipe(
+        Effect.provide(cloudflare.layer),
+        Effect.forkChild,
       );
-      const moved = yield* lifecycle.diff(identity, { ...identity, zoneId: "zone-2" }, output);
+      yield* TestClock.adjust("1 minute");
+      const result = yield* Fiber.join(fiber);
 
-      expect(renamed).toEqual({ action: "replace" });
-      expect(moved).toEqual({ action: "replace" });
-    }),
-  );
-
-  it.effect("leaves a ready apex registration in place instead of enabling a child", () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const lifecycle = makeEmailRoutingDomainLifecycle(
-        fakeApi([apexReadyInspection, apexReadyInspection], mutations),
-      );
-      const output = { ...apexReadyRegistration, apexEnabled: true };
-
-      const diff = yield* lifecycle.diff(apexIdentity, apexIdentity, output);
-      const result = yield* lifecycle.reconcile(apexIdentity);
-
-      expect(diff).toBeUndefined();
-      expect(result).toEqual(output);
-      expect(mutations).toEqual([]);
-    }),
-  );
-
-  it.effect("repairs unready apex routing without child-domain enable or delete", () =>
-    Effect.gen(function* () {
-      const mutations: Array<LifecycleMutation> = [];
-      const lifecycle = makeEmailRoutingDomainLifecycle(
-        fakeApi([apexUnreadyInspection, apexUnreadyInspection, apexReadyInspection], mutations),
-      );
-
-      const diff = yield* lifecycle.diff(apexIdentity, apexIdentity, {
-        ...apexReadyRegistration,
-        apexEnabled: true,
-      });
-      const result = yield* lifecycle.reconcile(apexIdentity);
-
-      expect(diff).toEqual({ action: "update" });
-      expect(result).toEqual({ ...apexReadyRegistration, apexEnabled: true });
-      expect(mutations).toEqual([{ operation: "enable-apex", identity: apexIdentity }]);
+      expect(result).toEqual(apex);
+      expect(cloudflare.requests).toEqual([
+        settingsRead,
+        `POST ${routingPath}/dns {}`,
+        settingsRead,
+        settingsRead,
+      ]);
     }),
   );
 });

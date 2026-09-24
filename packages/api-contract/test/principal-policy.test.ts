@@ -78,9 +78,7 @@ function policy(mailboxIds: unknown = "all", recipientAllowlist: unknown = "any"
   return {
     mailboxIds,
     canRead: true,
-    canDelete: false,
     sendMode: requireApprovalSendMode(),
     recipientAllowlist,
-    canAdmin: false,
   };
 }

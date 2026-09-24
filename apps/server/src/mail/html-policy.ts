@@ -8,7 +8,7 @@ import { toHtml } from "hast-util-to-html";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { MailHtmlResourceExhaustion, parseBoundedMailHtmlFragment } from "./mail-html-parser.ts";
+import { MailHtmlResourceExhaustion, parseBoundedMailHtmlFragment } from "./html-parser.ts";
 
 export type MailHtmlAttachment = {
   readonly id: string;

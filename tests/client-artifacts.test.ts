@@ -22,7 +22,6 @@ import * as Schema from "effect/Schema";
 import { afterAll, afterEach, beforeAll, describe, expect } from "vitest";
 
 import { ApprovalDecisionState, MailThreadPage } from "../packages/api-contract/src/api-spec.ts";
-import { type UmailClientEnvironment } from "../packages/api-contract/src/client.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLIENTS_DIRECTORY = join(REPO_ROOT, "dist", "clients");
@@ -181,7 +180,7 @@ function copyArtifactAlone(): CopiedArtifact {
   return { directory, path };
 }
 
-function copiedAloneEnvironment(umail: UmailClientEnvironment, stateHome?: string) {
+function copiedAloneEnvironment(umail: { readonly UMAIL_URL?: string }, stateHome?: string) {
   const env = { ...process.env };
   delete env.UMAIL_URL;
   const url = umail.UMAIL_URL;

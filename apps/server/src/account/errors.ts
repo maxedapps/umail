@@ -16,9 +16,11 @@ export class MessageConflictError extends Data.TaggedError("MessageConflictError
   readonly messageId: string;
 }> {}
 
-export class InboundMessageIntegrityError extends Data.TaggedError("InboundMessageIntegrityError")<{
+// A stored message is missing the record that must accompany it: an inbound receipt or an
+// outbound job.
+export class MessageIntegrityError extends Data.TaggedError("MessageIntegrityError")<{
   readonly messageId: string;
-  readonly reason: "receipt_missing";
+  readonly reason: "receipt_missing" | "job_missing";
 }> {}
 
 export class ThreadNotFoundError extends Data.TaggedError("ThreadNotFoundError")<{
@@ -26,7 +28,7 @@ export class ThreadNotFoundError extends Data.TaggedError("ThreadNotFoundError")
 }> {}
 
 export class AccountConflictError extends Data.TaggedError("AccountConflictError")<{
-  readonly resource: "address" | "destination";
+  readonly resource: "address";
   readonly id: string;
 }> {}
 

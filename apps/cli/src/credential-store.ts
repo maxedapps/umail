@@ -59,23 +59,17 @@ export class OAuthCredentialSupersededError extends Data.TaggedError(
 
 export type CredentialCommitResult = "committed" | "superseded";
 
-export interface OAuthLogoutRevocation {
-  readonly clientId: string;
-  readonly refreshToken: string;
-}
-
 export interface OAuthCredentialStoreService {
   readonly read: Effect.Effect<OAuthCredentialState | null, OAuthCredentialStoreError>;
   readonly commit: (
     expectedGeneration: number,
     state: OAuthCredentialState,
   ) => Effect.Effect<CredentialCommitResult, OAuthCredentialStoreError | OAuthCredentialLockError>;
-  readonly takeLogoutSnapshot: (
+  // Drops the tokens for `origin` and bumps the generation, so a concurrent refresh cannot restore
+  // them.
+  readonly clearTokens: (
     origin: string,
-  ) => Effect.Effect<
-    OAuthLogoutRevocation | null,
-    OAuthCredentialStoreError | OAuthCredentialLockError
-  >;
+  ) => Effect.Effect<void, OAuthCredentialStoreError | OAuthCredentialLockError>;
   readonly withRefreshLock: <A, E, R>(
     body: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | OAuthCredentialStoreError | OAuthCredentialLockError, R>;
@@ -134,18 +128,18 @@ export function makeCredentialStore(env: NodeJS.ProcessEnv): OAuthCredentialStor
           catch: () => new OAuthCredentialStoreError(),
         }).pipe(Effect.uninterruptible),
       ),
-    takeLogoutSnapshot: (origin) =>
+    clearTokens: (origin) =>
       Effect.gen(function* () {
         const current = yield* Effect.tryPromise({
           try: () => readCredentialState(path),
           catch: () => new OAuthCredentialStoreError(),
         });
-        if (current === null || current.origin !== origin) return null;
-        return yield* withExclusiveLock(
+        if (current === null || current.origin !== origin) return;
+        yield* withExclusiveLock(
           credentialLockPath(path),
           FILE_LOCK_TIMEOUT,
           Effect.tryPromise({
-            try: () => takeLogoutSnapshot(path, origin),
+            try: () => clearTokens(path, origin),
             catch: () => new OAuthCredentialStoreError(),
           }).pipe(Effect.uninterruptible),
         );
@@ -203,21 +197,13 @@ async function commitCredentialState(
   return "committed";
 }
 
-async function takeLogoutSnapshot(
-  path: string,
-  origin: string,
-): Promise<OAuthLogoutRevocation | null> {
+async function clearTokens(path: string, origin: string): Promise<void> {
   const current = await readCredentialState(path);
-  if (current === null || current.origin !== origin) return null;
-  const revocation =
-    current.kind === "authorized"
-      ? { clientId: current.clientId, refreshToken: current.refreshToken }
-      : null;
+  if (current === null || current.origin !== origin) return;
   await writeCredentialState(path, {
     ...registeredCredentialState(current),
     generation: current.generation + 1,
   });
-  return revocation;
 }
 
 async function ensureDirectory(path: string, privateDirectory: boolean): Promise<void> {

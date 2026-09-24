@@ -1,4 +1,4 @@
-import { configFromEnvironment, type UmailClientEnvironment } from "@umail/api-contract/client";
+import { umailBaseUrl } from "@umail/api-contract/client";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -7,7 +7,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -19,11 +18,12 @@ import {
   type OAuthAuthorizedState,
   type OAuthCredentialState,
   type OAuthCredentialStoreService,
-  type OAuthLogoutRevocation,
   type OAuthRegisteredState,
   registeredCredentialState,
 } from "./credential-store.ts";
 
+// The CLI is the static public client that provisioning registers for the REST resource.
+const UMAIL_CLI_CLIENT_ID = "umail-cli" as const;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
 const REFRESH_GRANT = "refresh_token" as const;
 const UMAIL_SCOPE = "umail:access" as const;
@@ -36,16 +36,9 @@ const REVOCATION_TIMEOUT = Duration.seconds(3);
 
 const OAuthMetadata = Schema.Struct({
   issuer: Schema.String,
-  registration_endpoint: Schema.String,
   device_authorization_endpoint: Schema.String,
   token_endpoint: Schema.String,
   revocation_endpoint: Schema.String,
-});
-
-const DynamicClientResponse = Schema.Struct({
-  client_id: Schema.String,
-  token_endpoint_auth_method: Schema.Literal("none"),
-  client_secret: Schema.optionalKey(Schema.Never),
 });
 
 const DeviceCodeResponse = Schema.Struct({
@@ -92,6 +85,10 @@ export class OAuthAccessDeniedError extends Data.TaggedError("OAuthAccessDeniedE
 export class OAuthDeviceCodeExpiredError extends Data.TaggedError("OAuthDeviceCodeExpiredError") {
   override readonly message = "The device authorization code expired. Run: umail login";
 }
+export class OAuthRevocationError extends Data.TaggedError("OAuthRevocationError") {
+  override readonly message =
+    "Could not revoke access on the server; local OAuth credentials were kept. Try again.";
+}
 
 export interface OAuthSchedulerService {
   readonly now: Effect.Effect<number>;
@@ -109,40 +106,25 @@ export class OAuthScheduler extends Context.Service<OAuthScheduler, OAuthSchedul
   );
 }
 
-export function login(env: UmailClientEnvironment) {
+export function login() {
   return Effect.gen(function* () {
-    const config = yield* configFromEnvironment(env);
+    const baseUrl = yield* umailBaseUrl;
     const httpClient = yield* HttpClient.HttpClient;
     const store = yield* OAuthCredentialStore;
     const scheduler = yield* OAuthScheduler;
-    const metadata = yield* discoverOAuth(httpClient, config.baseUrl);
-    const existing = yield* store.read;
-    const reusable = validRegistration(existing, config.baseUrl, metadata.issuer);
-    const registration =
-      reusable ?? (yield* registerClient(httpClient, store, metadata, config.baseUrl));
-    const attempt = loginWithRegistration(httpClient, store, scheduler, metadata, registration);
-    if (reusable === null) return yield* attempt;
-    return yield* attempt.pipe(
-      Effect.catchTag("OAuthEndpointError", (error) =>
-        error.error === "invalid_client"
-          ? Effect.gen(function* () {
-              const replacement = yield* registerClient(
-                httpClient,
-                store,
-                metadata,
-                config.baseUrl,
-              );
-              return yield* loginWithRegistration(
-                httpClient,
-                store,
-                scheduler,
-                metadata,
-                replacement,
-              );
-            })
-          : Effect.fail(error),
-      ),
-    );
+    const metadata = yield* discoverOAuth(httpClient, baseUrl);
+    const current = yield* store.read;
+    const registration = {
+      version: 2,
+      kind: "registered",
+      origin: baseUrl,
+      issuer: metadata.issuer,
+      resource: baseUrl,
+      scope: REQUIRED_SCOPE,
+      clientId: UMAIL_CLI_CLIENT_ID,
+      generation: current?.generation ?? 0,
+    } as const satisfies OAuthRegisteredState;
+    yield* loginWithRegistration(httpClient, store, scheduler, metadata, registration);
   }).pipe(Effect.catchTag("OAuthEndpointError", () => new OAuthProtocolError()));
 }
 
@@ -210,62 +192,24 @@ function loginWithRegistration(
   });
 }
 
-function registerClient(
-  httpClient: HttpClient.HttpClient,
-  store: OAuthCredentialStoreService,
-  metadata: typeof OAuthMetadata.Type,
-  origin: string,
-) {
+export function accessToken() {
   return Effect.gen(function* () {
-    const current = yield* store.read;
-    const generation = current?.generation ?? 0;
-    const request = HttpClientRequest.post(metadata.registration_endpoint).pipe(
-      HttpClientRequest.bodyJsonUnsafe({
-        client_name: "AgentMail CLI",
-        application_type: "native",
-        token_endpoint_auth_method: "none",
-        grant_types: [DEVICE_GRANT, REFRESH_GRANT],
-        subject_type: "public",
-        dpop_bound_access_tokens: false,
-        resources: [origin],
-      }),
-    );
-    const response = yield* requestJson(httpClient, request, DynamicClientResponse);
-    if (response.client_id.length === 0) return yield* new OAuthProtocolError();
-    const registration = {
-      version: 2,
-      kind: "registered",
-      origin,
-      issuer: metadata.issuer,
-      resource: origin,
-      scope: REQUIRED_SCOPE,
-      clientId: response.client_id,
-      generation,
-    } as const satisfies OAuthRegisteredState;
-    const outcome = yield* store.commit(generation, registration);
-    if (outcome === "superseded") return yield* new OAuthCredentialSupersededError();
-    return registration;
-  });
-}
-
-export function accessToken(env: UmailClientEnvironment) {
-  return Effect.gen(function* () {
-    const config = yield* configFromEnvironment(env);
+    const baseUrl = yield* umailBaseUrl;
     const store = yield* OAuthCredentialStore;
     const scheduler = yield* OAuthScheduler;
     return yield* store.withRefreshLock(
       Effect.gen(function* () {
         const state = yield* store.read;
-        if (state === null || state.origin !== config.baseUrl || state.kind !== "authorized") {
+        if (state === null || state.origin !== baseUrl || state.kind !== "authorized") {
           return yield* new OAuthLoginRequiredError();
         }
-        if (!validRegistration(state, config.baseUrl, `${config.baseUrl}/api/auth`)) {
+        if (!validRegistration(state, baseUrl, `${baseUrl}/api/auth`)) {
           return yield* new OAuthProtocolError();
         }
         const now = yield* scheduler.now;
         if (state.expiresAt - now > REFRESH_SKEW_MS) return Redacted.make(state.accessToken);
         const httpClient = yield* HttpClient.HttpClient;
-        const metadata = yield* discoverOAuth(httpClient, config.baseUrl);
+        const metadata = yield* discoverOAuth(httpClient, baseUrl);
         const refreshed = yield* requestJson(
           httpClient,
           HttpClientRequest.post(metadata.token_endpoint).pipe(
@@ -308,25 +252,27 @@ export function accessToken(env: UmailClientEnvironment) {
   });
 }
 
-export function logout(env: UmailClientEnvironment) {
+// Revokes on the server first; the local tokens are removed only once that succeeded.
+export function logout() {
   return Effect.gen(function* () {
-    const config = yield* configFromEnvironment(env);
+    const baseUrl = yield* umailBaseUrl;
     const store = yield* OAuthCredentialStore;
-    const revocation = yield* store.takeLogoutSnapshot(config.baseUrl);
-    if (revocation === null) return;
-    const httpClient = yield* HttpClient.HttpClient;
-    const remote = revokeRefreshToken(httpClient, config.baseUrl, revocation);
-    const remoteResult = yield* Effect.result(remote);
-    if (Result.isFailure(remoteResult)) {
-      yield* Console.error("Local OAuth tokens removed; remote revocation could not be confirmed.");
+    const state = yield* store.read;
+    if (state === null || state.origin !== baseUrl) return;
+    if (state.kind === "authorized") {
+      const httpClient = yield* HttpClient.HttpClient;
+      yield* revokeRefreshToken(httpClient, baseUrl, state).pipe(
+        Effect.mapError(() => new OAuthRevocationError()),
+      );
     }
+    yield* store.clearTokens(baseUrl);
   });
 }
 
 function revokeRefreshToken(
   httpClient: HttpClient.HttpClient,
   baseUrl: string,
-  revocation: OAuthLogoutRevocation,
+  revocation: { readonly clientId: string; readonly refreshToken: string },
 ) {
   return Effect.gen(function* () {
     const metadata = yield* discoverOAuth(httpClient, baseUrl);
@@ -359,7 +305,6 @@ function discoverOAuth(httpClient: HttpClient.HttpClient, baseUrl: string) {
     Effect.filterOrFail(
       (metadata) =>
         metadata.issuer === `${baseUrl}/api/auth` &&
-        isSameOriginUrl(metadata.registration_endpoint, baseUrl) &&
         isSameOriginUrl(metadata.device_authorization_endpoint, baseUrl) &&
         isSameOriginUrl(metadata.token_endpoint, baseUrl) &&
         isSameOriginUrl(metadata.revocation_endpoint, baseUrl),

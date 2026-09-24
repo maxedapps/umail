@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import {
-  InboundMessageIntegrityError,
+  MessageIntegrityError,
   MessageConflictError,
   SchemaIncompatibleError,
   SchemaMigrationError,
@@ -60,7 +60,7 @@ export function acceptInbound(
   return storage.transactionSync(() => {
     const receipt = readInboundReceipt(storage, input.messageId);
     if (receipt === null) {
-      throw new InboundMessageIntegrityError({
+      throw new MessageIntegrityError({
         messageId: input.messageId,
         reason: "receipt_missing",
       });
@@ -75,15 +75,6 @@ export function acceptInbound(
     );
     return result;
   });
-}
-
-export function acceptOutbound(
-  storage: AccountSqliteStorage,
-  input: AcceptOutboundInput,
-): AcceptMessageResult {
-  return storage.transactionSync(() =>
-    writeThreadedMail(storage, { direction: "outbound", input }),
-  );
 }
 
 const REDRIVE_GRACE_MS = 5 * 60_000;

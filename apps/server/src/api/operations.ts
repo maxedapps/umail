@@ -16,7 +16,6 @@ import {
   MailMessagePage,
   MailThreadDetail,
   MailThreadPage,
-  McpClient,
   OutboundJobStatusPage,
   ReplyPlan,
   SendingIdentity,
@@ -31,7 +30,6 @@ import {
   type ListThreadMessagesQuery,
   type Principal,
   type SubmitMessagePayload,
-  type UpdateMcpClientPolicyPayload,
 } from "@umail/api-contract";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -260,10 +258,9 @@ export function submitMessage(deps: ApiDeps, principal: Principal, payload: Subm
   return Effect.gen(function* () {
     yield* requireSend(principal);
     const prepared = yield* prepareOutbound(deps, principal, payload);
-    const requester = outboundRequester(principal);
     const now = yield* currentIso(deps);
     const requestId = payload.requestId ?? SubmissionRequestId.make(crypto.randomUUID());
-    const submitted = yield* submitPrepared(deps, prepared, requester, requestId, now);
+    const submitted = yield* submitPrepared(deps, prepared, principal, requestId, now);
     return projectJobStatus(submitted.job);
   });
 }
@@ -447,7 +444,7 @@ function resolveSubmitRecipients(
 function submitPrepared(
   deps: ApiDeps,
   prepared: PreparedOutbound,
-  requester: OutboundRequester,
+  principal: Principal,
   requestId: SubmissionRequestId,
   nowIso: string,
 ): Effect.Effect<SubmitOutboundResult, StoreHttpError> {
@@ -458,7 +455,8 @@ function submitPrepared(
     return yield* deps.account
       .submitOutbound({
         requestId,
-        requester,
+        requester: outboundRequester(principal),
+        policy: principal.policy,
         mailboxId: prepared.mailboxId,
         subject: prepared.subject,
         textBody: prepared.textBody,
@@ -497,58 +495,6 @@ function jobViewer(principal: Principal): JobViewer {
     return { kind: "operator" };
   }
   return { kind: "mcp", clientId: principal.identity.clientId };
-}
-
-export function listMcpClients(deps: ApiDeps) {
-  return Effect.gen(function* () {
-    const policies = yield* deps.account.listMcpOAuthPolicies().pipe(storeCall);
-    return policies.map((policy) => new McpClient(policy));
-  });
-}
-
-export function getMcpClient(deps: ApiDeps, clientId: string) {
-  return Effect.gen(function* () {
-    const policy = yield* deps.account.getMcpOAuthPolicy(clientId).pipe(storeCall);
-    if (policy === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    return new McpClient(policy);
-  });
-}
-
-export function setMcpClientPolicy(
-  deps: ApiDeps,
-  clientId: string,
-  payload: UpdateMcpClientPolicyPayload,
-) {
-  return Effect.gen(function* () {
-    const existing = yield* deps.account.getMcpOAuthPolicy(clientId).pipe(storeCall);
-    if (existing === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    if (existing.state === "revoked") {
-      return yield* new ApiProblem({ message: "Revoked access cannot be restored." });
-    }
-    const label = payload.label.trim();
-    if (label.length === 0) {
-      return yield* new ApiProblem({ message: "Client label is required." });
-    }
-    const updatedAt = yield* currentIso(deps);
-    yield* deps.account
-      .updateMcpOAuthPolicy({ clientId, label, policy: payload.policy, updatedAt })
-      .pipe(storeCall);
-    const stored = yield* deps.account
-      .setMcpOAuthPolicyState({
-        clientId,
-        state: payload.active ? "active" : "disabled",
-        updatedAt,
-      })
-      .pipe(storeCall);
-    if (stored === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    return new McpClient(stored);
-  });
 }
 
 export function currentIso(deps: ApiDeps) {

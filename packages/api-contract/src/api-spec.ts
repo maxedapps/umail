@@ -5,10 +5,10 @@ import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { MailContact } from "./mail-contact.ts";
+import { ExternalMailAddress, MailContact } from "./mail-contact.ts";
 import { MailboxAddress } from "./mailbox-address.ts";
 import { NormalizedRfcMessageId } from "./message-threading.ts";
-import { PrincipalAuthorization, PrincipalPolicy } from "./principal-authorization.ts";
+import { PrincipalAuthorization } from "./principal-authorization.ts";
 import { UtcInstant } from "./query-instant.ts";
 import {
   OutboundJobFailureClass,
@@ -23,7 +23,7 @@ export class Address extends Schema.Class<Address>("Address")({
   address: Schema.String,
   displayName: Schema.NullOr(Schema.String),
   active: Schema.Boolean,
-  forwardingDestinationId: Schema.NullOr(Schema.String),
+  forwardTo: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}
@@ -32,18 +32,6 @@ export class SendingIdentity extends Schema.Class<SendingIdentity>("SendingIdent
   id: Schema.String,
   address: MailboxAddress,
   displayName: Schema.NullOr(Schema.String),
-}) {}
-
-export class ForwardingDestination extends Schema.Class<ForwardingDestination>(
-  "ForwardingDestination",
-)({
-  id: Schema.String,
-  cloudflareId: Schema.String,
-  email: Schema.String,
-  verificationStatus: Schema.Literals(["pending", "verified"]),
-  verifiedAt: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
 }) {}
 
 export class AttachmentMeta extends Schema.Class<AttachmentMeta>("AttachmentMeta")({
@@ -302,16 +290,16 @@ export class PatchAddressPayload extends Schema.Class<PatchAddressPayload>("Patc
   active: Schema.optionalKey(Schema.Boolean),
 }) {}
 
-export class CreateDestinationPayload extends Schema.Class<CreateDestinationPayload>(
-  "CreateDestinationPayload",
+export class SetForwardingPayload extends Schema.Class<SetForwardingPayload>(
+  "SetForwardingPayload",
 )({
-  email: Schema.String,
+  email: ExternalMailAddress,
 }) {}
 
-export class AssociateForwardingPayload extends Schema.Class<AssociateForwardingPayload>(
-  "AssociateForwardingPayload",
-)({
-  destinationId: Schema.String,
+// Cloudflare only forwards to a verified destination; it emails the owner a link until then.
+export class AddressForwarding extends Schema.Class<AddressForwarding>("AddressForwarding")({
+  address: Address,
+  verified: Schema.Boolean,
 }) {}
 
 export const IdParams = Schema.Struct({
@@ -378,11 +366,11 @@ export class AddressesGroup extends HttpApiGroup.make("Addresses")
     }),
   )
   .add(
-    HttpApiEndpoint.put("associateForwarding", "/addresses/:id/forwarding", {
+    HttpApiEndpoint.put("setForwarding", "/addresses/:id/forwarding", {
       params: IdParams,
-      payload: AssociateForwardingPayload,
-      success: Address,
-      error: scopedErrors,
+      payload: SetForwardingPayload,
+      success: AddressForwarding,
+      error: [...scopedErrors, ApiProblem],
     }),
   )
   .add(
@@ -399,35 +387,6 @@ export class SendingIdentitiesGroup extends HttpApiGroup.make("SendingIdentities
     error: businessErrors,
   }),
 ) {}
-
-export class DestinationsGroup extends HttpApiGroup.make("Destinations")
-  .add(
-    HttpApiEndpoint.post("createDestination", "/forwarding-destinations", {
-      payload: CreateDestinationPayload,
-      success: ForwardingDestination,
-      error: [...scopedErrors, ApiProblem],
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("listDestinations", "/forwarding-destinations", {
-      success: Schema.Array(ForwardingDestination),
-      error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("getDestination", "/forwarding-destinations/:id", {
-      params: IdParams,
-      success: ForwardingDestination,
-      error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.delete("deleteDestination", "/forwarding-destinations/:id", {
-      params: IdParams,
-      success: HttpApiSchema.NoContent,
-      error: scopedErrors,
-    }),
-  ) {}
 
 export class ThreadsGroup extends HttpApiGroup.make("Threads")
   .add(
@@ -670,56 +629,11 @@ export class PublicApprovalApi extends HttpApi.make("PublicApprovalApi").add(
   PublicApprovalsGroup,
 ) {}
 
-export const McpClientState = Schema.Literals(["active", "disabled", "revoked"]);
-export type McpClientState = typeof McpClientState.Type;
-
-export class McpClient extends Schema.Class<McpClient>("McpClient")({
-  clientId: Schema.String,
-  label: Schema.String,
-  state: McpClientState,
-  policy: PrincipalPolicy,
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
-}) {}
-
-export class UpdateMcpClientPolicyPayload extends Schema.Class<UpdateMcpClientPolicyPayload>(
-  "UpdateMcpClientPolicyPayload",
-)({
-  label: Schema.String.check(Schema.isMinLength(1)),
-  policy: PrincipalPolicy,
-  active: Schema.Boolean,
-}) {}
-
-export class McpClientsGroup extends HttpApiGroup.make("McpClients")
-  .add(
-    HttpApiEndpoint.get("listMcpClients", "/mcp-clients", {
-      success: Schema.Array(McpClient),
-      error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("getMcpClient", "/mcp-clients/:id", {
-      params: IdParams,
-      success: McpClient,
-      error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.put("setMcpClientPolicy", "/mcp-clients/:id/policy", {
-      params: IdParams,
-      payload: UpdateMcpClientPolicyPayload,
-      success: McpClient,
-      error: [...scopedErrors, ApiProblem],
-    }),
-  ) {}
-
 export class UmailApi extends HttpApi.make("UmailApi")
   .add(AddressesGroup)
   .add(SendingIdentitiesGroup)
-  .add(DestinationsGroup)
   .add(ThreadsGroup)
   .add(MessagesGroup)
   .add(SubmissionsGroup)
   .add(JobsGroup)
-  .add(McpClientsGroup)
   .middleware(PrincipalAuthorization) {}

@@ -35,7 +35,7 @@ describe("approval tokens", () => {
     ).not.toBe(token);
   });
 
-  it("stores only the hash of the token SendConsumer re-derives", async () => {
+  it("stores only the hash of the token the due-work pass re-derives", async () => {
     const key = crypto.getRandomValues(new Uint8Array(32));
     const capability = await newApprovalCapability(key, NOW);
 

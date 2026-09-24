@@ -97,10 +97,8 @@ function splitPolicyList(raw: string): ReadonlyArray<string> {
 export const PrincipalPolicy = Schema.Struct({
   mailboxIds: PrincipalMailboxIds,
   canRead: Schema.Boolean,
-  canDelete: Schema.Boolean,
   sendMode: PrincipalSendMode,
   recipientAllowlist: PrincipalRecipientAllowlist,
-  canAdmin: Schema.Boolean,
 });
 export type PrincipalPolicy = typeof PrincipalPolicy.Type;
 
@@ -127,14 +125,12 @@ export type McpPrincipal = {
 
 export type Principal = OperatorPrincipal | McpPrincipal;
 
-// The operator's full access; the API gate and the account store's send check both use it.
+// The operator's full access; the API and the account store's send check both use it.
 export const OPERATOR_POLICY = {
   mailboxIds: "all",
   canRead: true,
-  canDelete: true,
   sendMode: { kind: "allow" },
   recipientAllowlist: "any",
-  canAdmin: true,
 } as const satisfies PrincipalPolicy;
 
 export function operatorOAuthPrincipal(userId: string, clientId: string): OperatorPrincipal {

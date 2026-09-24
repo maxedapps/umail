@@ -1,4 +1,4 @@
-import { MAIL_HTML_PARSE_LIMITS } from "../../../../packages/mail-content/src/mail-html-parser.ts";
+import { MAIL_HTML_PARSE_LIMITS } from "../../src/mail/html-parser.ts";
 import {
   DEFAULT_MAX_RAW_BYTES,
   INBOUND_MIME_LIMITS,

@@ -9,7 +9,7 @@ import {
   renderApprovalDecisionAddress,
   renderApprovalDecisionText,
 } from "../../src/api/human-pages/metadata.ts";
-import { renderMcpClientsPage } from "../../src/api/human-pages/oauth-management.ts";
+import { renderClientsPage } from "../../src/api/human-pages/oauth-management.ts";
 import { renderHumanPageNotice } from "../../src/api/human-pages/notices.ts";
 import {
   humanPageHttpApiResponse,
@@ -99,50 +99,46 @@ describe("human page rendering", () => {
   });
 });
 
-describe("MCP policy controls", () => {
-  it("associates client-specific labels with every security control", () => {
-    const page = renderMcpClientsPage([
+describe("client access controls", () => {
+  it("labels every policy control per client and offers revoke on every row", () => {
+    const page = renderClientsPage([
       {
         clientId: "client-a",
-        label: "Alpha",
-        state: "active",
+        name: "Alpha <agent>",
+        consentId: "consent-a",
         policy: {
           mailboxIds: "all",
           canRead: true,
-          canDelete: false,
           sendMode: requireApprovalSendMode(),
           recipientAllowlist: "any",
-          canAdmin: false,
         },
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
       },
       {
         clientId: "client-b",
-        label: "Beta",
-        state: "active",
+        name: null,
+        consentId: "consent-b",
         policy: {
           mailboxIds: ["box-1"],
-          canRead: true,
-          canDelete: true,
+          canRead: false,
           sendMode: { kind: "allow" },
           recipientAllowlist: [Schema.decodeSync(ExternalMailAddress)("allowed@example.com")],
-          canAdmin: false,
         },
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
       },
+      { clientId: "client-c", name: null, consentId: "consent-c", policy: null },
+      { clientId: "umail-cli", name: "AgentMail CLI", consentId: null, policy: null },
     ]);
-    expect(page.html).toContain('for="mailboxIds-client-a"');
-    expect(page.html).toContain('id="mailboxIds-client-a"');
-    expect(page.html).toContain('for="mailboxIds-client-b"');
-    expect(page.html).toContain('id="canRead-client-b"');
-    expect(page.html).toContain('id="sendMode-client-a"');
-    expect(page.html).toContain('id="preapprovedRecipients-client-a"');
-    expect(page.html).toContain('id="recipientAllowlist-client-b"');
-    expect(page.html).toContain('id="canAdmin-client-a"');
-    expect(page.html).toContain("for client-a");
-    expect(page.html).toContain("for client-b");
+    for (const id of ["client-a", "client-b", "client-c"]) {
+      for (const field of ["mailboxes", "sendMode", "preapproved", "recipients"]) {
+        expect(page.html).toContain(`for="${field}-${id}"`);
+      }
+      expect(page.html).toContain(`id="canRead-${id}"`);
+    }
+    expect(page.html).toContain("Alpha &lt;agent&gt;");
+    expect(page.html).toContain('action="/clients/consent-a/policy"');
+    expect(page.html).toContain("No access until a policy is saved");
+    expect(page.html).not.toContain("/clients/umail-cli/policy");
+    expect(page.html).toContain('action="/clients/umail-cli/revoke"');
+    expect(page.html.match(/Revoke access/gu)).toHaveLength(4);
   });
 });
 

@@ -73,38 +73,13 @@ CREATE TABLE attachments (
   UNIQUE (message_id, position)
 );
 
-CREATE TABLE forwarding_destinations (
-  id TEXT PRIMARY KEY NOT NULL,
-  cloudflare_id TEXT NOT NULL UNIQUE,
-  email TEXT NOT NULL,
-  verification_status TEXT NOT NULL CHECK (verification_status IN ('pending', 'verified')),
-  verified_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
 CREATE TABLE addresses (
   id TEXT PRIMARY KEY NOT NULL,
   local_part TEXT NOT NULL,
   address TEXT NOT NULL UNIQUE,
   display_name TEXT,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
-  forwarding_destination_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE mcp_oauth_policies (
-  client_id TEXT PRIMARY KEY NOT NULL CHECK (length(client_id) > 0),
-  label TEXT NOT NULL CHECK (length(label) > 0),
-  state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'disabled', 'revoked')),
-  mailbox_ids_json TEXT NOT NULL,
-  can_read INTEGER NOT NULL CHECK (can_read IN (0, 1)),
-  can_delete INTEGER NOT NULL CHECK (can_delete IN (0, 1)),
-  send_mode TEXT NOT NULL CHECK (send_mode IN ('deny', 'allow', 'requireApproval')),
-  recipient_allowlist_json TEXT NOT NULL,
-  preapproved_recipients_json TEXT NOT NULL,
-  can_admin INTEGER NOT NULL DEFAULT 0 CHECK (can_admin IN (0, 1)),
+  forward_to TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

@@ -18,7 +18,7 @@ it("writes large JSON output completely to a pipe before exiting 0", async () =>
     address: `inbox${index}@umail.example.test`,
     displayName: "Inbox",
     active: true,
-    forwardingDestinationId: null,
+    forwardTo: null,
     createdAt: "2026-08-25T10:00:00.000Z",
     updatedAt: "2026-08-25T10:00:00.000Z",
   }));

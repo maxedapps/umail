@@ -7,8 +7,9 @@
     "test/api/human-pages.browser.spec.ts",
     "test/api/human-pages-browser-fixture.ts",
     "test/api/human-pages-browser-model.ts",
+    "test/mail/html-semantics.browser.spec.ts",
     "vitest.browser.config.ts",
-    "../../packages/mail-content/src/css-tree-subpaths.d.ts"
+    "src/mail/css-tree-subpaths.d.ts"
   ],
   "exclude": []
 }

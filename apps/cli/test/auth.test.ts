@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import type { Json } from "effect/Schema";
@@ -30,7 +31,6 @@ import {
 const ORIGIN = "https://umail.example.test";
 const METADATA = {
   issuer: `${ORIGIN}/api/auth`,
-  registration_endpoint: `${ORIGIN}/api/auth/oauth2/register`,
   device_authorization_endpoint: `${ORIGIN}/api/auth/device/code`,
   token_endpoint: `${ORIGIN}/api/auth/oauth2/token`,
   revocation_endpoint: `${ORIGIN}/api/auth/oauth2/revoke`,
@@ -72,20 +72,15 @@ function memoryStore(initial: OAuthCredentialState | null = null) {
         writes.push(next);
         return "committed";
       }),
-    takeLogoutSnapshot: (origin) =>
+    clearTokens: (origin) =>
       Effect.sync(() => {
-        if (current === null || current.origin !== origin) return null;
-        const revocation =
-          current.kind === "authorized"
-            ? { clientId: current.clientId, refreshToken: current.refreshToken }
-            : null;
+        if (current === null || current.origin !== origin) return;
         const next = {
           ...registeredCredentialState(current),
           generation: current.generation + 1,
         };
         current = next;
         writes.push(next);
-        return revocation;
       }),
     withRefreshLock: (body) => body,
   } satisfies OAuthCredentialStoreService;
@@ -115,6 +110,10 @@ function runAuth<A, E>(
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(OAuthCredentialStore, store),
       Effect.provideService(OAuthScheduler, scheduler),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ UMAIL_URL: ORIGIN }),
+      ),
     ),
   );
 }
@@ -143,15 +142,12 @@ const DEVICE = {
   expires_in: 600,
   interval: 2,
 };
-const REGISTRATION = { client_id: "umail-cli", token_endpoint_auth_method: "none" };
-
-describe("OAuth DCR and device login", () => {
-  it("registers once, polls deterministically, and persists an authorized state", async () => {
+describe("OAuth device login", () => {
+  it("uses the static CLI client, polls deterministically, and persists an authorized state", async () => {
     const store = memoryStore();
     const scheduler = controlledScheduler();
     const responses = [
       json(METADATA),
-      json(REGISTRATION, 201),
       json(DEVICE),
       json({ error: "authorization_pending" }, 400),
       json({ error: "slow_down" }, 400),
@@ -164,9 +160,9 @@ describe("OAuth DCR and device login", () => {
       }),
     ];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    await runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
+    await runAuth(login(), http.httpClient, store.service, scheduler.service);
     expect(scheduler.sleeps).toEqual([2_000, 2_000, 7_000]);
-    expect(store.writes.map((state) => state.kind)).toEqual(["registered", "authorized"]);
+    expect(store.writes.map((state) => state.kind)).toEqual(["authorized"]);
     expect(store.current()).toMatchObject({
       kind: "authorized",
       clientId: "umail-cli",
@@ -175,96 +171,40 @@ describe("OAuth DCR and device login", () => {
     });
     expect(http.requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/.well-known/oauth-authorization-server/api/auth",
-      "/api/auth/oauth2/register",
       "/api/auth/device/code",
       "/api/auth/oauth2/token",
       "/api/auth/oauth2/token",
       "/api/auth/oauth2/token",
     ]);
-    expect(JSON.parse(http.requests[1]?.body ?? "{}")).toMatchObject({
-      token_endpoint_auth_method: "none",
-      grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-      resources: [ORIGIN],
-    });
+    expect(new URLSearchParams(http.requests[1]?.body).get("client_id")).toBe("umail-cli");
   });
 
-  it("reuses a stored public registration without another DCR request", async () => {
-    const registered = { ...validState(), kind: "registered" as const };
-    const store = memoryStore(registered);
-    const scheduler = controlledScheduler();
-    const responses = [
-      json(METADATA),
-      json(DEVICE),
-      json({
-        access_token: "approved",
-        refresh_token: "refresh",
-        token_type: "Bearer",
-        expires_in: 300,
-        scope: "umail:access offline_access",
-      }),
-    ];
-    const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    await runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
-    expect(
-      http.requests.some(
-        (request) => new URL(request.url).pathname === "/api/auth/oauth2/register",
-      ),
-    ).toBe(false);
-  });
-
-  it("replaces a stale registration once after confirmed invalid_client", async () => {
-    const stale = { ...validState(), kind: "registered" as const };
-    const store = memoryStore(stale);
-    const scheduler = controlledScheduler();
-    const responses = [
-      json(METADATA),
-      json({ error: "invalid_client" }, 400),
-      json({ client_id: "replacement-cli", token_endpoint_auth_method: "none" }, 201),
-      json({ ...DEVICE, interval: 1 }),
-      json({
-        access_token: "approved",
-        refresh_token: "refresh",
-        token_type: "Bearer",
-        expires_in: 300,
-        scope: "umail:access offline_access",
-      }),
-    ];
-    const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    await runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
-    expect(
-      http.requests.filter(
-        (request) => new URL(request.url).pathname === "/api/auth/oauth2/register",
-      ),
-    ).toHaveLength(1);
-    expect(store.current()).toMatchObject({ kind: "authorized", clientId: "replacement-cli" });
-  });
-
-  it("rejects cross-origin metadata before registration", async () => {
+  it("rejects cross-origin metadata before starting device authorization", async () => {
     const store = memoryStore();
     const scheduler = controlledScheduler();
     const http = captureHttp(() =>
-      json({ ...METADATA, registration_endpoint: "https://attacker.invalid/register" }),
+      json({ ...METADATA, device_authorization_endpoint: "https://attacker.invalid/device" }),
     );
     await expect(
-      runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service),
+      runAuth(login(), http.httpClient, store.service, scheduler.service),
     ).rejects.toThrow("invalid response");
+    expect(http.requests).toHaveLength(1);
     expect(store.writes).toEqual([]);
   });
 
-  it("retains only registration when device approval is denied", async () => {
+  it("stores nothing when device approval is denied", async () => {
     const store = memoryStore();
     const scheduler = controlledScheduler();
     const responses = [
       json(METADATA),
-      json(REGISTRATION, 201),
       json({ ...DEVICE, interval: 1 }),
       json({ error: "access_denied" }, 400),
     ];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
     await expect(
-      runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service),
+      runAuth(login(), http.httpClient, store.service, scheduler.service),
     ).rejects.toThrow("Device authorization was denied");
-    expect(store.current()).toMatchObject({ kind: "registered", clientId: "umail-cli" });
+    expect(store.current()).toBeNull();
   });
 });
 
@@ -273,12 +213,7 @@ describe("OAuth refresh and logout", () => {
     const store = memoryStore(validState({ expiresAt: 1_000_000 }));
     const scheduler = controlledScheduler(10_000);
     const http = captureHttp(() => json({}, 500));
-    const token = await runAuth(
-      accessToken({ UMAIL_URL: ORIGIN }),
-      http.httpClient,
-      store.service,
-      scheduler.service,
-    );
+    const token = await runAuth(accessToken(), http.httpClient, store.service, scheduler.service);
     expect(Redacted.value(token)).toBe("initial-access-token");
     expect(http.requests).toEqual([]);
   });
@@ -292,12 +227,7 @@ describe("OAuth refresh and logout", () => {
     const responses = [json(METADATA), json({ error }, 400)];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
     await expect(
-      runAuth(
-        accessToken({ UMAIL_URL: ORIGIN }),
-        http.httpClient,
-        store.service,
-        controlledScheduler(1_000).service,
-      ),
+      runAuth(accessToken(), http.httpClient, store.service, controlledScheduler(1_000).service),
     ).rejects.toThrow(message);
     expect(store.writes).toEqual([]);
   });
@@ -317,47 +247,36 @@ describe("OAuth refresh and logout", () => {
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
     expect(
       Redacted.value(
-        await runAuth(
-          accessToken({ UMAIL_URL: ORIGIN }),
-          http.httpClient,
-          store.service,
-          scheduler.service,
-        ),
+        await runAuth(accessToken(), http.httpClient, store.service, scheduler.service),
       ),
     ).toBe("rotated");
     expect(store.current()).toMatchObject({ kind: "authorized", refreshToken: "rotated-refresh" });
   });
 
-  it("keeps the registration but clears tokens when remote revocation fails", async () => {
+  it("keeps the local tokens and fails when remote revocation fails", async () => {
     const store = memoryStore(validState());
     const scheduler = controlledScheduler();
     const responses = [json(METADATA), json({ error: "server_error" }, 500)];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    await runAuth(logout({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
-    expect(store.current()).toEqual({
-      version: 2,
-      kind: "registered",
-      origin: ORIGIN,
-      issuer: METADATA.issuer,
-      resource: ORIGIN,
-      scope: "umail:access offline_access",
-      clientId: "umail-cli",
-      generation: 1,
-    });
+    await expect(
+      runAuth(logout(), http.httpClient, store.service, scheduler.service),
+    ).rejects.toThrow("local OAuth credentials were kept");
+    expect(store.current()).toEqual(validState());
+    expect(store.writes).toEqual([]);
   });
 
-  it("commits local logout and generation change before remote revocation", async () => {
+  it("revokes on the server before clearing the local tokens", async () => {
     const store = memoryStore(validState({ generation: 4 }));
     const scheduler = controlledScheduler();
     const http = captureHttp((request) => {
-      expect(store.current()).toMatchObject({ kind: "registered", generation: 5 });
+      expect(store.current()).toMatchObject({ kind: "authorized", generation: 4 });
       if (new URL(request.url).pathname.endsWith("/oauth-authorization-server/api/auth")) {
         return json(METADATA);
       }
       return new Response(null, { status: 200 });
     });
-    await runAuth(logout({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
-    expect(store.writes[0]).toMatchObject({ kind: "registered", generation: 5 });
+    await runAuth(logout(), http.httpClient, store.service, scheduler.service);
+    expect(store.current()).toMatchObject({ kind: "registered", generation: 5 });
     expect(http.requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/.well-known/oauth-authorization-server/api/auth",
       "/api/auth/oauth2/revoke",
@@ -381,12 +300,12 @@ describe("OAuth refresh and logout", () => {
     ];
     const http = captureHttp((request, index) => {
       if (new URL(request.url).pathname === "/api/auth/oauth2/token") {
-        Effect.runSync(store.service.takeLogoutSnapshot(ORIGIN));
+        Effect.runSync(store.service.clearTokens(ORIGIN));
       }
       return responses[index] ?? json({}, 500);
     });
     await expect(
-      runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service),
+      runAuth(login(), http.httpClient, store.service, scheduler.service),
     ).rejects.toThrow("replaced by another process");
     expect(store.current()).toMatchObject({ kind: "registered", generation: 1 });
     expect(store.current()).not.toMatchObject({ accessToken: "late-login" });
@@ -405,16 +324,11 @@ describe("OAuth refresh and logout", () => {
       }),
     ];
     const http = captureHttp((_request, index) => {
-      if (index === 1) Effect.runSync(store.service.takeLogoutSnapshot(ORIGIN));
+      if (index === 1) Effect.runSync(store.service.clearTokens(ORIGIN));
       return responses[index] ?? json({}, 500);
     });
     await expect(
-      runAuth(
-        accessToken({ UMAIL_URL: ORIGIN }),
-        http.httpClient,
-        store.service,
-        scheduler.service,
-      ),
+      runAuth(accessToken(), http.httpClient, store.service, scheduler.service),
     ).rejects.toThrow("OAuth login required");
     expect(store.current()).toMatchObject({ kind: "registered", generation: 3 });
     expect(store.current()).not.toMatchObject({ accessToken: "late-rotated" });
@@ -425,7 +339,7 @@ describe("OAuth refresh and logout", () => {
     const store = {
       read: Effect.succeed(initial),
       commit: () => Effect.fail(new OAuthCredentialStoreError()),
-      takeLogoutSnapshot: () => Effect.succeed(null),
+      clearTokens: () => Effect.void,
       withRefreshLock: (body) => body,
     } satisfies OAuthCredentialStoreService;
     const scheduler = controlledScheduler(1_000);
@@ -439,9 +353,9 @@ describe("OAuth refresh and logout", () => {
       }),
     ];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    await expect(
-      runAuth(accessToken({ UMAIL_URL: ORIGIN }), http.httpClient, store, scheduler.service),
-    ).rejects.toThrow("OAuth credential file is missing or insecure");
+    await expect(runAuth(accessToken(), http.httpClient, store, scheduler.service)).rejects.toThrow(
+      "OAuth credential file is missing or insecure",
+    );
   });
 });
 

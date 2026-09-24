@@ -1,14 +1,14 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
 
 import { parseMailboxAddress } from "@umail/api-contract";
-import { createMailHtmlPolicy } from "@umail/mail-content";
 import { env, reset } from "cloudflare:test";
 import * as Effect from "effect/Effect";
 import PostalMime from "postal-mime";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 import { receiveInbound } from "../../src/mail/inbound.ts";
-import type { IndexReceiptWork } from "../../src/mail/indexing.ts";
+import type { IndexReceiptWork } from "../../src/mail/process-index.ts";
 import { DEFAULT_MAX_RAW_BYTES, INBOUND_MIME_LIMITS, sha256Hex } from "../../src/mail/policy.ts";
 import { indexReceipt } from "../../src/mail/process-index.ts";
 import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";

@@ -1,14 +1,11 @@
 import { parseMailboxAddress } from "@umail/api-contract";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as DateTime from "effect/DateTime";
+import type * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import type { AccountStoreError } from "../account/errors.ts";
-import { AccountStore, OPERATOR_ACCOUNT, type AccountStoreRpc } from "../account/worker.ts";
-import { Api } from "../api/worker.ts";
-import { inboundMessageId, MailArchive } from "./archive.ts";
-import { MailIndex, type IndexReceiptWork } from "./indexing.ts";
+import type { AccountStoreRpc } from "../account/worker.ts";
+import { inboundMessageId } from "./archive.ts";
 import { DEFAULT_MAX_RAW_BYTES, rawObjectKey, sha256Hex } from "./policy.ts";
+import type { IndexReceiptWork } from "./process-index.ts";
 
 // The slice of alchemy's email message, R2 bucket and queue clients that reception uses.
 export type InboundMessage = Pick<
@@ -25,7 +22,7 @@ export type InboundDeps<R> = {
   readonly index: { send(body: IndexReceiptWork): Effect.Effect<void, Error, R> };
   readonly account: Pick<
     AccountStoreRpc,
-    "getAddressByMailbox" | "getDestination" | "registerInboundReceipt" | "observeInboundForward"
+    "getAddressByMailbox" | "registerInboundReceipt" | "observeInboundForward"
   >;
   readonly nowIso: string;
 };
@@ -68,12 +65,9 @@ export const receiveInbound = <R>(
       receivedAt: deps.nowIso,
     });
 
-    const destination =
-      mailbox.forwardingDestinationId === null
-        ? null
-        : yield* deps.account.getDestination(mailbox.forwardingDestinationId);
-    if (destination?.verificationStatus === "verified") {
-      yield* forwardOnce(message, deps.account, receiptId, destination.email);
+    // Cloudflare refuses an unverified destination; that is recorded as a failed forward.
+    if (mailbox.forwardTo !== null) {
+      yield* forwardOnce(message, deps.account, receiptId, mailbox.forwardTo);
     }
     yield* deps.index.send({ version: 1, receiptId });
   });
@@ -103,31 +97,3 @@ const forwardOnce = (
     );
     yield* account.observeInboundForward({ receiptId, observation });
   });
-
-export class Inbound extends Cloudflare.Worker<Inbound, {}>()("Inbound") {}
-
-export default Inbound.make(
-  { main: import.meta.url, workersDev: false },
-  Effect.gen(function* () {
-    const accounts = yield* AccountStore.from(Api);
-    const archive = yield* Cloudflare.R2.ReadWriteBucket(MailArchive);
-    const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
-    // Routing stays in the stack so its existing resource identities and stage policy are preserved.
-    yield* Cloudflare.email().subscribe((message) =>
-      Effect.gen(function* () {
-        const nowIso = DateTime.formatIso(yield* DateTime.now);
-        const account = accounts.getByName(OPERATOR_ACCOUNT);
-        yield* receiveInbound(message, { archive, index, account, nowIso });
-      }),
-    );
-    return {};
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        Cloudflare.EmailEventSourceLive,
-        Cloudflare.R2.ReadWriteBucketBinding,
-        Cloudflare.Queues.WriteQueueBinding,
-      ),
-    ),
-  ),
-);

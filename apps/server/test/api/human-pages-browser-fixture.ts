@@ -7,6 +7,7 @@ import {
   SubmissionRequestId,
   SubmitMessagePayload,
   type Principal,
+  type PrincipalPolicy,
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -15,7 +16,6 @@ import type { Frame, Locator, Page } from "playwright";
 import type { Plugin } from "vitest/config";
 
 import { submitMessage } from "../../src/api/operations.ts";
-import { deriveApprovalToken } from "../../src/mail/notifications.ts";
 import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "./fakes.ts";
 import { registerMcpClient } from "./oauth-flow.ts";
 import {
@@ -24,6 +24,7 @@ import {
   OPERATOR_EMAIL,
   OPERATOR_PASSWORD,
   createWorld,
+  runDueWorkPass,
   seedMailbox,
   type World,
 } from "./world.ts";
@@ -36,8 +37,9 @@ import {
 const FIXTURE_PREFIX = "/__human-pages__";
 const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const NOW = "2026-08-28T10:00:00.000Z";
-const CLAIM_EXPIRES = "2026-08-28T10:15:00.000Z";
-const EXPIRE_AT = "2026-08-29T10:00:00.000Z";
+// The "expired" approval is submitted a day early, so a pass at its deadline leaves the rest open.
+const EXPIRED_SUBMITTED_AT = "2026-08-27T09:00:00.000Z";
+const EXPIRE_AT = "2026-08-28T09:00:00.000Z";
 const UNKNOWN_APPROVAL_PATH = `/approvals/${"f".repeat(64)}`;
 const HOSTILE_SUBJECT = "Quarterly\r\nreview \u202e<script data-hostile-subject>subject</script>";
 const HOSTILE_FROM = "Sender \u2066<script data-hostile-from>name</script>";
@@ -614,13 +616,6 @@ function preparedBrowserWorld(): Promise<PreparedBrowserWorld> {
 async function createPreparedBrowserWorld(): Promise<PreparedBrowserWorld> {
   const world = await createWorld();
   const mailbox = await seedMailbox(world, "inbox", HOSTILE_FROM);
-  await Effect.runPromise(
-    world.account.ensureMcpOAuthPolicy({
-      clientId: "browser-oauth-client",
-      label: HOSTILE_REQUESTER,
-      createdAt: NOW,
-    }),
-  );
   const principal = approvalPrincipal();
   const pending = await submitApproval(world, principal, mailbox.id, {
     subject: HOSTILE_SUBJECT,
@@ -630,12 +625,15 @@ async function createPreparedBrowserWorld(): Promise<PreparedBrowserWorld> {
   const failed = await submitApproval(world, principal, mailbox.id, { subject: "Failed" });
   const queued = await submitApproval(world, principal, mailbox.id, { subject: "Queued" });
   const denied = await submitApproval(world, principal, mailbox.id, { subject: "Denied" });
+  world.approvalClock.set(EXPIRED_SUBMITTED_AT);
   const expired = await submitApproval(world, principal, mailbox.id, { subject: "Expired" });
+  world.approvalClock.set(NOW);
   await approveAndAccept(world, accepted);
   await approveAndFail(world, failed);
-  await decide(world, queued.token, "approved");
   await decide(world, denied.token, "denied");
   await expire(world, expired.token);
+  // Approved last, so no pass sends it: its page shows the approved message as sending.
+  await decide(world, queued.token, "approved");
   const consentPath = await consentAuthorizePath(world);
   return {
     world,
@@ -664,6 +662,14 @@ type BrowserComposeDraft = {
   html?: string;
 };
 
+// The requesting client has no OAuth consent, so the due-work pass is handed its policy directly.
+const APPROVAL_POLICY = {
+  mailboxIds: "all",
+  canRead: true,
+  sendMode: requireApprovalSendMode(),
+  recipientAllowlist: "any",
+} as const satisfies PrincipalPolicy;
+
 function approvalPrincipal(): Principal {
   return {
     authority: "mcp",
@@ -673,14 +679,7 @@ function approvalPrincipal(): Principal {
       clientId: "browser-oauth-client",
       clientLabel: HOSTILE_REQUESTER,
     },
-    policy: {
-      mailboxIds: "all",
-      canRead: true,
-      canDelete: false,
-      sendMode: requireApprovalSendMode(),
-      recipientAllowlist: "any",
-      canAdmin: false,
-    },
+    policy: APPROVAL_POLICY,
   };
 }
 
@@ -716,25 +715,18 @@ async function submitApproval(
   if (job.state !== "waiting_approval") {
     throw new Error("expected a parked approval job");
   }
-  return { job, token: await notifiedApprovalToken(world, job.messageId) };
+  return { job, token: await notifiedApprovalToken(world) };
 }
 
-// Re-derives the review token the way SendConsumer does for the message's notification job.
-async function notifiedApprovalToken(world: World, messageId: string): Promise<string> {
-  const jobs = await Effect.runPromise(
-    world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
-  );
-  const notification = jobs.items.find(
-    (job) => job.purpose === "approval_notification" && job.messageId === messageId,
-  );
-  if (notification === undefined) {
-    throw new Error("expected an approval notification job");
+// Sends the message's approval notification through the store's due-work pass and reads the review
+// token from the email, as the operator would.
+async function notifiedApprovalToken(world: World): Promise<string> {
+  const mails = await runDueWorkPass(world, { mcpPolicy: APPROVAL_POLICY });
+  const token = /\/approvals\/([0-9a-f]{64})/u.exec(mails.at(-1)?.text ?? "")?.[1];
+  if (token === undefined) {
+    throw new Error("expected an approval notification email");
   }
-  const dispatch = await Effect.runPromise(world.account.getOutboundDispatch(notification.jobId));
-  if (dispatch === null || dispatch.approval === null) {
-    throw new Error("expected a pending approval notification");
-  }
-  return deriveApprovalToken(world.notificationKey, dispatch.approval.approvalId);
+  return token;
 }
 
 async function decide(world: World, token: string, decision: "approved" | "denied") {
@@ -747,67 +739,31 @@ async function decide(world: World, token: string, decision: "approved" | "denie
   }
 }
 
-async function approveAndAccept(
-  world: World,
-  submitted: { readonly job: { readonly jobId: string }; readonly token: string },
-) {
+async function approveAndAccept(world: World, submitted: { readonly token: string }) {
   await decide(world, submitted.token, "approved");
-  const claimed = await Effect.runPromise(
-    world.account.claimDispatch({
-      jobId: submitted.job.jobId,
-      nowIso: NOW,
-      claimExpiresAt: CLAIM_EXPIRES,
-    }),
-  );
-  if (claimed.kind !== "claimed") {
-    throw new Error("expected the accepted job to be claimed");
-  }
-  await Effect.runPromise(
-    world.account.completeAttempt({
-      jobId: submitted.job.jobId,
-      attemptId: claimed.attemptId,
-      nowIso: NOW,
-      outcome: {
-        kind: "accepted",
-        providerMessageId: "provider-browser",
-        rfcMessageId: Schema.decodeSync(NormalizedRfcMessageId)("<provider-browser@example.test>"),
-      },
-    }),
-  );
+  await runDueWorkPass(world, {
+    mcpPolicy: APPROVAL_POLICY,
+    outcome: {
+      kind: "accepted",
+      providerMessageId: "provider-browser",
+      rfcMessageId: Schema.decodeSync(NormalizedRfcMessageId)("<provider-browser@example.test>"),
+    },
+  });
 }
 
-async function approveAndFail(
-  world: World,
-  submitted: { readonly job: { readonly jobId: string }; readonly token: string },
-) {
+async function approveAndFail(world: World, submitted: { readonly token: string }) {
   await decide(world, submitted.token, "approved");
-  const claimed = await Effect.runPromise(
-    world.account.claimDispatch({
-      jobId: submitted.job.jobId,
-      nowIso: NOW,
-      claimExpiresAt: CLAIM_EXPIRES,
-    }),
-  );
-  if (claimed.kind !== "claimed") {
-    throw new Error("expected the failed job to be claimed");
-  }
-  await Effect.runPromise(
-    world.account.completeAttempt({
-      jobId: submitted.job.jobId,
-      attemptId: claimed.attemptId,
-      nowIso: NOW,
-      outcome: { kind: "rejected", failureDetail: "provider-private-detail" },
-    }),
-  );
+  await runDueWorkPass(world, {
+    mcpPolicy: APPROVAL_POLICY,
+    outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED" },
+  });
 }
 
 async function expire(world: World, token: string) {
   const tokenHash = await hashApprovalToken(Schema.decodeSync(ApprovalToken)(token));
-  // A due approval expires on decide, whatever the decision.
-  const expired = await Effect.runPromise(
-    world.account.decideApproval({ tokenHash, decision: "denied", nowIso: EXPIRE_AT }),
-  );
-  if (expired.kind !== "resolved" || expired.state !== "expired") {
+  await runDueWorkPass(world, { at: EXPIRE_AT, mcpPolicy: APPROVAL_POLICY });
+  const expired = await Effect.runPromise(world.account.lookupApprovalByTokenHash(tokenHash));
+  if (expired.kind !== "found" || expired.approval.state !== "expired") {
     throw new Error("expected the approval to expire");
   }
 }

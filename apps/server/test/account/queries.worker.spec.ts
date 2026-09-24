@@ -18,7 +18,7 @@ describe("account-store bounded query commands", () => {
 
     const failure = await failureOf(store, (host) => host.acceptInbound(input));
 
-    expect(taggedName(failure)).toBe("InboundMessageIntegrityError");
+    expect(taggedName(failure)).toBe("MessageIntegrityError");
     expect((await store.listMessageSummaries({ mailboxScope: "all" })).items).toEqual([]);
   });
 
@@ -131,7 +131,7 @@ describe("account-store bounded query commands", () => {
         expect(summary).toHaveProperty("forwardOutcome");
         expect(summary).not.toHaveProperty("outboundJob");
       } else {
-        expect(summary.outboundJob.state).toBe("unknown");
+        expect(summary.outboundJob.state).toBe("accepted");
         expect(summary).not.toHaveProperty("forwardOutcome");
       }
     }
@@ -146,7 +146,19 @@ describe("account-store bounded query commands", () => {
     const failure = await failureOf(store, (host) =>
       host.listMessageSummaries({ mailboxScope: "all" }),
     );
-    expect(taggedName(failure)).toBe("InboundMessageIntegrityError");
+    expect(taggedName(failure)).toBe("MessageIntegrityError");
+  });
+
+  it("fails public reads for an outbound message without its job", async () => {
+    const store = accountStore("queries-orphan-outbound");
+    const mailbox = await requireAddress(store, "inbox");
+    await store.acceptOutbound(outboundInput(mailbox.id, 0, "orphan-outbound"));
+    await store.removeOutboundJobForIntegrityTest("orphan-outbound");
+
+    const failure = await failureOf(store, (host) =>
+      host.listMessageSummaries({ mailboxScope: "all" }),
+    );
+    expect(failure).toMatchObject({ _tag: "MessageIntegrityError", reason: "job_missing" });
   });
 
   it("persists normalized parsed date independently of receipt occurrence time across restart", async () => {

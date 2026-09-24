@@ -101,21 +101,36 @@ importers:
       '@better-auth/oauth-provider':
         specifier: 1.7.2
         version: 1.7.2(patch_hash=055bc68747c10af80168750c4471f4f3c9c3aa7dc6ec98f02eb01939f0a0fd23)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
+      '@distilled.cloud/cloudflare':
+        specifier: 1.0.0-rc.9
+        version: 1.0.0-rc.9(effect@4.0.0-rc.112)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
+      '@types/hast':
+        specifier: 3.0.5
+        version: 3.0.5
       '@umail/api-contract':
         specifier: workspace:*
         version: link:../../packages/api-contract
-      '@umail/mail-content':
-        specifier: workspace:*
-        version: link:../../packages/mail-content
       better-auth:
         specifier: 1.7.2
         version: 1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10)
+      css-tree:
+        specifier: 3.2.1
+        version: 3.2.1
       effect:
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112
+      hast-util-from-parse5:
+        specifier: 8.0.3
+        version: 8.0.3
+      hast-util-to-html:
+        specifier: 9.0.5
+        version: 9.0.5
+      parse5:
+        specifier: 7.3.0
+        version: 7.3.0
       postal-mime:
         specifier: 3.0.0
         version: 3.0.0(patch_hash=253b0e029f0c030fc545435cbbb8d134e748ef6accaa7553c4fd322a274479d0)
@@ -129,6 +144,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
+      '@types/css-tree':
+        specifier: 3.2.0
+        version: 3.2.0
       '@vitest/browser-playwright':
         specifier: 4.1.10
         version: 4.1.10(playwright@1.63.0)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))(vitest@4.1.10)
@@ -147,46 +165,6 @@ importers:
       effect:
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112
-
-  packages/mail-content:
-    dependencies:
-      '@types/hast':
-        specifier: 3.0.5
-        version: 3.0.5
-      css-tree:
-        specifier: 3.2.1
-        version: 3.2.1
-      effect:
-        specifier: 4.0.0-rc.112
-        version: 4.0.0-rc.112
-      hast-util-from-parse5:
-        specifier: 8.0.3
-        version: 8.0.3
-      hast-util-to-html:
-        specifier: 9.0.5
-        version: 9.0.5
-      parse5:
-        specifier: 7.3.0
-        version: 7.3.0
-    devDependencies:
-      '@cloudflare/vitest-plugin':
-        specifier: 1.1.7
-        version: 1.1.7(@cloudflare/workers-types@5.20260901.1)(@types/node@24.13.3)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
-      '@cloudflare/workers-types':
-        specifier: 5.20260901.1
-        version: 5.20260901.1
-      '@types/css-tree':
-        specifier: 3.2.0
-        version: 3.2.0
-      '@vitest/browser-playwright':
-        specifier: 4.1.10
-        version: 4.1.10(playwright@1.63.0)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))(vitest@4.1.10)
-      playwright:
-        specifier: 1.63.0
-        version: 1.63.0
-      vitest:
-        specifier: 4.1.10
-        version: 4.1.10(@types/node@24.13.3)(@vitest/browser-playwright@4.1.10)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))
 
 packages:
 

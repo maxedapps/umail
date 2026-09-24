@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { inboundMessageId } from "../../src/mail/archive.ts";
 import { receiveInbound, type InboundDeps } from "../../src/mail/inbound.ts";
-import type { IndexReceiptWork } from "../../src/mail/indexing.ts";
+import type { IndexReceiptWork } from "../../src/mail/process-index.ts";
 import { DEFAULT_MAX_RAW_BYTES, rawObjectKey, sha256Hex } from "../../src/mail/policy.ts";
 import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";
 import type { AccountStoreTestHost } from "../account/worker-host.ts";
@@ -153,7 +153,7 @@ describe("inbound receipts", () => {
     expect(await listArchiveKeys()).toEqual([first?.rawKey]);
   });
 
-  it("does not forward to inactive mailboxes or unverified destinations", async () => {
+  it("rejects mail for an inactive mailbox without forwarding it", async () => {
     const inactive = createWorld("receipts-inactive");
     await seedMailbox(inactive.stub, INBOX, { destination: FORWARD_DEST, active: false });
     const inactiveEmail = new FakeEmail({
@@ -165,19 +165,10 @@ describe("inbound receipts", () => {
     expect(inactiveEmail.rejectReason).toBe("unknown recipient");
     expect(inactiveEmail.forwards).toEqual([]);
     expect(await listArchiveKeys()).toEqual([]);
-
-    const unverified = createWorld("receipts-unverified");
-    await seedMailbox(unverified.stub, INBOX, { destination: FORWARD_DEST, verified: false });
-    const raw = plainHtmlEml(INBOX, "<p>unverified</p>");
-    const unverifiedEmail = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    await unverified.receive(unverifiedEmail);
-    expect(unverifiedEmail.rejectReason).toBeNull();
-    expect(unverifiedEmail.forwards).toEqual([]);
-    const receipt = await unverified.stub.getInboundReceipt(await identityFor(raw, INBOX));
-    expect(receipt).toMatchObject({ forwardOutcome: "none", forwardDestination: null });
   });
 
-  it("records a failed native forward and still accepts the message", async () => {
+  // Cloudflare refuses a destination that has not been verified yet, among other reasons.
+  it("records a refused forward and still accepts the message", async () => {
     const world = createWorld("receipts-forward-fail");
     await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
     const raw = plainHtmlEml(INBOX, "<p>forward</p>");
@@ -310,7 +301,6 @@ async function seedMailbox(
   address: string,
   options: {
     readonly destination?: string;
-    readonly verified?: boolean;
     readonly active?: boolean;
   } = {},
 ): Promise<void> {
@@ -325,18 +315,7 @@ async function seedMailbox(
     throw new Error("expected seeded mailbox");
   }
   if (options.destination !== undefined) {
-    const destination = await stub.insertDestination(
-      `${created.id}-cf`,
-      options.destination,
-      options.verified === false ? null : TEST_NOW_ISO,
-      TEST_NOW_ISO,
-    );
-    if (options.verified !== false) {
-      const attached = await stub.setAddressForwarding(created.id, destination.id, TEST_NOW_ISO);
-      if (attached === null) {
-        throw new Error("expected forwarding destination to attach");
-      }
-    }
+    await stub.setAddressForwarding(created.id, options.destination, TEST_NOW_ISO);
   }
   if (options.active === false) {
     const patched = await stub.patchAddress(created.id, { active: false }, TEST_NOW_ISO);

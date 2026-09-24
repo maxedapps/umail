@@ -7,6 +7,7 @@ import { MemoryD1 } from "../api/memory-d1.ts";
 import {
   CURSOR_GROK_BOT_CLIENT_ID,
   FIRST_PARTY_CLIENT_DISCOVERY_ID,
+  UMAIL_CLI_CLIENT_ID,
   asUmailBetterAuth,
   makeAuthOptions,
   mcpResourceUrl,
@@ -42,14 +43,10 @@ describe("auth provisioning", () => {
   it("preserves the existing operator credentials when a weak replacement is rejected", async () => {
     const db = await provisionedDatabase();
     const hash = await credentialHash(db);
-    const control = await db.all("SELECT ready, credentialGeneration FROM umailAuthControl");
     await expect(
       provisionAuth(db, { ...provisionRequest("weak-replacement"), password: "short" }),
     ).rejects.toThrow("UMAIL_OPERATOR_PASSWORD must be at least 12 characters");
     expect(await credentialHash(db)).toBe(hash);
-    expect(await db.all("SELECT ready, credentialGeneration FROM umailAuthControl")).toEqual(
-      control,
-    );
   });
 
   it("provisions schema, operator, and static clients on an empty database", async () => {
@@ -72,24 +69,28 @@ describe("auth provisioning", () => {
     ]);
     expect(
       await db.all(
-        "SELECT clientId, clientDiscoveryId, disabled FROM oauthClient WHERE clientId = ?",
-        CURSOR_GROK_BOT_CLIENT_ID,
+        "SELECT clientId, clientDiscoveryId, disabled, grantTypes FROM oauthClient ORDER BY clientId",
       ),
     ).toEqual([
       {
         clientId: CURSOR_GROK_BOT_CLIENT_ID,
         clientDiscoveryId: FIRST_PARTY_CLIENT_DISCOVERY_ID,
         disabled: 0,
+        grantTypes: '["authorization_code","refresh_token"]',
+      },
+      {
+        clientId: UMAIL_CLI_CLIENT_ID,
+        clientDiscoveryId: FIRST_PARTY_CLIENT_DISCOVERY_ID,
+        disabled: 0,
+        grantTypes: '["urn:ietf:params:oauth:grant-type:device_code","refresh_token"]',
       },
     ]);
-    expect(
-      await db.all(
-        "SELECT resourceId FROM oauthClientResource WHERE clientId = ?",
-        CURSOR_GROK_BOT_CLIENT_ID,
-      ),
-    ).toEqual([{ resourceId: MCP_RESOURCE }]);
-    expect(await db.all("SELECT ready, credentialGeneration FROM umailAuthControl")).toEqual([
-      { ready: 1, credentialGeneration: 1 },
+    expect(await staticClientLinks(db)).toEqual([
+      { clientId: CURSOR_GROK_BOT_CLIENT_ID, resourceId: MCP_RESOURCE },
+      { clientId: UMAIL_CLI_CLIENT_ID, resourceId: REST_RESOURCE },
+    ]);
+    expect(await db.all("SELECT name FROM sqlite_master WHERE name = 'mcpPolicy'")).toEqual([
+      { name: "mcpPolicy" },
     ]);
   });
 
@@ -98,39 +99,15 @@ describe("auth provisioning", () => {
     const first = await provisionAuth(db, provisionRequest("nonce-1"));
     const second = await provisionAuth(db, provisionRequest("nonce-2"));
     expect(second).toEqual({ operatorId: first.operatorId });
-    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
-      { credentialGeneration: 1 },
-    ]);
     expect(await db.all("SELECT id FROM user")).toEqual([{ id: first.operatorId }]);
   });
 
-  it("retries after schema creation fails without creating operator authority", async () => {
-    class InterruptedSchemaD1 extends MemoryD1 {
-      interrupted = false;
-      override async exec(query: string) {
-        if (!this.interrupted && query.includes("umailAuthControl")) {
-          this.interrupted = true;
-          throw new Error("schema interrupted");
-        }
-        return super.exec(query);
-      }
-    }
-    const db = new InterruptedSchemaD1() as InterruptedSchemaD1 & AuthD1Database;
-    await expect(provisionAuth(db, provisionRequest("schema-failed"))).rejects.toThrow(
-      "schema interrupted",
-    );
-    expect(await db.all("SELECT id FROM user")).toEqual([]);
-    const result = await provisionAuth(db, provisionRequest("schema-retry"));
-    expect(await db.all("SELECT id FROM user")).toEqual([{ id: result.operatorId }]);
-    expect(await db.all("SELECT ready FROM umailAuthControl")).toEqual([{ ready: 1 }]);
-  });
-
-  it("leaves first provisioning unready on a partial failure and resumes with the same identity", async () => {
+  it("resumes a partly failed first provisioning with the same operator", async () => {
     class InterruptedClientD1 extends MemoryD1 {
       interruptClient = true;
-      override async exec(query: string) {
-        const result = await super.exec(query);
-        if (this.interruptClient && query.includes("CREATE TABLE IF NOT EXISTS umailAuthControl")) {
+      override async batch(statements: Parameters<MemoryD1["batch"]>[0]) {
+        const result = await super.batch(statements);
+        if (this.interruptClient) {
           await super.exec(`CREATE TRIGGER IF NOT EXISTS interrupt_client
             BEFORE INSERT ON oauthClient BEGIN SELECT RAISE(FAIL, 'client interrupted'); END`);
         }
@@ -143,20 +120,13 @@ describe("auth provisioning", () => {
     );
     const operatorId = await operatorIdOf(db);
     const hash = await credentialHash(db);
-    expect(await db.all("SELECT ready FROM umailAuthControl")).toEqual([{ ready: 0 }]);
     expect(await db.all("SELECT clientId FROM oauthClient")).toEqual([]);
     await db.exec("DROP TRIGGER interrupt_client");
     db.interruptClient = false;
     const result = await provisionAuth(db, provisionRequest("client-retry"));
     expect(result.operatorId).toBe(operatorId);
-    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
-      { credentialGeneration: 1 },
-    ]);
     expect(await credentialHash(db)).toBe(hash);
-    expect(await db.all("SELECT ready FROM umailAuthControl")).toEqual([{ ready: 1 }]);
-    expect(await db.all("SELECT resourceId FROM oauthClientResource")).toEqual([
-      { resourceId: MCP_RESOURCE },
-    ]);
+    expect(await staticClientLinks(db)).toHaveLength(2);
   });
 
   it("does not rewrite credentials when only the provisioning nonce changes", async () => {
@@ -178,14 +148,11 @@ describe("auth provisioning", () => {
       .run();
     const second = await provisionAuth(db, provisionRequest("nonce-b"));
     expect(second.operatorId).toBe(first.operatorId);
-    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
-      { credentialGeneration: 1 },
-    ]);
     expect(await credentialHash(db)).toBe(hashBefore);
     expect(await db.all("SELECT id FROM session")).toEqual([{ id: "session-1" }]);
   });
 
-  it("rotates the password hash and invalidates grants on a real password change", async () => {
+  it("rotates the password hash and ends sessions, grants, and their policies on a real change", async () => {
     const db = emptyAuthDatabase();
     const first = await provisionAuth(db, provisionRequest("rotate-1"));
     await db
@@ -214,20 +181,22 @@ describe("auth provisioning", () => {
         "2026-01-01T00:00:00.000Z",
       )
       .run();
+    await db
+      .prepare(`INSERT INTO mcpPolicy (id, consentId, policy) VALUES (?, ?, ?)`)
+      .bind("policy-1", "consent-1", "{}")
+      .run();
     const oldHash = await credentialHash(db);
     await provisionAuth(db, {
       ...provisionRequest("rotate-2"),
       password: "replacement-passphrase",
     });
-    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
-      { credentialGeneration: 2 },
-    ]);
     const newHash = await credentialHash(db);
     expect(newHash).not.toBe(oldHash);
     expect(await verifyPassword({ hash: oldHash, password: OPERATOR_PASSWORD })).toBe(true);
     expect(await verifyPassword({ hash: newHash, password: "replacement-passphrase" })).toBe(true);
     expect(await db.all("SELECT id FROM session")).toEqual([]);
     expect(await db.all("SELECT id FROM oauthConsent")).toEqual([]);
+    expect(await db.all("SELECT id FROM mcpPolicy")).toEqual([]);
   });
 
   it("signs in through Better Auth using the credential issuer mapping", async () => {
@@ -256,9 +225,6 @@ describe("auth provisioning", () => {
     const db = emptyAuthDatabase();
     await provisionAuth(db, { ...provisionRequest("mixed-case"), operatorEmail: mixedCaseEmail });
     expect(await db.all("SELECT email FROM user")).toEqual([{ email: lookupEmail }]);
-    expect(await db.all("SELECT canonicalEmail FROM umailAuthControl")).toEqual([
-      { canonicalEmail: mixedCaseEmail },
-    ]);
     const auth = asUmailBetterAuth(
       betterAuth({
         ...makeAuthOptions(TEST_SITE, await operatorIdOf(db), { rateLimit: false }),
@@ -277,23 +243,14 @@ describe("auth provisioning", () => {
     expect(response.headers.get("set-cookie")).toContain("session");
   });
 
-  it("repairs a missing static resource link without recreating the client", async () => {
+  it("repairs missing static resource links without recreating the clients", async () => {
     const db = await provisionedDatabase();
+    const links = await staticClientLinks(db);
     await db.prepare("DELETE FROM oauthClientResource").run();
-    const clientId = await db.all(
-      "SELECT id FROM oauthClient WHERE clientId = ?",
-      CURSOR_GROK_BOT_CLIENT_ID,
-    );
+    const clients = await db.all("SELECT id FROM oauthClient ORDER BY id");
     await provisionAuth(db, provisionRequest("repair"));
-    expect(
-      await db.all("SELECT id FROM oauthClient WHERE clientId = ?", CURSOR_GROK_BOT_CLIENT_ID),
-    ).toEqual(clientId);
-    expect(
-      await db.all(
-        "SELECT resourceId FROM oauthClientResource WHERE clientId = ?",
-        CURSOR_GROK_BOT_CLIENT_ID,
-      ),
-    ).toEqual([{ resourceId: MCP_RESOURCE }]);
+    expect(await db.all("SELECT id FROM oauthClient ORDER BY id")).toEqual(clients);
+    expect(await staticClientLinks(db)).toEqual(links);
   });
 
   it("preserves disabled resources across provision and insert-only cold start", async () => {
@@ -319,21 +276,11 @@ describe("auth provisioning", () => {
     ).toEqual([{ disabled: 1 }]);
   });
 
-  it("preserves a disabled static client and does not touch mcp_oauth_policies", async () => {
+  it("preserves a disabled static client", async () => {
     const db = await provisionedDatabase();
     await db
       .prepare("UPDATE oauthClient SET disabled = 1 WHERE clientId = ?")
       .bind(CURSOR_GROK_BOT_CLIENT_ID)
-      .run();
-    db.applyMigration(
-      `CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
-         client_id TEXT PRIMARY KEY NOT NULL,
-         state TEXT NOT NULL
-       )`,
-    );
-    await db
-      .prepare(`INSERT INTO mcp_oauth_policies (client_id, state) VALUES (?, ?)`)
-      .bind(CURSOR_GROK_BOT_CLIENT_ID, "revoked")
       .run();
     await provisionAuth(db, provisionRequest("disabled-client"));
     expect(
@@ -342,9 +289,6 @@ describe("auth provisioning", () => {
         CURSOR_GROK_BOT_CLIENT_ID,
       ),
     ).toEqual([{ disabled: 1 }]);
-    expect(await db.all("SELECT client_id, state FROM mcp_oauth_policies")).toEqual([
-      { client_id: CURSOR_GROK_BOT_CLIENT_ID, state: "revoked" },
-    ]);
   });
 
   it("rejects an ownership conflict for the static client id", async () => {
@@ -399,6 +343,10 @@ function provisionRequest(runNonce: string): Parameters<typeof provisionAuth>[1]
     mcpResource: MCP_RESOURCE,
     password: OPERATOR_PASSWORD,
   };
+}
+
+function staticClientLinks(db: MemoryD1) {
+  return db.all("SELECT clientId, resourceId FROM oauthClientResource ORDER BY clientId");
 }
 
 async function operatorIdOf(db: AuthD1Database): Promise<string> {

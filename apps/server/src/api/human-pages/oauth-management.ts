@@ -1,5 +1,6 @@
-import type { McpOAuthPolicy } from "../../account/domain.ts";
+import type { PrincipalPolicy } from "@umail/api-contract";
 
+import type { ClientGrant } from "../../auth/access.ts";
 import { productPageTitle } from "../brand/identity.ts";
 import { escapeHtmlText, renderHumanPageInternal } from "./internal/page.ts";
 
@@ -52,63 +53,69 @@ export function renderDeviceDecisionPage(decision: "approved" | "denied") {
   });
 }
 
-export function renderMcpClientsPage(policies: ReadonlyArray<McpOAuthPolicy>) {
-  const items = policies.map(renderPolicy).join("");
+export function renderClientsPage(grants: ReadonlyArray<ClientGrant>) {
+  const items = grants.map(renderGrant).join("");
   return renderHumanPageInternal({
     status: 200,
     policy: "auth",
     document: {
-      title: productPageTitle("MCP access policies"),
-      eyebrow: "MCP access",
-      heading: "Manage MCP access",
+      title: productPageTitle("Client access"),
+      eyebrow: "Access",
+      heading: "Manage client access",
       description:
-        "Clients appear after their first verified request. Policy changes affect the next MCP request.",
-      mainHtml: `<section class="review-section"><h2>Authorized clients</h2>${items.length === 0 ? '<p class="empty-value">No MCP client has completed authorization.</p>' : items}</section>`,
+        "Every client that can use AgentMail. Policy changes apply to the next request. Revoking ends the client's tokens; it can ask again through the consent screen.",
+      mainHtml: `<section class="review-section"><h2>Authorized clients</h2>${items.length === 0 ? '<p class="empty-value">No client has access.</p>' : items}</section>`,
     },
   });
 }
 
-function renderPolicy(policy: McpOAuthPolicy): string {
-  const id = escapeHtmlText(policy.clientId);
-  const actionId = encodeURIComponent(policy.clientId);
-  const revoked = policy.state === "revoked";
-  const controls = revoked
-    ? '<p class="notice-panel">This revocation is permanent for this client ID. A host that registers dynamically can register again under a new ID; a client with a fixed ID cannot reconnect. To pause access reversibly, clear "Client active" instead of revoking.</p>'
-    : `<form class="auth-form" method="post" action="/clients/${actionId}/policy">
-    <div class="field"><label class="field__label" for="label-${actionId}">Client label</label><input id="label-${actionId}" name="label" type="text" value="${escapeHtmlText(policy.label)}" required></div>
-    ${renderPolicyFields(policy.clientId, policy.policy)}
-    <label class="checkbox-field"><input id="active-${actionId}" name="active" type="checkbox"${policy.state === "active" ? " checked" : ""}><span>Client active</span></label>
+function renderGrant(grant: ClientGrant): string {
+  const clientId = encodeURIComponent(grant.clientId);
+  const access =
+    grant.consentId === null
+      ? "Operator (CLI)"
+      : grant.policy === null
+        ? "No access until a policy is saved"
+        : "MCP";
+  const policyForm =
+    grant.consentId === null
+      ? ""
+      : `<form class="auth-form" method="post" action="/clients/${encodeURIComponent(grant.consentId)}/policy">
+    ${renderPolicyFields(grant.clientId, grant.policy)}
     <div class="form-actions"><button type="submit">Save policy</button></div>
-  </form>
-  <form method="post" action="/clients/${actionId}/revoke"><button class="button--secondary" type="submit">Revoke AgentMail access</button></form>`;
+  </form>`;
   return `<article class="review-section">
-  <h2>${escapeHtmlText(policy.label)}</h2>
+  <h2>${escapeHtmlText(grant.name ?? grant.clientId)}</h2>
   <dl class="message-details">
-    <dt>Client ID</dt><dd><bdi dir="ltr">${id}</bdi></dd>
-    <dt>Status</dt><dd>${escapeHtmlText(policy.state)}</dd>
+    <dt>Client ID</dt><dd><bdi dir="ltr">${escapeHtmlText(grant.clientId)}</bdi></dd>
+    <dt>Access</dt><dd>${escapeHtmlText(access)}</dd>
   </dl>
-  ${controls}
+  ${policyForm}
+  <form method="post" action="/clients/${clientId}/revoke"><button class="button--secondary" type="submit">Revoke access</button></form>
 </article>`;
 }
 
-function renderPolicyFields(clientId: string, policy: McpOAuthPolicy["policy"]): string {
-  const actionId = encodeURIComponent(clientId);
-  const mailboxIds = policy.mailboxIds === "all" ? "all" : policy.mailboxIds.join(", ");
+// A consent without a policy starts from the consent screen's defaults.
+function renderPolicyFields(clientId: string, policy: PrincipalPolicy | null): string {
+  const id = encodeURIComponent(clientId);
+  const mailboxIds =
+    policy === null || policy.mailboxIds === "all" ? "all" : policy.mailboxIds.join(", ");
   const recipients =
-    policy.recipientAllowlist === "any" ? "any" : policy.recipientAllowlist.join(", ");
+    policy === null || policy.recipientAllowlist === "any"
+      ? "any"
+      : policy.recipientAllowlist.join(", ");
+  const sendMode = policy?.sendMode.kind ?? "requireApproval";
   const preapproved =
-    policy.sendMode.kind === "requireApproval"
+    policy?.sendMode.kind === "requireApproval"
       ? policy.sendMode.preapprovedRecipients.join(", ")
       : "";
-  return `<div class="field"><label class="field__label" for="mailboxIds-${actionId}">Mailbox IDs</label><input id="mailboxIds-${actionId}" name="mailboxIds" type="text" value="${escapeHtmlText(mailboxIds)}" required><p class="field__hint" id="mailboxIds-hint-${actionId}">Comma-separated mailbox IDs for ${escapeHtmlText(clientId)}, or all.</p></div>
-<label class="checkbox-field"><input id="canRead-${actionId}" name="canRead" type="checkbox"${policy.canRead ? " checked" : ""}><span>Allow reading mail</span></label>
-<label class="checkbox-field"><input id="canDelete-${actionId}" name="canDelete" type="checkbox"${policy.canDelete ? " checked" : ""}><span>Allow deleting mail</span></label>
-<div class="field"><label class="field__label" for="sendMode-${actionId}">Send mode</label><select id="sendMode-${actionId}" name="sendMode">
-  <option value="deny"${policy.sendMode.kind === "deny" ? " selected" : ""}>Deny</option>
-  <option value="requireApproval"${policy.sendMode.kind === "requireApproval" ? " selected" : ""}>Require approval</option>
-  <option value="allow"${policy.sendMode.kind === "allow" ? " selected" : ""}>Allow</option>
+  return `<div class="field"><label class="field__label" for="mailboxes-${id}">Mailbox IDs</label><input id="mailboxes-${id}" name="mailboxes" type="text" value="${escapeHtmlText(mailboxIds)}" required><p class="field__hint">Comma-separated mailbox IDs, or all.</p></div>
+<label class="checkbox-field"><input id="canRead-${id}" name="canRead" type="checkbox"${policy?.canRead === false ? "" : " checked"}><span>Allow reading mail</span></label>
+<div class="field"><label class="field__label" for="sendMode-${id}">Send mode</label><select id="sendMode-${id}" name="sendMode">
+  <option value="deny"${sendMode === "deny" ? " selected" : ""}>Deny</option>
+  <option value="requireApproval"${sendMode === "requireApproval" ? " selected" : ""}>Require approval</option>
+  <option value="allow"${sendMode === "allow" ? " selected" : ""}>Allow</option>
 </select></div>
-<div class="field"><label class="field__label" for="preapprovedRecipients-${actionId}">Send without approval to</label><input id="preapprovedRecipients-${actionId}" name="preapprovedRecipients" type="text" value="${escapeHtmlText(preapproved)}" placeholder="Leave empty to approve every message" aria-describedby="preapproved-hint-${actionId}"><p class="field__hint" id="preapproved-hint-${actionId}">Comma-separated addresses for ${escapeHtmlText(clientId)}. Only applies to “Require approval”: a message reaches approval unless every one of its recipients is listed here.</p></div>
-<div class="field"><label class="field__label" for="recipientAllowlist-${actionId}">Recipient allowlist</label><input id="recipientAllowlist-${actionId}" name="recipientAllowlist" type="text" value="${escapeHtmlText(recipients)}" required></div>
-<label class="checkbox-field"><input id="canAdmin-${actionId}" name="canAdmin" type="checkbox"${policy.canAdmin ? " checked" : ""}><span>Allow mailbox administration</span></label>`;
+<div class="field"><label class="field__label" for="preapproved-${id}">Send without approval to</label><input id="preapproved-${id}" name="preapproved" type="text" value="${escapeHtmlText(preapproved)}" placeholder="Leave empty to approve every message" aria-describedby="preapproved-hint-${id}"><p class="field__hint" id="preapproved-hint-${id}">Comma-separated addresses. Only applies to “Require approval”: a message reaches approval unless every one of its recipients is listed here.</p></div>
+<div class="field"><label class="field__label" for="recipients-${id}">Recipient allowlist</label><input id="recipients-${id}" name="recipients" type="text" value="${escapeHtmlText(recipients)}" required></div>`;
 }

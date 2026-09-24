@@ -1,15 +1,24 @@
 import { betterAuth } from "better-auth";
 import type * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 
-import { ExternalMailAddress, MailDomain, MailboxAddress } from "@umail/api-contract";
-import type { MailHtmlPolicy } from "@umail/mail-content";
+import {
+  ExternalMailAddress,
+  MailDomain,
+  MailboxAddress,
+  OPERATOR_POLICY,
+  type PrincipalPolicy,
+} from "@umail/api-contract";
+import type { MailHtmlPolicy } from "../../src/mail/html-policy.ts";
+import type { CompleteAttemptOutcome } from "../../src/account/domain.ts";
+import { runDueWork } from "../../src/account/due-work.ts";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
 import { makeApiHttpEffect, type ApiDeps, type MailArchiveReader } from "../../src/api/app.ts";
-import type { AuthControlDatabase } from "../../src/auth/auth-control.ts";
+import { makeAccess, type Access, type AccessDatabase } from "../../src/auth/access.ts";
 import {
   asUmailBetterAuth,
   makeAuthOptions,
@@ -18,6 +27,7 @@ import {
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
 import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
+import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
 import {
   FaithfulMailHtmlPolicy,
@@ -37,10 +47,11 @@ export const APPLICATION_URL = new URL("https://umail.test");
 export const APPLICATION_ORIGIN = APPLICATION_URL.origin;
 export const TEST_SITE = { apiHostname: "umail.test" } as const;
 export const AUTH_SECRET = "umail-test-better-auth-secret";
-export { createMailHtmlPolicy } from "@umail/mail-content";
+export { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 
 export type World = {
   readonly db: MemoryD1;
+  readonly access: Access;
   readonly account: AccountStoreRpc;
   readonly accountStorage: MemoryAccountSqliteStorage;
   readonly archive: MemoryArchive;
@@ -74,8 +85,7 @@ export async function createWorld(
   const db = new MemoryD1();
   const memoryAccount = createMemoryAccount();
   const operatorEmail = settings.operatorEmail ?? OPERATOR_EMAIL;
-  const authDatabase = db as AuthD1Database & AuthControlDatabase;
-  const provision = await provisionAuth(authDatabase, {
+  const provision = await provisionAuth(db as AuthD1Database, {
     identity: { databaseId: "test-auth" },
     runNonce: crypto.randomUUID(),
     operatorEmail,
@@ -97,6 +107,7 @@ export async function createWorld(
   const htmlPolicy = new FaithfulMailHtmlPolicy();
   const approvalClock = new MemoryApprovalClock();
   const notificationKey = crypto.getRandomValues(new Uint8Array(32));
+  const access = makeAccess(db as AccessDatabase, provision.operatorId);
   const runtime = await Effect.runPromise(
     Effect.gen(function* () {
       const deps = {
@@ -106,7 +117,7 @@ export async function createWorld(
         htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
         mailDomain: MAIL_DOMAIN,
         auth,
-        authDatabase,
+        access,
         applicationUrl: APPLICATION_URL,
         operatorId: provision.operatorId,
         approvalClock,
@@ -124,6 +135,7 @@ export async function createWorld(
 
   return {
     db,
+    access,
     account: memoryAccount.account,
     accountStorage: memoryAccount.storage,
     archive,
@@ -196,25 +208,7 @@ async function bootstrapOperator(
     throw new Error("operator sign-in did not return a browser session cookie");
   }
 
-  const registration = await fetchWorld("http://umail.test/api/auth/oauth2/register", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_name: "uMail CLI test",
-      application_type: "native",
-      token_endpoint_auth_method: "none",
-      grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-      subject_type: "public",
-      dpop_bound_access_tokens: false,
-      resources: ["https://umail.test"],
-    }),
-  });
-  if (!registration.ok) {
-    throw new Error(`CLI DCR failed: ${registration.status} ${await registration.text()}`);
-  }
-  const cli = Schema.decodeUnknownSync(
-    Schema.Struct({ client_id: Schema.String, token_endpoint_auth_method: Schema.Literal("none") }),
-  )(await registration.json());
+  const cli = { client_id: "umail-cli" };
   const device = await fetchWorld("http://umail.test/api/auth/device/code", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -264,9 +258,60 @@ async function bootstrapOperator(
   };
 }
 
-export async function listMcpPolicyRows(world: World) {
-  const policies = await Effect.runPromise(world.account.listMcpOAuthPolicies());
-  return policies.map((policy) => ({ client_id: policy.clientId, state: policy.state }));
+// Runs the store's due-work pass, as its alarm would, through a fake provider. Returns the mail sent.
+// MCP requesters get `mcpPolicy` when given, else their consent's policy.
+export async function runDueWorkPass(
+  world: World,
+  options: {
+    readonly at?: string;
+    readonly outcome?: CompleteAttemptOutcome;
+    readonly mcpPolicy?: PrincipalPolicy;
+  } = {},
+): Promise<ReadonlyArray<ProviderOutboundMail>> {
+  const mails: Array<ProviderOutboundMail> = [];
+  const now =
+    options.at === undefined ? await Effect.runPromise(world.approvalClock.now) : undefined;
+  const nowMs = now === undefined ? Date.parse(options.at ?? "") : DateTime.toEpochMillis(now);
+  await Effect.runPromise(
+    runDueWork(
+      world.accountStorage,
+      {
+        sender: {
+          send: (mail) =>
+            Effect.sync(() => {
+              mails.push(mail);
+              return (
+                options.outcome ?? {
+                  kind: "accepted",
+                  providerMessageId: `provider-${mails.length}`,
+                  rfcMessageId: null,
+                }
+              );
+            }),
+        },
+        htmlPolicy: world.htmlPolicy,
+        applicationUrl: APPLICATION_URL,
+        notification: {
+          key: world.notificationKey,
+          mailDomain: MAIL_DOMAIN,
+          approvalAdminEmail: world.operatorEmail,
+        },
+        policyFor: (requester) =>
+          requester.kind === "operator"
+            ? Effect.succeed(OPERATOR_POLICY)
+            : options.mcpPolicy === undefined
+              ? world.access.mcpPolicy(requester.clientId)
+              : Effect.succeed(options.mcpPolicy),
+        index: { send: () => Effect.void },
+      },
+      nowMs,
+    ),
+  );
+  return mails;
+}
+
+export function listMcpPolicyRows(world: World) {
+  return world.db.all("SELECT consentId, policy FROM mcpPolicy ORDER BY consentId");
 }
 
 export async function seedMailbox(

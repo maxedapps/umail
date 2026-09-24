@@ -87,12 +87,8 @@ export async function evaluateApplication(stage: string) {
 
 export const testOutputs = {
   AuthProvision: { operatorId: "operator-test" },
-  Api: { workerName: "api-test" },
-  Inbound: { workerName: "inbound-test" },
-  IndexConsumer: { workerName: "index-test" },
-  SendConsumer: { workerName: "send-test" },
+  App: { workerName: "app-test" },
   MailIndex: { queueName: "index-queue", queueId: "index-id" },
-  MailSend: { queueName: "send-queue", queueId: "send-id" },
   MailArchive: { bucketName: "archive-test", jurisdiction: "default" },
   AuthDb: { databaseId: "auth-test" },
   BetterAuthSecret: { text: Redacted.make("test-signing-secret-01234567890123456789") },

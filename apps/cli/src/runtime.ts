@@ -1,4 +1,3 @@
-import type { UmailClientEnvironment } from "@umail/api-contract/client";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -17,9 +16,9 @@ export const CliLive = Layer.mergeAll(
   ApprovalTokenSource.layer.pipe(Layer.provide(NodeServices.layer)),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
-export function runCli(argv: ReadonlyArray<string>, env: UmailClientEnvironment) {
+export function runCli(argv: ReadonlyArray<string>) {
   // Failures are printed once by `program`; the default teardown exits non-zero on failure only.
-  NodeRuntime.runMain(program(argv, env).pipe(Effect.provide(CliLive)), {
+  NodeRuntime.runMain(program(argv).pipe(Effect.provide(CliLive)), {
     disableErrorReporting: true,
   });
 }

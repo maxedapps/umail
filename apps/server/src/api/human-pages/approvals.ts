@@ -106,13 +106,24 @@ function approvalStatePresentation(
         "Approved; accepted by Cloudflare for delivery. Recipient delivery is not yet confirmed.",
     };
   }
-  if (job.state === "rejected" && job.failureClass === "provider") {
+  if (job.state === "ready" || job.state === "in_flight") {
+    return {
+      title: "Outbound email approved",
+      eyebrow: "Approved · sending",
+      heading: "Approved for sending",
+      description: "Approved; AgentMail is sending this email now.",
+    };
+  }
+  if (job.state === "rejected") {
+    const reason =
+      job.failureClass === "provider"
+        ? `Cloudflare rejected it (${job.failureDetail ?? "no code"})`
+        : `it was not sent (${[job.failureClass, job.failureDetail].filter((part) => part !== null).join(": ")})`;
     return {
       title: "Outbound approval recorded",
-      eyebrow: "Approved · submission failed",
+      eyebrow: "Approved · not sent",
       heading: "Approval recorded",
-      description:
-        "Approval recorded; Cloudflare did not confirm submission. Do not retry automatically.",
+      description: `Approval recorded, but ${reason}.`,
     };
   }
   return {

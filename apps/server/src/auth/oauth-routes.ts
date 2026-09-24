@@ -1,42 +1,23 @@
-import {
-  PrincipalPolicy,
-  requireApprovalSendMode,
-  type PrincipalSendMode,
-  parsePrincipalRecipientAllowlist,
-  parsePrincipalMailboxIds,
-  parseMailAddressList,
-} from "@umail/api-contract";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { productPageTitle } from "../api/brand/identity.ts";
 import { renderHumanPageNotice } from "../api/human-pages/notices.ts";
 import {
+  renderClientsPage,
   renderDeviceAuthorizationPage,
   renderDeviceDecisionPage,
-  renderMcpClientsPage,
 } from "../api/human-pages/oauth-management.ts";
 import { humanPageHeaders } from "../api/human-pages/response.ts";
-import type { AccountStoreRpc } from "../account/worker.ts";
+import { policyFromForm, type Access } from "./access.ts";
 import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type UmailBetterAuth } from "./options.ts";
 import { cookieMutationAllowed } from "./runtime-surface.ts";
 
-const PolicyForm = Schema.Struct({
-  label: Schema.String,
-  mailboxIds: Schema.String,
-  canRead: Schema.optionalKey(Schema.String),
-  canDelete: Schema.optionalKey(Schema.String),
-  sendMode: Schema.Literals(["deny", "allow", "requireApproval"]),
-  recipientAllowlist: Schema.String,
-  preapprovedRecipients: Schema.optionalKey(Schema.String),
-  canAdmin: Schema.optionalKey(Schema.String),
-  active: Schema.optionalKey(Schema.String),
-});
 const DeviceDecisionForm = Schema.Struct({ userCode: Schema.String });
 
 export type OAuthRouteDependencies = {
   readonly auth: UmailBetterAuth;
-  readonly account: AccountStoreRpc;
+  readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
@@ -152,44 +133,28 @@ async function deviceDecisionRoute(
 async function clientsRoute(deps: OAuthRouteDependencies, request: Request): Promise<Response> {
   const session = await requireOperatorSession(deps, request);
   if (session.kind !== "authorized") return session.response;
-  const policies = await deps.run(deps.account.listMcpOAuthPolicies());
-  return humanResponse(renderMcpClientsPage(policies));
+  return humanResponse(renderClientsPage(await deps.run(deps.access.list())));
 }
 
 async function updateClientPolicyRoute(
   deps: OAuthRouteDependencies,
   request: Request,
-  clientId: string,
+  consentId: string,
 ): Promise<Response> {
   const session = await requireOperatorSession(deps, request);
   if (session.kind !== "authorized") return session.response;
-  try {
-    const existing = await deps.run(deps.account.getMcpOAuthPolicy(clientId));
-    if (existing === null) return humanError("MCP client policy not found.", 404);
-    if (existing.state === "revoked") return humanError("Revoked access cannot be restored.", 403);
-    const form = await Schema.decodeUnknownPromise(PolicyForm)(
-      Object.fromEntries(await request.formData()),
-    );
-    const now = new Date().toISOString();
-    await deps.run(
-      deps.account.updateMcpOAuthPolicy({
-        clientId,
-        label: form.label.trim(),
-        policy: policyFromForm(form),
-        updatedAt: now,
-      }),
-    );
-    await deps.run(
-      deps.account.setMcpOAuthPolicyState({
-        clientId,
-        state: form.active === undefined ? "disabled" : "active",
-        updatedAt: now,
-      }),
-    );
-    return redirectResponse("/clients?updated=1");
-  } catch {
-    return humanError("Could not update that MCP client policy.", 400);
-  }
+  const form = await request.formData();
+  const policy = policyFromForm({
+    mailboxes: form.get("mailboxes"),
+    sendMode: form.get("sendMode"),
+    canRead: form.has("canRead"),
+    recipients: form.get("recipients"),
+    preapproved: form.get("preapproved"),
+  });
+  if (policy === null) return humanError("Could not read that policy.", 400);
+  const updated = await deps.run(deps.access.setPolicy(consentId, policy));
+  if (!updated) return humanError("That client has no consent to update.", 404);
+  return redirectResponse("/clients?updated=1");
 }
 
 async function revokeClientRoute(
@@ -199,10 +164,7 @@ async function revokeClientRoute(
 ): Promise<Response> {
   const session = await requireOperatorSession(deps, request);
   if (session.kind !== "authorized") return session.response;
-  const policy = await deps.run(
-    deps.account.revokeMcpOAuthPolicy(clientId, new Date().toISOString()),
-  );
-  if (policy === null) return humanError("MCP client policy not found.", 404);
+  await deps.run(deps.access.revoke(clientId));
   return redirectResponse("/clients?revoked=1");
 }
 
@@ -242,36 +204,6 @@ function assertDeviceScopes(scope: string): void {
   }
 }
 
-function policyFromForm(form: typeof PolicyForm.Type) {
-  const label = form.label.trim();
-  if (label.length === 0) throw new Error("Client label is required.");
-  const mailboxIds = parsePrincipalMailboxIds(form.mailboxIds);
-  if (mailboxIds.kind !== "ok") throw new Error("At least one mailbox ID is required.");
-  const recipientAllowlist = parsePrincipalRecipientAllowlist(form.recipientAllowlist);
-  if (recipientAllowlist.kind === "invalid_address") {
-    throw new Error("Recipient allowlist contains an invalid address.");
-  }
-  if (recipientAllowlist.kind !== "ok") throw new Error("At least one recipient is required.");
-  return Schema.decodeUnknownSync(PrincipalPolicy)({
-    mailboxIds: mailboxIds.mailboxIds,
-    canRead: form.canRead !== undefined,
-    canDelete: form.canDelete !== undefined,
-    sendMode: parseSendMode(form.sendMode, form.preapprovedRecipients),
-    recipientAllowlist: recipientAllowlist.recipientAllowlist,
-    canAdmin: form.canAdmin !== undefined,
-  });
-}
-
-function parseSendMode(
-  kind: "deny" | "allow" | "requireApproval",
-  preapprovedRecipients: string | undefined,
-): PrincipalSendMode {
-  if (kind !== "requireApproval") return { kind };
-  const parsed = parseMailAddressList(preapprovedRecipients ?? "");
-  if (parsed.kind !== "ok") throw new Error("Recipient list contains an invalid address.");
-  return requireApprovalSendMode(parsed.addresses);
-}
-
 function loginRedirect(request: Request): Response {
   const url = new URL(request.url);
   const next = `${url.pathname}${url.search}`;
@@ -285,7 +217,7 @@ function redirectResponse(location: string): Response {
   });
 }
 
-function humanResponse(page: ReturnType<typeof renderMcpClientsPage>): Response {
+function humanResponse(page: ReturnType<typeof renderClientsPage>): Response {
   return new Response(page.html, { status: page.status, headers: humanPageHeaders(page) });
 }
 

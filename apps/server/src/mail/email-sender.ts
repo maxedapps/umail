@@ -1,11 +1,11 @@
 import type * as Alchemy from "alchemy";
 import type * as Cloudflare from "alchemy/Cloudflare";
 import { normalizeRfcMessageId } from "@umail/api-contract";
-import type { MailHtmlPolicy, MailHtmlPolicyError, StoredMailHtml } from "@umail/mail-content";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import type { MailHtmlPolicy, MailHtmlPolicyError, StoredMailHtml } from "./html-policy.ts";
 import type { CompleteAttemptOutcome } from "../account/domain.ts";
 
 export type NamedMailboxSender = {

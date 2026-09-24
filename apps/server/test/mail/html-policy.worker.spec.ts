@@ -7,12 +7,12 @@ import {
   createMailHtmlPolicy,
   type MailHtmlAttachment,
   type StoredMailHtml,
-} from "../src/index.ts";
+} from "../../src/mail/html-policy.ts";
 import {
   MAIL_HTML_PARSE_LIMITS,
   MailHtmlResourceExhaustion,
   parseBoundedMailHtmlFragment,
-} from "../src/mail-html-parser.ts";
+} from "../../src/mail/html-parser.ts";
 
 const MESSAGE_ID = "in_worker_corpus";
 const APPLICATION_URL = new URL("https://mail.umail.test/inbox");

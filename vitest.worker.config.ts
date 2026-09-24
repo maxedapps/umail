@@ -8,16 +8,9 @@ import { bundleWorker } from "./tests/worker-bundle.ts";
 
 export default defineConfig(async () => {
   const stack = await evaluateApplication("dev");
-  // Build every deployed entrypoint so colocated resources are compiled at the runtime boundary.
-  await Promise.all(
-    ["Inbound", "IndexConsumer", "SendConsumer", "Recovery"].map(async (id) => {
-      const worker = requireWorker(stack, id);
-      await bundleWorker(fileURLToPath(worker.Props.main!), id, worker.Props);
-    }),
-  );
-  const api = requireWorker(stack, "Api");
-  const bundle = await bundleWorker(fileURLToPath(api.Props.main!), "Api", api.Props);
-  const environment = await resolveGraphValue(api.Props.env);
+  const app = requireWorker(stack, "App");
+  const bundle = await bundleWorker(fileURLToPath(app.Props.main!), "App", app.Props);
+  const environment = await resolveGraphValue(app.Props.env);
   const bindings: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(environment ?? {})) {
     const resolved = Redacted.isRedacted(value) ? Redacted.value(value) : value;
@@ -33,13 +26,16 @@ export default defineConfig(async () => {
   return {
     plugins: [
       cloudflareTest({
-        main: resolve(".alchemy/test-runtime/Api", bundle.files[0].path),
+        main: resolve(".alchemy/test-runtime/App", bundle.files[0].path),
         miniflare: {
           compatibilityDate: "2026-08-21",
           compatibilityFlags: ["nodejs_compat"],
           bindings,
           d1Databases: ["AuthDb"],
           r2Buckets: ["MailArchive"],
+          queueProducers: ["MailIndex"],
+          queueConsumers: { MailIndex: { maxBatchSize: 1 } },
+          email: { send_email: [{ name: "EMAIL" }] },
           durableObjects: { AccountStore: { className: "AccountStore", useSQLite: true } },
         },
       }),

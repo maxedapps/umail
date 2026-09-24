@@ -1,7 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { Client, JSONRPC_VERSION } from "@modelcontextprotocol/client";
 import {
   MAX_HEADER_BLOCK_BYTES,
@@ -30,6 +26,7 @@ import {
   jsonHeaders,
   operatorCookieHeaders,
   seedInboundMessage,
+  listMcpPolicyRows,
   seedMailbox,
   type World,
 } from "./world.ts";
@@ -73,7 +70,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
     const body = await response.text();
     expect(body).not.toContain(world.operatorAccessToken);
-    expect(await Effect.runPromise(world.account.listMcpOAuthPolicies())).toEqual([]);
+    expect(await listMcpPolicyRows(world)).toEqual([]);
   });
 
   it.each(["GET", "DELETE"])("answers %s /mcp with 405", async (method) => {
@@ -84,9 +81,6 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
 
   it("serves the AgentMail PNG icon without authentication", async () => {
     const world = await createWorld();
-    const expected = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "../../src/api/brand/icon.png"),
-    );
     const response = await world.fetch("http://umail.test/icon.png");
     const body = Buffer.from(await response.arrayBuffer());
 
@@ -95,7 +89,6 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     expect(body.subarray(0, 8)).toEqual(
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
-    expect(body.equals(expected)).toBe(true);
     expect((await world.fetch("http://umail.test/favicon.png")).status).toBe(200);
     expect((await world.fetch("http://umail.test/icon.png", { method: "POST" })).status).toBe(405);
   });
@@ -130,7 +123,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     expect(body).not.toContain("data:image/");
   });
 
-  it("completes DCR, S256 PKCE, first-use policy, and the modern 2026-07-28 protocol", async () => {
+  it("completes DCR, S256 PKCE, consent-time policy, and the modern 2026-07-28 protocol", async () => {
     const world = await createWorld();
     const registered = await registerMcpClient(world);
     expect(
@@ -139,8 +132,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         registered.clientId,
       ),
     ).toEqual([{ resourceId: "https://umail.test/mcp" }]);
-    expect(await Effect.runPromise(world.account.listMcpOAuthPolicies())).toEqual([]);
+    expect(await listMcpPolicyRows(world)).toEqual([]);
     const token = await issueMcpAccessToken(world, registered);
+    expect(await listMcpPolicyRows(world)).toHaveLength(1);
     const client = await connectedMcp(world, token.access_token);
     try {
       const listed = await client.listTools();
@@ -235,38 +229,25 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     expect(body).not.toContain('"protocolVersion":"2024-11-05"');
   });
 
-  it("applies policy disablement to the next request carrying the same JWT", async () => {
+  it("narrows a live grant, and revoking ends it at once until the operator consents again", async () => {
     const world = await createWorld();
+    const mailbox = await seedMailbox(world);
     const registered = await registerMcpClient(world, { label: "Live policy" });
     const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     try {
       expect((await client.listTools()).tools).toHaveLength(MCP_TOOL_NAMES.length);
+      await updatePolicy(world, registered.clientId, {
+        mailboxes: mailbox.id,
+        canRead: false,
+        sendMode: "deny",
+        recipients: "any",
+      });
+      const denied = await client.callTool({ name: "umail_list_threads", arguments: {} });
+      expect(denied.isError).toBe(true);
     } finally {
       await client.close();
     }
-
-    const disabled = await world.fetch(
-      `http://umail.test/clients/${encodeURIComponent(registered.clientId)}/policy`,
-      {
-        method: "POST",
-        redirect: "manual",
-        headers: operatorCookieHeaders(world.sessionCookie, {
-          "content-type": "application/x-www-form-urlencoded",
-        }),
-        body: new URLSearchParams({
-          label: "Live policy",
-          mailboxIds: "all",
-          canRead: "on",
-          sendMode: "deny",
-          recipientAllowlist: "any",
-        }).toString(),
-      },
-    );
-    expect(disabled.status).toBe(303);
-
-    const rejected = await rawToolsList(world, token.access_token);
-    expect(rejected.status).toBe(403);
 
     const revoked = await world.fetch(
       `http://umail.test/clients/${encodeURIComponent(registered.clientId)}/revoke`,
@@ -277,40 +258,39 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       },
     );
     expect(revoked.status).toBe(303);
-    expect(
-      (await Effect.runPromise(world.account.getMcpOAuthPolicy(registered.clientId)))?.state,
-    ).toBe("revoked");
     expect((await rawToolsList(world, token.access_token)).status).toBe(403);
-    expect(
-      (await Effect.runPromise(world.account.getMcpOAuthPolicy(registered.clientId)))?.state,
-    ).toBe("revoked");
+    expect(await listMcpPolicyRows(world)).toEqual([]);
+    const refreshed = await world.fetch("http://umail.test/api/auth/oauth2/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: token.refresh_token ?? "",
+        client_id: registered.clientId,
+        resource: "https://umail.test/mcp",
+      }).toString(),
+    });
+    expect(refreshed.status).toBe(400);
+    expect(await refreshed.text()).toContain("invalid_grant");
 
-    const independent = await registerMcpClient(world, { label: "Independent client" });
-    const independentToken = await issueMcpAccessToken(world, independent);
-    const independentClient = await connectedMcp(world, independentToken.access_token);
-    try {
-      expect((await independentClient.listTools()).tools).toHaveLength(MCP_TOOL_NAMES.length);
-    } finally {
-      await independentClient.close();
-    }
+    // The registration stays, so the client can ask again; the consent screen decides anew.
+    const again = await issueMcpAccessToken(world, registered, { sendMode: "allow" });
+    expect((await rawToolsList(world, again.access_token)).status).toBe(200);
   });
 
   it("returns a durable job from umail_send_message without claiming acceptance", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Sender",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Sender" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "allow",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Sender",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "allow",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     const send = (args: Record<string, unknown>) =>
       client.callTool({
@@ -352,20 +332,16 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   it("denies disallowed recipients without sending or persisting outbound mail", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Restricted recipients",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Restricted recipients" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "allow",
-      recipientAllowlist: "allowed@example.com",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Restricted recipients",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "allow",
-      recipientAllowlist: "allowed@example.com",
+      recipients: "allowed@example.com",
     });
     try {
       const result = await client.callTool({
@@ -394,19 +370,16 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   it("passes the API problem message through when sending from an unknown address", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Sender",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Sender" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "allow",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Sender",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "allow",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     try {
       const result = await client.callTool({
@@ -431,16 +404,14 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     }
   });
 
-  it("keeps administrative MCP clients subject to send, approval, and recipient policy", async () => {
+  it("keeps MCP clients subject to send, approval, and recipient policy", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Administrative sender",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Sender" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "allow",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     const submit = (requestId: string, to: ReadonlyArray<string>, cc: ReadonlyArray<string> = []) =>
       client.callTool({
@@ -456,11 +427,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       });
     try {
       await updatePolicy(world, registered.clientId, {
-        label: "Administrative sender",
-        mailboxIds: mailbox.id,
+        mailboxes: mailbox.id,
         sendMode: "requireApproval",
-        recipientAllowlist: "allowed@example.com",
-        canAdmin: true,
+        recipients: "allowed@example.com",
       });
       const pending = await submit("11111111-1111-4111-8111-111111111111", ["allowed@example.com"]);
       expect(pending.isError).not.toBe(true);
@@ -483,11 +452,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       expect(blocked.isError).toBe(true);
 
       await updatePolicy(world, registered.clientId, {
-        label: "Administrative sender",
-        mailboxIds: mailbox.id,
+        mailboxes: mailbox.id,
         sendMode: "deny",
-        recipientAllowlist: "any",
-        canAdmin: true,
+        recipients: "any",
       });
       const denied = await submit("33333333-3333-4333-8333-333333333333", ["allowed@example.com"]);
       expect(denied.isError).toBe(true);
@@ -506,19 +473,16 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   it("parks require-approval submits with OAuth client provenance", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Approval client",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Approval client" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "requireApproval",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Approval client",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "requireApproval",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     try {
       const result = await client.callTool({
@@ -541,7 +505,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         }),
       );
       expect(job?.requester.clientId).toBe(registered.clientId);
-      expect(job?.requester.label).toBe("Approval client");
+      expect(job?.requester.label).toBe(`OAuth client ${registered.clientId.slice(0, 12)}`);
     } finally {
       await client.close();
     }
@@ -550,20 +514,17 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   it("submits to a preapproved recipient without approval and parks everyone else", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const registered = await registerMcpClient(world, {
-      label: "Preapproved client",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Preapproved client" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "requireApproval",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Preapproved client",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "requireApproval",
-      recipientAllowlist: "any",
-      preapprovedRecipients: "trusted@example.com",
+      recipients: "any",
+      preapproved: "trusted@example.com",
     });
     const submit = (to: ReadonlyArray<string>, subject: string, requestId: string) =>
       client.callTool({
@@ -748,10 +709,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Header reader",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "deny",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     const getHeaders = (args: Record<string, string | boolean>) =>
       client.callTool({ name: "umail_get_message_headers", arguments: args });
@@ -795,11 +755,10 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "No reader",
-      mailboxIds: "all",
+      mailboxes: "all",
       canRead: false,
       sendMode: "deny",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     try {
       const result = await client.callTool({
@@ -844,19 +803,16 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
     const parent = await seedInboundMessage(world, mailbox.id, { id: "reply-parent" });
-    const registered = await registerMcpClient(world, {
-      label: "Replier",
-      mailboxIds: mailbox.id,
-      canRead: true,
+    const registered = await registerMcpClient(world, { label: "Replier" });
+    const token = await issueMcpAccessToken(world, registered, {
+      mailboxes: mailbox.id,
       sendMode: "allow",
     });
-    const token = await issueMcpAccessToken(world, registered);
     const client = await connectedMcp(world, token.access_token);
     await updatePolicy(world, registered.clientId, {
-      label: "Replier",
-      mailboxIds: mailbox.id,
+      mailboxes: mailbox.id,
       sendMode: "allow",
-      recipientAllowlist: "any",
+      recipients: "any",
     });
     try {
       const result = await client.callTool({
@@ -1020,35 +976,30 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   });
 });
 
+// Saves a policy through the clients page, as the operator would.
 async function updatePolicy(
   world: World,
   clientId: string,
   input: {
-    readonly label: string;
-    readonly mailboxIds: string;
+    readonly mailboxes: string;
     readonly canRead?: boolean;
     readonly sendMode: "deny" | "allow" | "requireApproval";
-    readonly recipientAllowlist: string;
-    readonly preapprovedRecipients?: string;
-    readonly canAdmin?: boolean;
+    readonly recipients: string;
+    readonly preapproved?: string;
   },
 ): Promise<void> {
+  const [consent] = await world.db.all("SELECT id FROM oauthConsent WHERE clientId = ?", clientId);
   const body = new URLSearchParams({
-    label: input.label,
-    mailboxIds: input.mailboxIds,
+    mailboxes: input.mailboxes,
     sendMode: input.sendMode,
-    recipientAllowlist: input.recipientAllowlist,
-    preapprovedRecipients: input.preapprovedRecipients ?? "",
-    active: "on",
+    recipients: input.recipients,
+    preapproved: input.preapproved ?? "",
   });
   if (input.canRead !== false) {
     body.set("canRead", "on");
   }
-  if (input.canAdmin === true) {
-    body.set("canAdmin", "on");
-  }
   const response = await world.fetch(
-    `http://umail.test/clients/${encodeURIComponent(clientId)}/policy`,
+    `http://umail.test/clients/${encodeURIComponent(String(consent?.id))}/policy`,
     {
       method: "POST",
       redirect: "manual",

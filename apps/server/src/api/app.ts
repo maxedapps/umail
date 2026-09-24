@@ -15,27 +15,25 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import type { MailHtmlPolicy } from "@umail/mail-content";
 import {
   Address,
   ApprovalPageGone,
   ApprovalPageNotFound,
   ApprovalToken,
   ApiProblem,
+  AddressForwarding,
   CurrentPrincipal,
-  ForwardingDestination,
   PublicApprovalApi,
   UmailApi,
-  type CreateDestinationPayload,
   type MailDomain,
   type Principal,
 } from "@umail/api-contract";
 
+import type { MailHtmlPolicy } from "../mail/html-policy.ts";
 import type { AccountStoreRpc } from "../account/worker.ts";
 import { decideApproval, reviewApproval } from "./approval-http.ts";
 import { attachmentResponseHeaders, rfc6266ContentDisposition } from "./attachments.ts";
-import type { AuthControlDatabase } from "../auth/auth-control.ts";
-import { gatedAuthHandler } from "../auth/deployment-gate.ts";
+import type { Access } from "../auth/access.ts";
 import type { UmailBetterAuth } from "../auth/options.ts";
 import { isOAuthRoute, serveOAuthRoute } from "../auth/oauth-routes.ts";
 import { isAgentMailIconPath, serveAgentMailIcon } from "./brand/identity.ts";
@@ -63,9 +61,6 @@ import {
   getThread,
   listJobs,
   listMessages,
-  listMcpClients,
-  getMcpClient,
-  setMcpClientPolicy,
   listSendingIdentities,
   listThreads,
   readAttachment,
@@ -76,7 +71,6 @@ import {
   submitMessage,
   type StoreHttpError,
 } from "./operations.ts";
-import { requireAdmin, requireDelete } from "./principal.ts";
 
 export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportError>()(
   "ArchiveTransportError",
@@ -98,7 +92,7 @@ export type ApiDeps = {
   readonly htmlPolicy: MailHtmlPolicy;
   readonly mailDomain: MailDomain;
   readonly auth: UmailBetterAuth;
-  readonly authDatabase: AuthControlDatabase;
+  readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
   readonly approvalClock: InstantClock;
@@ -119,12 +113,10 @@ export function apiLayers(deps: ApiDeps) {
   return Layer.mergeAll(
     addressesGroup(deps),
     sendingIdentitiesGroup(deps),
-    destinationsGroup(deps),
     threadsGroup(deps),
     messagesGroup(deps),
     submissionsGroup(deps),
     jobsGroup(deps),
-    mcpClientsGroup(deps),
     publicApprovalsGroup(deps),
     Etag.layer,
     HttpPlatformStub,
@@ -192,13 +184,7 @@ function serveBetterAuth(deps: ApiDeps) {
     if (blocked !== null) {
       return HttpServerResponse.fromWeb(blocked);
     }
-    const response = yield* Effect.promise(() =>
-      gatedAuthHandler(
-        deps.authDatabase,
-        (authRequest) => deps.auth.handler(authRequest),
-        webRequest.success,
-      ),
-    );
+    const response = yield* Effect.promise(() => deps.auth.handler(webRequest.success));
     return HttpServerResponse.fromWeb(response);
   });
 }
@@ -221,7 +207,6 @@ function addressesGroup(deps: ApiDeps) {
     handlers
       .handle("createAddress", ({ payload }) =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
           const now = yield* currentIso(deps);
           const address = yield* deps.account
             .createAddress(payload.localPart, deps.mailDomain, payload.displayName, now)
@@ -234,14 +219,12 @@ function addressesGroup(deps: ApiDeps) {
       )
       .handle("listAddresses", () =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
           const addresses = yield* deps.account.listAddresses().pipe(storeCall);
           return addresses.map((address) => new Address(address));
         }),
       )
       .handle("getAddress", ({ params }) =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
           const address = yield* deps.account.getAddress(params.id).pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.NotFound();
@@ -251,7 +234,6 @@ function addressesGroup(deps: ApiDeps) {
       )
       .handle("patchAddress", ({ params, payload }) =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
           const now = yield* currentIso(deps);
           const address = yield* deps.account.patchAddress(params.id, payload, now).pipe(storeCall);
           if (address === null) {
@@ -260,22 +242,30 @@ function addressesGroup(deps: ApiDeps) {
           return new Address(address);
         }),
       )
-      .handle("associateForwarding", ({ params, payload }) =>
+      .handle("setForwarding", ({ params, payload }) =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          const now = yield* currentIso(deps);
-          const address = yield* deps.account
-            .setAddressForwarding(params.id, payload.destinationId, now)
-            .pipe(storeCall);
+          const address = yield* deps.account.getAddress(params.id).pipe(storeCall);
           if (address === null) {
-            return yield* new HttpApiError.BadRequest();
+            return yield* new HttpApiError.NotFound();
           }
-          return new Address(address);
+          const destination = yield* deps.destinations
+            .ensure(payload.email)
+            .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
+          const now = yield* currentIso(deps);
+          const updated = yield* deps.account
+            .setAddressForwarding(address.id, destination.email, now)
+            .pipe(storeCall);
+          if (updated === null) {
+            return yield* new HttpApiError.NotFound();
+          }
+          return new AddressForwarding({
+            address: new Address(updated),
+            verified: destination.verified,
+          });
         }),
       )
       .handle("removeForwarding", ({ params }) =>
         Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
           const now = yield* currentIso(deps);
           const address = yield* deps.account
             .setAddressForwarding(params.id, null, now)
@@ -297,61 +287,6 @@ function sendingIdentitiesGroup(deps: ApiDeps) {
         return yield* listSendingIdentities(deps, principal);
       }),
     ),
-  );
-}
-
-function mcpClientsGroup(deps: ApiDeps) {
-  return HttpApiBuilder.group(UmailApi, "McpClients", (handlers) =>
-    handlers
-      .handle("listMcpClients", () =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* listMcpClients(deps);
-        }),
-      )
-      .handle("getMcpClient", ({ params }) =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* getMcpClient(deps, params.id);
-        }),
-      )
-      .handle("setMcpClientPolicy", ({ params, payload }) =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* setMcpClientPolicy(deps, params.id, payload);
-        }),
-      ),
-  );
-}
-
-function destinationsGroup(deps: ApiDeps) {
-  return HttpApiBuilder.group(UmailApi, "Destinations", (handlers) =>
-    handlers
-      .handle("createDestination", ({ payload }) =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* createDestination(deps, payload);
-        }),
-      )
-      .handle("listDestinations", () =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          const destinations = yield* deps.account.listDestinations().pipe(storeCall);
-          return destinations.map((destination) => new ForwardingDestination(destination));
-        }),
-      )
-      .handle("getDestination", ({ params }) =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* refreshDestination(deps, params.id);
-        }),
-      )
-      .handle("deleteDestination", ({ params }) =>
-        Effect.gen(function* () {
-          yield* requireAdmin(yield* CurrentPrincipal);
-          return yield* removeDestination(deps, params.id);
-        }),
-      ),
   );
 }
 
@@ -385,7 +320,6 @@ function threadsGroup(deps: ApiDeps) {
       .handle("softDeleteThread", ({ params }) =>
         Effect.gen(function* () {
           const principal = yield* CurrentPrincipal;
-          yield* requireDelete(principal);
           yield* softDeleteVisibleThread(deps, principal, params.id);
         }),
       ),
@@ -545,60 +479,6 @@ function approvalGoneError(): ApprovalPageGone {
   return new ApprovalPageGone({
     html: response.body,
     headers: response.headers,
-  });
-}
-
-function createDestination(
-  deps: ApiDeps,
-  payload: CreateDestinationPayload,
-): Effect.Effect<ForwardingDestination, ApiProblem | StoreHttpError> {
-  return Effect.gen(function* () {
-    const now = yield* currentIso(deps);
-    const created = yield* deps.destinations
-      .create(payload.email)
-      .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
-    const stored = yield* deps.account
-      .insertDestination(created.cloudflareId, created.email, created.verifiedAt, now)
-      .pipe(storeCall);
-    return new ForwardingDestination(stored);
-  });
-}
-
-function refreshDestination(
-  deps: ApiDeps,
-  id: string,
-): Effect.Effect<ForwardingDestination, StoreHttpError> {
-  return Effect.gen(function* () {
-    const stored = yield* deps.account.getDestination(id).pipe(storeCall);
-    if (stored === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    const remote = yield* deps.destinations.get(stored.cloudflareId).pipe(Effect.option);
-    if (remote._tag === "None") {
-      return new ForwardingDestination(stored);
-    }
-    const now = yield* currentIso(deps);
-    const updated = yield* deps.account
-      .updateDestinationStatus(id, remote.value.verifiedAt, now)
-      .pipe(storeCall);
-    if (updated === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    return new ForwardingDestination(updated);
-  });
-}
-
-function removeDestination(deps: ApiDeps, id: string): Effect.Effect<void, StoreHttpError> {
-  return Effect.gen(function* () {
-    const stored = yield* deps.account.getDestination(id).pipe(storeCall);
-    if (stored === null) {
-      return yield* new HttpApiError.NotFound();
-    }
-    yield* deps.destinations
-      .delete(stored.cloudflareId)
-      .pipe(Effect.mapError(() => new HttpApiError.BadRequest()));
-    const now = yield* currentIso(deps);
-    yield* deps.account.deleteDestination(id, now).pipe(storeCall);
   });
 }
 

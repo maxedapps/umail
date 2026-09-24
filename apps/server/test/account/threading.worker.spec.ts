@@ -2,6 +2,7 @@
 
 import {
   NormalizedRfcMessageId,
+  OPERATOR_POLICY,
   parseExternalMailAddress,
   parseMailDomain,
   SubmissionRequestId,
@@ -157,10 +158,11 @@ describe("account-store threading", () => {
     const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
     const sentId = submitted.job.messageId;
     expect(submitted.job.threadId).toBe(sentId);
-    const claimed = await store.claimDispatch({
+    const claimed = await store.claimJob({
       jobId: submitted.job.jobId,
       nowIso: NOW,
       claimExpiresAt: CLAIM_EXPIRES,
+      policy: OPERATOR_POLICY,
     });
     if (claimed.kind !== "claimed") {
       throw new Error("expected claim");
@@ -242,6 +244,7 @@ function operatorSubmit(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
+    policy: OPERATOR_POLICY,
     mailboxId,
     subject: "Direct",
     textBody: "body",

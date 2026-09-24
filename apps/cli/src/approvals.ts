@@ -1,5 +1,4 @@
 import { ApprovalToken, type ApprovalDecisionState } from "@umail/api-contract";
-import type { PublicApprovalClientEnvironment } from "@umail/api-contract/client";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -12,7 +11,7 @@ import * as Terminal from "effect/Terminal";
 import * as Prompt from "effect/unstable/cli/Prompt";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
-import { publicApprovalClientFromEnv } from "./client.ts";
+import { publicApprovalClient } from "./client.ts";
 
 export type ApprovalDecisionCommand = "approve" | "deny";
 
@@ -84,11 +83,10 @@ export interface ApprovalDecisionOutput {
 export function decideApproval(
   command: ApprovalDecisionCommand,
   tokenFile: string | undefined,
-  env: PublicApprovalClientEnvironment,
   httpClient: HttpClient.HttpClient,
 ) {
   return Effect.gen(function* () {
-    const client = yield* publicApprovalClientFromEnv(env, httpClient);
+    const client = yield* publicApprovalClient(httpClient);
     const tokenSource = yield* ApprovalTokenSource;
     const token = yield* tokenSource.readToken(tokenFile);
     const request =

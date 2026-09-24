@@ -3,12 +3,10 @@
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node"]
   },
-  "include": [
-    "src/**/*.ts",
-    "test/**/*.ts",
-    "vitest.account.config.ts",
-    "vitest.mail.config.ts",
-    "../../packages/mail-content/src/css-tree-subpaths.d.ts"
-  ],
-  "exclude": ["test/api/human-pages.browser.spec.ts", "test/api/human-pages-browser-fixture.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.worker.config.ts"],
+  "exclude": [
+    "test/api/human-pages.browser.spec.ts",
+    "test/api/human-pages-browser-fixture.ts",
+    "test/mail/html-semantics.browser.spec.ts"
+  ]
 }

@@ -68,7 +68,7 @@ class MemoryAddressProvisioning {
         address,
         displayName: displayName ?? null,
         active: true,
-        forwardingDestinationId: null,
+        forwardTo: null,
         createdAt: nowIso,
         updatedAt: nowIso,
       } satisfies AccountAddress;

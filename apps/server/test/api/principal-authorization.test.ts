@@ -11,8 +11,6 @@ import {
 import {
   mailboxAllowed,
   mailboxScopeOf,
-  requireAdmin,
-  requireDelete,
   requireRead,
   requireSend,
 } from "../../src/api/principal.ts";
@@ -27,11 +25,9 @@ const MCP_PRINCIPAL = {
   },
   policy: {
     mailboxIds: ["mailbox-1"],
-    canRead: true,
-    canDelete: false,
+    canRead: false,
     sendMode: requireApprovalSendMode(),
     recipientAllowlist: [mailAddress("recipient@example.com")],
-    canAdmin: false,
   },
 } as const satisfies Principal;
 
@@ -48,24 +44,18 @@ describe("OAuth principal authorization", () => {
       policy: {
         mailboxIds: "all",
         canRead: true,
-        canDelete: true,
         sendMode: { kind: "allow" },
         recipientAllowlist: "any",
-        canAdmin: true,
       },
     });
   });
 
-  it("enforces live MCP mailbox, delete, and admin policy", async () => {
+  it("enforces live MCP mailbox, read, and send policy", async () => {
     expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-1")).toBe(true);
     expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-2")).toBe(false);
     expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
-    await expect(Effect.runPromise(requireRead(MCP_PRINCIPAL))).resolves.toBeUndefined();
     await expect(Effect.runPromise(requireSend(MCP_PRINCIPAL))).resolves.toBeUndefined();
-    await expect(Effect.runPromise(requireDelete(MCP_PRINCIPAL))).rejects.toMatchObject({
-      _tag: "Forbidden",
-    });
-    await expect(Effect.runPromise(requireAdmin(MCP_PRINCIPAL))).rejects.toMatchObject({
+    await expect(Effect.runPromise(requireRead(MCP_PRINCIPAL))).rejects.toMatchObject({
       _tag: "Forbidden",
     });
   });

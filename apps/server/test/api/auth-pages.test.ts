@@ -83,7 +83,11 @@ describe("auth HTML pages", () => {
     expect(html).toContain('id="deny" type="button">Deny request</button>');
     expect(html).toContain('fetch("/api/auth/oauth2/consent"');
     expect(html).toContain("signedOAuthQuery(location.search)");
-    expect(html).toContain("oauth_query: oauthQuery");
+    expect(html).toContain("body.oauth_query = oauthQuery;");
+    expect(html).toContain('<input id="mailboxes" name="mailboxes" type="text" value="all"');
+    expect(html).toContain('<option value="requireApproval" selected>');
+    expect(html).toContain("body.mailboxes = mailboxesField.value;");
+    expect(html).toContain("body.sendMode = sendModeField.value;");
     expect(html).toContain("acceptButton.disabled = pending;");
     expect(html).toContain("denyButton.disabled = pending;");
     expect(html).toContain('status.setAttribute("role", kind === "error" ? "alert" : "status")');

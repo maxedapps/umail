@@ -1,29 +1,20 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  AssociateForwardingPayload,
   ComposeSubmissionPayload,
   CreateAddressPayload,
-  CreateDestinationPayload,
   ListJobsQuery,
   ListMessagesQuery,
   ListThreadMessagesQuery,
   ListThreadsQuery,
   PatchAddressPayload,
   ReplySubmissionPayload,
+  SetForwardingPayload,
   SubmissionRequestId,
   parseUtcInstant,
   type MailboxAddress,
-  UpdateMcpClientPolicyPayload,
-  type PrincipalPolicy,
-  requireApprovalSendMode,
-  parsePrincipalRecipientAllowlist,
-  parsePrincipalMailboxIds,
-  parseMailAddressList,
 } from "@umail/api-contract";
-import type { UmailClientEnvironment } from "@umail/api-contract/client";
 import * as Console from "effect/Console";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -37,7 +28,7 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 
 import { decideApproval } from "../approvals.ts";
 import { login, logout } from "../auth.ts";
-import { clientFromEnv } from "../client.ts";
+import { umailClient } from "../client.ts";
 import {
   ccFlag,
   cursorFlag,
@@ -56,36 +47,17 @@ import {
   toFlag,
   tokenFileFlag,
   unreadFlag,
-  activeFlag,
-  canAdminFlag,
-  canDeleteFlag,
-  canReadFlag,
-  clientLabelFlag,
-  mailboxesFlag,
-  preapprovedFlag,
-  recipientAllowlistFlag,
-  sendModeFlag,
+  forwardEmailFlag,
 } from "./flags.ts";
 
 const SUBMIT_TRANSPORT_RETRIES = 2;
 
-export class CliEnvironment extends Context.Service<CliEnvironment, UmailClientEnvironment>()(
-  "umail/CliEnvironment",
-) {}
-
-type UmailClient = Effect.Success<ReturnType<typeof clientFromEnv>>;
+type UmailClient = Effect.Success<ReturnType<typeof umailClient>>;
 
 class IneligibleSendingIdentityError extends Data.TaggedError("IneligibleSendingIdentityError")<{
   readonly address: MailboxAddress;
 }> {
   override readonly message = `No eligible sending identity matches --from: ${this.address}`;
-}
-
-class InvalidPolicyListError extends Data.TaggedError("InvalidPolicyListError")<{
-  readonly flag: string;
-  readonly detail: string;
-}> {
-  override readonly message = `--${this.flag}: ${this.detail}`;
 }
 
 class MissingMessageBodyError extends Data.TaggedError("MissingMessageBodyError") {
@@ -104,19 +76,19 @@ const pageFlags = { limit: limitFlag, cursor: cursorFlag };
 
 const loginCommand = Command.make("login", {}, () =>
   Effect.gen(function* () {
-    yield* login(yield* CliEnvironment);
+    yield* login();
     yield* printJson({ authenticated: true });
   }),
 ).pipe(Command.withDescription("Authorize this CLI through the browser device flow"));
 
 const logoutCommand = Command.make("logout", {}, () =>
   Effect.gen(function* () {
-    yield* logout(yield* CliEnvironment);
+    yield* logout();
     yield* printJson({ ok: true });
   }),
 ).pipe(
   Command.withDescription(
-    "Revoke refresh access and remove local OAuth credentials from the owner-only state file",
+    "Revoke this CLI's access on the server, then remove the local OAuth credentials",
   ),
 );
 
@@ -172,55 +144,29 @@ const sendingIdentitiesCommand = Command.make("sending-identities").pipe(
   ]),
 );
 
-const destinationsCommand = Command.make("destinations").pipe(
-  Command.withDescription("Forwarding destinations"),
-  Command.withSubcommands([
-    Command.make("list", {}, () =>
-      callApi((client) => client.Destinations.listDestinations({})),
-    ).pipe(Command.withDescription("List forwarding destinations")),
-    Command.make(
-      "create",
-      { email: Flag.string("email").pipe(Flag.withDescription("Destination email")) },
-      ({ email }) =>
-        callApi((client) =>
-          client.Destinations.createDestination({
-            payload: new CreateDestinationPayload({ email }),
-          }),
-        ),
-    ).pipe(Command.withDescription("Create a forwarding destination")),
-    Command.make("get", { id: idFlag }, ({ id }) =>
-      callApi((client) => client.Destinations.getDestination({ params: { id } })),
-    ).pipe(Command.withDescription("Get a forwarding destination")),
-    Command.make("delete", { id: idFlag }, ({ id }) =>
-      callApi((client) =>
-        client.Destinations.deleteDestination({ params: { id } }).pipe(Effect.as({ ok: true })),
-      ),
-    ).pipe(Command.withDescription("Delete a forwarding destination")),
-  ]),
-);
-
 const addressIdFlag = Flag.string("address-id").pipe(Flag.withDescription("Address id"));
 
 const forwardingCommand = Command.make("forwarding").pipe(
-  Command.withDescription("Address forwarding"),
+  Command.withDescription("Forward an address's inbound mail to another inbox"),
   Command.withSubcommands([
     Command.make(
-      "associate",
-      {
-        addressId: addressIdFlag,
-        destinationId: Flag.string("destination-id").pipe(Flag.withDescription("Destination id")),
-      },
-      ({ addressId, destinationId }) =>
+      "set",
+      { addressId: addressIdFlag, email: forwardEmailFlag },
+      ({ addressId, email }) =>
         callApi((client) =>
-          client.Addresses.associateForwarding({
+          client.Addresses.setForwarding({
             params: { id: addressId },
-            payload: new AssociateForwardingPayload({ destinationId }),
+            payload: new SetForwardingPayload({ email }),
           }),
         ),
-    ).pipe(Command.withDescription("Associate a destination with an address")),
+    ).pipe(
+      Command.withDescription(
+        "Forward to an email; Cloudflare forwards once that inbox confirms its verification link",
+      ),
+    ),
     Command.make("remove", { addressId: addressIdFlag }, ({ addressId }) =>
       callApi((client) => client.Addresses.removeForwarding({ params: { id: addressId } })),
-    ).pipe(Command.withDescription("Remove forwarding from an address")),
+    ).pipe(Command.withDescription("Stop forwarding an address")),
   ]),
 );
 
@@ -401,62 +347,6 @@ const approvalsCommand = Command.make("approvals").pipe(
   ]),
 );
 
-const clientsSetPolicy = Command.make(
-  "set-policy",
-  {
-    id: idFlag,
-    label: clientLabelFlag,
-    sendMode: sendModeFlag,
-    preapproved: preapprovedFlag,
-    mailboxes: mailboxesFlag,
-    recipients: recipientAllowlistFlag,
-    active: activeFlag,
-    canRead: canReadFlag,
-    canDelete: canDeleteFlag,
-    canAdmin: canAdminFlag,
-  },
-  (config) =>
-    Effect.gen(function* () {
-      const client = yield* requireClient();
-      const current = yield* client.McpClients.getMcpClient({ params: { id: config.id } });
-      const { policy } = current;
-      const sendMode = yield* resolveSendMode(policy.sendMode, config.sendMode, config.preapproved);
-      const mailboxIds = yield* resolveMailboxIds(policy.mailboxIds, config.mailboxes);
-      const recipientAllowlist = yield* resolveRecipientAllowlist(
-        policy.recipientAllowlist,
-        config.recipients,
-      );
-      const payload = new UpdateMcpClientPolicyPayload({
-        label: Option.getOrElse(config.label, () => current.label),
-        active: Option.getOrElse(config.active, () => current.state === "active"),
-        policy: {
-          mailboxIds,
-          canRead: Option.getOrElse(config.canRead, () => policy.canRead),
-          canDelete: Option.getOrElse(config.canDelete, () => policy.canDelete),
-          sendMode,
-          recipientAllowlist,
-          canAdmin: Option.getOrElse(config.canAdmin, () => policy.canAdmin),
-        },
-      });
-      yield* printJson(
-        yield* client.McpClients.setMcpClientPolicy({ params: { id: config.id }, payload }),
-      );
-    }),
-).pipe(Command.withDescription("Replace one MCP client policy; omitted flags keep their value"));
-
-const clientsCommand = Command.make("clients").pipe(
-  Command.withDescription("MCP OAuth clients"),
-  Command.withSubcommands([
-    Command.make("list", {}, () => callApi((client) => client.McpClients.listMcpClients({}))).pipe(
-      Command.withDescription("List MCP OAuth clients and their policies"),
-    ),
-    Command.make("get", { id: idFlag }, ({ id }) =>
-      callApi((client) => client.McpClients.getMcpClient({ params: { id } })),
-    ).pipe(Command.withDescription("Get one MCP OAuth client policy")),
-    clientsSetPolicy,
-  ]),
-);
-
 export const umailCommand = Command.make("umail").pipe(
   Command.withDescription("AgentMail command-line client"),
   Command.withSubcommands([
@@ -464,23 +354,17 @@ export const umailCommand = Command.make("umail").pipe(
     logoutCommand,
     addressesCommand,
     sendingIdentitiesCommand,
-    destinationsCommand,
     forwardingCommand,
     threadsCommand,
     messagesCommand,
     jobsCommand,
     attachmentsCommand,
     approvalsCommand,
-    clientsCommand,
   ]),
 );
 
 function requireClient() {
-  return Effect.gen(function* () {
-    const env = yield* CliEnvironment;
-    const httpClient = yield* HttpClient.HttpClient;
-    return yield* clientFromEnv(env, httpClient);
-  });
+  return Effect.flatMap(HttpClient.HttpClient, umailClient);
 }
 
 /** Runs one authenticated API call and prints its result as JSON. */
@@ -528,10 +412,9 @@ function download<E, R>(
 function approvalDecisionCommand(decision: "approve" | "deny", description: string) {
   return Command.make(decision, { tokenFile: tokenFileFlag }, ({ tokenFile }) =>
     Effect.gen(function* () {
-      const env = yield* CliEnvironment;
       const httpClient = yield* HttpClient.HttpClient;
       yield* printJson(
-        yield* decideApproval(decision, Option.getOrUndefined(tokenFile), env, httpClient),
+        yield* decideApproval(decision, Option.getOrUndefined(tokenFile), httpClient),
       );
     }),
   ).pipe(Command.withDescription(description));
@@ -553,62 +436,6 @@ function retryTransport<A, E, R>(effect: Effect.Effect<A, E, R>) {
     times: SUBMIT_TRANSPORT_RETRIES,
     while: (error) =>
       HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError",
-  });
-}
-
-function resolveMailboxIds(stored: PrincipalPolicy["mailboxIds"], supplied: Option.Option<string>) {
-  return Effect.gen(function* () {
-    if (Option.isNone(supplied)) return stored;
-    const parsed = parsePrincipalMailboxIds(supplied.value);
-    if (parsed.kind !== "ok") {
-      return yield* new InvalidPolicyListError({
-        flag: "mailboxes",
-        detail: "expected 'all' or at least one mailbox id",
-      });
-    }
-    return parsed.mailboxIds;
-  });
-}
-
-function resolveRecipientAllowlist(
-  stored: PrincipalPolicy["recipientAllowlist"],
-  supplied: Option.Option<string>,
-) {
-  return Effect.gen(function* () {
-    if (Option.isNone(supplied)) return stored;
-    const parsed = parsePrincipalRecipientAllowlist(supplied.value);
-    if (parsed.kind === "ok") return parsed.recipientAllowlist;
-    return yield* new InvalidPolicyListError({
-      flag: "recipients",
-      detail:
-        parsed.kind === "invalid_address"
-          ? `'${parsed.value}' is not a valid email address`
-          : "expected 'any' or at least one address",
-    });
-  });
-}
-
-function resolveSendMode(
-  current: PrincipalPolicy["sendMode"],
-  sendMode: Option.Option<"deny" | "allow" | "requireApproval">,
-  preapproved: Option.Option<string>,
-) {
-  return Effect.gen(function* () {
-    const mode = Option.getOrElse(sendMode, () => current.kind);
-    if (mode !== "requireApproval") return { kind: mode } as const;
-    if (Option.isNone(preapproved)) {
-      return requireApprovalSendMode(
-        current.kind === "requireApproval" ? current.preapprovedRecipients : [],
-      );
-    }
-    const parsed = parseMailAddressList(preapproved.value);
-    if (parsed.kind !== "ok") {
-      return yield* new InvalidPolicyListError({
-        flag: "preapproved",
-        detail: `'${parsed.value}' is not a valid email address`,
-      });
-    }
-    return requireApprovalSendMode(parsed.addresses);
   });
 }
 

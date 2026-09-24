@@ -75,12 +75,10 @@ export function decideApproval(
       }
       return { kind: "redirect", state: lookup.approval.state };
     }
-    // A due approval skips the review: the store expires it instead of deciding it.
-    if (lookup.approval.expiresAt > now) {
-      const review = yield* reviewApproval(deps, token);
-      if (review.kind !== "available") {
-        return review;
-      }
+    // A due approval is gone; the store's alarm, not this request, records its expiry.
+    const review = yield* reviewApproval(deps, token);
+    if (review.kind !== "available") {
+      return review;
     }
     const claimed = yield* deps.account
       .decideApproval({ tokenHash: lookup.approval.tokenHash, decision, nowIso: now })

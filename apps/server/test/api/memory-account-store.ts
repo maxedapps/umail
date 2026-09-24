@@ -1,19 +1,28 @@
 import { applyAccountSchema } from "../../src/account/commands.ts";
-import {
-  type AccountSqlRow,
-  type AccountSqlValue,
-  type AccountSqliteStorage,
-} from "../../src/account/sqlite.ts";
+import type { AccountStorage } from "../../src/account/due-work.ts";
+import { type AccountSqlRow, type AccountSqlValue } from "../../src/account/sqlite.ts";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 import { makeAccountStoreRpc, type AccountStoreRpc } from "../../src/account/worker.ts";
 
 const TEST_NOW = "2026-01-01T00:00:00.000Z";
 
-export class MemoryAccountSqliteStorage implements AccountSqliteStorage {
+export class MemoryAccountSqliteStorage implements AccountStorage {
   readonly #sqlite = new DatabaseSync(":memory:");
   writeCount = 0;
+  // The Durable Object alarm, in epoch milliseconds.
+  alarm: number | null = null;
   #closed = false;
+
+  setAlarm(scheduledTime: number): Promise<void> {
+    this.alarm = scheduledTime;
+    return Promise.resolve();
+  }
+
+  deleteAlarm(): Promise<void> {
+    this.alarm = null;
+    return Promise.resolve();
+  }
 
   close(): void {
     if (this.#closed) {

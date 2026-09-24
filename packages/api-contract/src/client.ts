@@ -1,5 +1,7 @@
+import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
@@ -14,16 +16,8 @@ export interface UmailClientConfig {
   readonly accessToken: Redacted.Redacted<string>;
 }
 
-export interface UmailClientEnvironment {
-  readonly UMAIL_URL?: string | undefined;
-}
-
 export interface PublicApprovalClientConfig {
   readonly baseUrl: string;
-}
-
-export interface PublicApprovalClientEnvironment {
-  readonly UMAIL_URL?: string | undefined;
 }
 
 interface UmailClientConfigurationErrorFields {
@@ -65,16 +59,22 @@ function parseBaseUrl(value: string) {
   );
 }
 
-export function configFromEnvironment(env: UmailClientEnvironment) {
-  const baseUrlValue = env.UMAIL_URL;
-  if (baseUrlValue === undefined) {
-    return Effect.fail(new UmailClientConfigurationError({ message: "UMAIL_URL is required" }));
-  }
-  return Effect.map(
-    parseBaseUrl(baseUrlValue),
-    (baseUrl) => ({ baseUrl }) satisfies PublicApprovalClientConfig,
-  );
-}
+// The AgentMail origin, from UMAIL_URL.
+export const umailBaseUrl: Effect.Effect<string, UmailClientConfigurationError> = Config.option(
+  Config.string("UMAIL_URL"),
+).pipe(
+  Effect.mapError(
+    () =>
+      new UmailClientConfigurationError({ message: "UMAIL_URL must be a valid HTTP(S) origin" }),
+  ),
+  Effect.flatMap(
+    Option.match({
+      onNone: () =>
+        Effect.fail(new UmailClientConfigurationError({ message: "UMAIL_URL is required" })),
+      onSome: parseBaseUrl,
+    }),
+  ),
+);
 
 export function withUmailRequestHeaders(client: HttpClient.HttpClient, config: UmailClientConfig) {
   return HttpClient.mapRequest(client, (request) =>

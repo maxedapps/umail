@@ -1,22 +1,22 @@
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+
 import {
   MailHtmlPolicyError,
   type MailHtmlMaterialization,
   type MailHtmlPolicy,
   type MailHtmlSanitization,
   type StoredMailHtml,
-} from "@umail/mail-content";
-
+} from "../../src/mail/html-policy.ts";
 import {
   ArchiveTransportError,
   type MailArchiveReader,
   type InstantClock,
 } from "../../src/api/app.ts";
 import {
-  DestinationsError,
-  type CloudflareDestination,
+  DestinationError,
   type DestinationsClient,
+  type ForwardingDestination,
 } from "../../src/api/destinations.ts";
 
 export class MemoryArchive implements MailArchiveReader {
@@ -56,59 +56,29 @@ export class MemoryApprovalClock implements InstantClock {
   }
 }
 
+// Cloudflare's account-wide destinations: `verify` stands in for the owner clicking the link.
 export class MemoryDestinations implements DestinationsClient {
-  readonly items = new Map<string, CloudflareDestination>();
-  readonly createCalls: string[] = [];
-  readonly getCalls: string[] = [];
-  readonly deleteCalls: string[] = [];
+  readonly ensureCalls: string[] = [];
+  readonly #verified = new Set<string>();
   #failMessage: string | null = null;
+
+  verify(email: string): void {
+    this.#verified.add(email.toLowerCase());
+  }
 
   failNext(message: string): void {
     this.#failMessage = message;
   }
 
-  create(email: string): Effect.Effect<CloudflareDestination, DestinationsError> {
+  ensure(email: string): Effect.Effect<ForwardingDestination, DestinationError> {
     return Effect.suspend(() => {
-      this.createCalls.push(email);
+      this.ensureCalls.push(email);
       if (this.#failMessage !== null) {
         const message = this.#failMessage;
         this.#failMessage = null;
-        return new DestinationsError({ reason: "http_failed", message });
+        return new DestinationError({ message });
       }
-      const destination: CloudflareDestination = {
-        cloudflareId: crypto.randomUUID(),
-        email,
-        verifiedAt: null,
-      };
-      this.items.set(destination.cloudflareId, destination);
-      return Effect.succeed(destination);
-    });
-  }
-
-  get(cloudflareId: string): Effect.Effect<CloudflareDestination, DestinationsError> {
-    return Effect.suspend(() => {
-      this.getCalls.push(cloudflareId);
-      const item = this.items.get(cloudflareId);
-      if (item === undefined) {
-        return new DestinationsError({
-          reason: "missing",
-          message: "Could not create the forwarding destination.",
-        });
-      }
-      return Effect.succeed(item);
-    });
-  }
-
-  delete(cloudflareId: string): Effect.Effect<void, DestinationsError> {
-    return Effect.suspend(() => {
-      this.deleteCalls.push(cloudflareId);
-      if (this.#failMessage !== null) {
-        const message = this.#failMessage;
-        this.#failMessage = null;
-        return new DestinationsError({ reason: "http_failed", message });
-      }
-      this.items.delete(cloudflareId);
-      return Effect.void;
+      return Effect.succeed({ email, verified: this.#verified.has(email.toLowerCase()) });
     });
   }
 }

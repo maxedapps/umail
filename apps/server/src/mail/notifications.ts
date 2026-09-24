@@ -17,7 +17,7 @@ export const APPROVAL_TTL_HOURS = 24;
 
 const KEY_LENGTH = 32;
 
-// The raw `UMAIL_NOTIFICATION_KEY` bytes shared by Api and SendConsumer.
+// The raw `UMAIL_NOTIFICATION_KEY` bytes, shared by the API and the store that sends notifications.
 export type NotificationKey = Uint8Array<ArrayBuffer>;
 
 export function notificationKeyFromSecret(secret: string): NotificationKey {
@@ -29,8 +29,8 @@ export function notificationKeyFromSecret(secret: string): NotificationKey {
 }
 
 // The review-link token is `hex(HMAC-SHA256(key, approvalId))`. The approval id is generated here on
-// the server and never shown to clients, and only the token's hash is stored, so SendConsumer
-// re-derives the link instead of reading it back from storage.
+// the server and never shown to clients, and only the token's hash is stored, so the store's
+// due-work pass re-derives the link instead of reading it back from storage.
 export async function deriveApprovalToken(
   key: NotificationKey,
   approvalId: string,

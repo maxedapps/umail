@@ -1,46 +1,46 @@
-import { isExpectedStoreFailure, type AccountStoreError } from "./errors.ts";
+import { OPERATOR_POLICY, constructMailboxAddress, type MailDomain } from "@umail/api-contract";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+
+import { createMailHtmlPolicy } from "../mail/html-policy.ts";
+import { makeAccess, type AccessDatabase } from "../auth/access.ts";
+import { cloudflareEmailSender } from "../mail/email-sender.ts";
+import { notificationKeyFromSecret } from "../mail/notifications.ts";
+import { AuthDb, MailIndex } from "../resources.ts";
+import { currentSite, operatorEmail } from "../site.ts";
+import {
+  createAddress,
+  getAddress,
+  getAddressByMailbox,
+  listAddresses,
+  listSendingIdentities,
+  patchAddress,
+  resolveSendingIdentity,
+  setAddressForwarding,
+} from "./administration.ts";
 import {
   applyAccountSchema,
   acceptInbound,
   failInboundReceiptPolicy,
   getInboundReceipt,
   observeInboundForward,
-  redriveDueInboundReceipts,
   registerInboundReceipt,
 } from "./commands.ts";
+import type { OutboundRequester } from "./domain.ts";
+import { armDueWork, runDueWork, type AccountStorage } from "./due-work.ts";
+import { isExpectedStoreFailure, type AccountStoreError } from "./errors.ts";
 import {
-  claimDispatch,
-  completeAttempt,
-  getOutboundDispatch,
   decideApproval,
   getOutboundJob,
   listOutboundJobs,
   lookupApprovalByTokenHash,
-  recoverOutbound,
-  rejectReadyDispatch,
   submitOutbound,
 } from "./jobs.ts";
-import {
-  createAddress,
-  deleteDestination,
-  ensureMcpOAuthPolicy,
-  getAddress,
-  getAddressByMailbox,
-  getDestination,
-  getMcpOAuthPolicy,
-  insertDestination,
-  listAddresses,
-  listDestinations,
-  listMcpOAuthPolicies,
-  listSendingIdentities,
-  patchAddress,
-  resolveSendingIdentity,
-  revokeMcpOAuthPolicy,
-  setAddressForwarding,
-  setMcpOAuthPolicyState,
-  updateDestinationStatus,
-  updateMcpOAuthPolicy,
-} from "./administration.ts";
 import {
   getMessageBody,
   getMessageSource,
@@ -52,12 +52,6 @@ import {
   markThreadRead,
   softDeleteThread,
 } from "./queries.ts";
-import { type AccountSqliteStorage } from "./sqlite.ts";
-import { constructMailboxAddress, parseMailDomain, type MailDomain } from "@umail/api-contract";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Config from "effect/Config";
-import * as DateTime from "effect/DateTime";
-import * as Effect from "effect/Effect";
 
 // Expected domain errors stay typed failures; anything else is a defect, logged here inside the DO.
 const runStore = <A>(run: () => A): Effect.Effect<A, AccountStoreError> =>
@@ -68,20 +62,28 @@ const runStore = <A>(run: () => A): Effect.Effect<A, AccountStoreError> =>
     Effect.tapDefect((defect) => Effect.logError("AccountStore call failed", defect)),
   );
 
-export function makeAccountStoreRpc(storage: AccountSqliteStorage) {
+export function makeAccountStoreRpc(storage: AccountStorage) {
   const call =
-    <Args extends ReadonlyArray<unknown>, A>(
-      fn: (storage: AccountSqliteStorage, ...args: Args) => A,
-    ) =>
+    <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
     (...args: Args) =>
       runStore(() => fn(storage, ...args));
+  // Calls that can create due work arm the alarm for it.
+  const callAndArm =
+    <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
+    (...args: Args) =>
+      call(fn)(...args).pipe(
+        Effect.tap(() =>
+          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            Effect.promise(() => armDueWork(storage, now)),
+          ),
+        ),
+      );
   return {
     acceptInbound: call(acceptInbound),
-    registerInboundReceipt: call(registerInboundReceipt),
+    registerInboundReceipt: callAndArm(registerInboundReceipt),
     observeInboundForward: call(observeInboundForward),
     getInboundReceipt: call(getInboundReceipt),
     failInboundReceiptPolicy: call(failInboundReceiptPolicy),
-    redriveDueInboundReceipts: call(redriveDueInboundReceipts),
     listMessageSummaries: call(listMessageSummaries),
     listThreadSummaries: call(listThreadSummaries),
     listThreadMessageSummaries: call(listThreadMessageSummaries),
@@ -98,28 +100,12 @@ export function makeAccountStoreRpc(storage: AccountSqliteStorage) {
     patchAddress: call(patchAddress),
     listSendingIdentities: call(listSendingIdentities),
     resolveSendingIdentity: call(resolveSendingIdentity),
-    listDestinations: call(listDestinations),
-    getDestination: call(getDestination),
-    insertDestination: call(insertDestination),
     setAddressForwarding: call(setAddressForwarding),
-    updateDestinationStatus: call(updateDestinationStatus),
-    deleteDestination: call(deleteDestination),
-    getMcpOAuthPolicy: call(getMcpOAuthPolicy),
-    listMcpOAuthPolicies: call(listMcpOAuthPolicies),
-    ensureMcpOAuthPolicy: call(ensureMcpOAuthPolicy),
-    updateMcpOAuthPolicy: call(updateMcpOAuthPolicy),
-    setMcpOAuthPolicyState: call(setMcpOAuthPolicyState),
-    revokeMcpOAuthPolicy: call(revokeMcpOAuthPolicy),
-    submitOutbound: call(submitOutbound),
+    submitOutbound: callAndArm(submitOutbound),
     lookupApprovalByTokenHash: call(lookupApprovalByTokenHash),
-    decideApproval: call(decideApproval),
-    claimDispatch: call(claimDispatch),
-    completeAttempt: call(completeAttempt),
-    rejectReadyDispatch: call(rejectReadyDispatch),
-    getOutboundDispatch: call(getOutboundDispatch),
+    decideApproval: callAndArm(decideApproval),
     getOutboundJob: call(getOutboundJob),
     listOutboundJobs: call(listOutboundJobs),
-    recoverOutbound: call(recoverOutbound),
   };
 }
 
@@ -129,37 +115,67 @@ export class AccountStore extends Cloudflare.DurableObject<AccountStore, Account
   "AccountStore",
 ) {}
 
-// Single-operator service: every Worker addresses the one mailbox by this fixed name.
+// Single-operator service: the Worker addresses the one mailbox by this fixed name.
 export const OPERATOR_ACCOUNT = "operator";
 
-export const AccountStoreLive = AccountStore.make<never>(
+export const AccountStoreLive = AccountStore.make(
   Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
+    const site = yield* currentSite;
+    const email = yield* Cloudflare.Email.Send(Cloudflare.Email.SendEmail("EMAIL"));
+    const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
+    const authDb = yield* Cloudflare.D1.QueryDatabase(AuthDb);
+    const notificationSecret = yield* Config.redacted("UMAIL_NOTIFICATION_KEY");
+    const approvalAdminEmail = yield* operatorEmail;
+    const htmlPolicy = createMailHtmlPolicy();
     return Effect.gen(function* () {
       const storage = state.raw.storage;
-      const nowIso = DateTime.formatIso(yield* DateTime.now);
-      applyAccountSchema(storage, nowIso);
+      const now = yield* DateTime.now;
+      applyAccountSchema(storage, DateTime.formatIso(now));
       const rpc = makeAccountStoreRpc(storage);
-      const previewMailboxes = yield* Config.string("UMAIL_PREVIEW_MAILBOXES").pipe(
-        Config.withDefault(""),
-        Effect.orDie,
-      );
-      if (previewMailboxes === "") {
-        return rpc;
+      if (site.kind === "preview") {
+        yield* seedDevelopmentAddresses(rpc, {
+          mailDomain: site.mailDomain,
+          localParts: site.testLocalParts,
+          nowIso: DateTime.formatIso(now),
+        }).pipe(Effect.orDie);
       }
-      const mailDomainRaw = yield* Config.string("UMAIL_MAIL_DOMAIN").pipe(Effect.orDie);
-      const parsed = parseMailDomain(mailDomainRaw);
-      if (parsed.kind !== "ok") {
-        return yield* Effect.die(new Error("UMAIL_MAIL_DOMAIN is not a valid mail domain."));
-      }
-      yield* seedDevelopmentAddresses(rpc, {
-        mailDomain: parsed.domain,
-        localParts: previewMailboxes.split(","),
-        nowIso,
-      }).pipe(Effect.orDie);
-      return rpc;
+      // Read at runtime: the provisioned operator id is only in the deployed Worker's env.
+      const operatorId = yield* Config.string("AUTH_OPERATOR_ID").pipe(Effect.orDie);
+      const access = makeAccess((yield* authDb.raw) as AccessDatabase, operatorId);
+      const ports = {
+        sender: yield* cloudflareEmailSender(email),
+        index,
+        htmlPolicy,
+        applicationUrl: new URL(`https://${site.apiHostname}`),
+        notification: {
+          key: notificationKeyFromSecret(Redacted.value(notificationSecret)),
+          mailDomain: site.mailDomain,
+          approvalAdminEmail,
+        },
+        policyFor: (requester: OutboundRequester) =>
+          requester.kind === "operator"
+            ? Effect.succeed(OPERATOR_POLICY)
+            : access.mcpPolicy(requester.clientId),
+      };
+      // Covers due work whose alarm was never set, e.g. after a deploy.
+      yield* Effect.promise(() => armDueWork(storage, DateTime.toEpochMillis(now)));
+      return {
+        ...rpc,
+        alarm: () =>
+          Effect.flatMap(Clock.currentTimeMillis, (nowMs) => runDueWork(storage, ports, nowMs)),
+      };
     });
-  }),
+  }).pipe(
+    Effect.orDie,
+    Effect.provide(
+      Layer.mergeAll(
+        Cloudflare.Email.SendBinding,
+        Cloudflare.Queues.WriteQueueBinding,
+        Cloudflare.D1.QueryDatabaseBinding,
+      ),
+    ),
+  ),
 );
 
 export default AccountStoreLive;

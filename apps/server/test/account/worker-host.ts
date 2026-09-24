@@ -1,51 +1,42 @@
 import { DurableObject } from "cloudflare:workers";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { ApprovalTokenHash, MailDomain } from "@umail/api-contract";
 
 import {
   acceptInbound,
-  acceptOutbound,
   applyAccountSchema,
   failInboundReceiptPolicy,
   getInboundReceipt,
   observeInboundForward,
   redriveDueInboundReceipts,
   registerInboundReceipt,
+  writeThreadedMail,
 } from "../../src/account/commands.ts";
+import { runDueWork, type DueWorkPorts } from "../../src/account/due-work.ts";
 import { accountMigrations, type AccountMigration } from "../../src/account/migrations.ts";
 import {
-  claimDispatch,
+  claimJob,
   completeAttempt,
   decideApproval,
-  getOutboundDispatch,
+  expireDueApprovals,
   getOutboundJob,
   listOutboundJobs,
   lookupApprovalByTokenHash,
-  recoverOutbound,
-  rejectReadyDispatch,
+  readDispatch,
+  settleAbandonedClaims,
   submitOutbound,
 } from "../../src/account/jobs.ts";
 import {
   createAddress,
-  deleteDestination,
-  ensureMcpOAuthPolicy,
   getAddress,
   getAddressByMailbox,
-  getDestination,
-  getMcpOAuthPolicy,
-  insertDestination,
   listAddresses,
-  listDestinations,
-  listMcpOAuthPolicies,
   listSendingIdentities,
   patchAddress,
   resolveSendingIdentity,
-  revokeMcpOAuthPolicy,
   setAddressForwarding,
-  setMcpOAuthPolicyState,
-  updateDestinationStatus,
-  updateMcpOAuthPolicy,
 } from "../../src/account/administration.ts";
 import {
   getMessageBody,
@@ -62,10 +53,9 @@ import {
   SchemaMigrationRow,
   type AcceptInboundInput,
   type AcceptOutboundInput,
-  type ClaimDispatchInput,
+  type ClaimJobInput,
   type CompleteAttemptInput,
   type DecideApprovalInput,
-  type EnsureMcpOAuthPolicyInput,
   type FailInboundReceiptPolicyInput,
   type JobViewer,
   type ListMessageSummariesQuery,
@@ -75,11 +65,8 @@ import {
   type MailboxScope,
   type ObserveInboundForwardInput,
   type PatchAddressInput,
-  type RejectReadyDispatchInput,
   type RegisterInboundReceiptInput,
-  type SetMcpOAuthPolicyStateInput,
   type SubmitOutboundInput,
-  type UpdateMcpOAuthPolicyInput,
 } from "../../src/account/domain.ts";
 
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
@@ -128,9 +115,25 @@ export class AccountStoreTestHost extends DurableObject {
     return accepted;
   }
 
+  // Stores an outbound message as already sent, as a thread fixture.
   acceptOutbound(input: AcceptOutboundInput) {
     this.#ensureReady();
-    return acceptOutbound(this.ctx.storage, input);
+    return this.ctx.storage.transactionSync(() => {
+      const result = writeThreadedMail(this.ctx.storage, { direction: "outbound", input });
+      this.ctx.storage.sql.exec(
+        `INSERT INTO outbound_jobs (
+           id, requester_kind, requester_client_id, requester_label, idempotency_key,
+           intent_fingerprint, message_id, mailbox_id, purpose, state, created_at, updated_at
+         ) VALUES (?, 'operator', 'cli', 'AgentMail CLI', ?, '', ?, ?, 'message', 'accepted', ?, ?)`,
+        crypto.randomUUID(),
+        input.messageId,
+        input.messageId,
+        input.mailboxId,
+        input.nowIso,
+        input.nowIso,
+      );
+      return result;
+    });
   }
 
   registerInboundReceipt(input: RegisterInboundReceiptInput) {
@@ -151,6 +154,11 @@ export class AccountStoreTestHost extends DurableObject {
   removeInboundReceiptForIntegrityTest(receiptId: string) {
     this.#ensureReady();
     this.ctx.storage.sql.exec("DELETE FROM inbound_receipts WHERE id = ?", receiptId);
+  }
+
+  removeOutboundJobForIntegrityTest(messageId: string) {
+    this.#ensureReady();
+    this.ctx.storage.sql.exec("DELETE FROM outbound_jobs WHERE message_id = ?", messageId);
   }
 
   failInboundReceiptPolicy(input: FailInboundReceiptPolicyInput) {
@@ -243,69 +251,9 @@ export class AccountStoreTestHost extends DurableObject {
     return resolveSendingIdentity(this.ctx.storage, id);
   }
 
-  listDestinations() {
+  setAddressForwarding(addressId: string, forwardTo: string | null, nowIso: string) {
     this.#ensureReady();
-    return listDestinations(this.ctx.storage);
-  }
-
-  getDestination(id: string) {
-    this.#ensureReady();
-    return getDestination(this.ctx.storage, id);
-  }
-
-  insertDestination(
-    cloudflareId: string,
-    email: string,
-    verifiedAt: string | null,
-    nowIso: string,
-  ) {
-    this.#ensureReady();
-    return insertDestination(this.ctx.storage, cloudflareId, email, verifiedAt, nowIso);
-  }
-
-  setAddressForwarding(addressId: string, destinationId: string | null, nowIso: string) {
-    this.#ensureReady();
-    return setAddressForwarding(this.ctx.storage, addressId, destinationId, nowIso);
-  }
-
-  updateDestinationStatus(id: string, verifiedAt: string | null, nowIso: string) {
-    this.#ensureReady();
-    return updateDestinationStatus(this.ctx.storage, id, verifiedAt, nowIso);
-  }
-
-  deleteDestination(id: string, nowIso: string) {
-    this.#ensureReady();
-    deleteDestination(this.ctx.storage, id, nowIso);
-  }
-
-  getMcpOAuthPolicy(clientId: string) {
-    this.#ensureReady();
-    return getMcpOAuthPolicy(this.ctx.storage, clientId);
-  }
-
-  listMcpOAuthPolicies() {
-    this.#ensureReady();
-    return listMcpOAuthPolicies(this.ctx.storage);
-  }
-
-  ensureMcpOAuthPolicy(input: EnsureMcpOAuthPolicyInput) {
-    this.#ensureReady();
-    return ensureMcpOAuthPolicy(this.ctx.storage, input);
-  }
-
-  updateMcpOAuthPolicy(input: UpdateMcpOAuthPolicyInput) {
-    this.#ensureReady();
-    return updateMcpOAuthPolicy(this.ctx.storage, input);
-  }
-
-  setMcpOAuthPolicyState(input: SetMcpOAuthPolicyStateInput) {
-    this.#ensureReady();
-    return setMcpOAuthPolicyState(this.ctx.storage, input);
-  }
-
-  revokeMcpOAuthPolicy(clientId: string, updatedAt: string) {
-    this.#ensureReady();
-    return revokeMcpOAuthPolicy(this.ctx.storage, clientId, updatedAt);
+    return setAddressForwarding(this.ctx.storage, addressId, forwardTo, nowIso);
   }
 
   submitOutbound(input: SubmitOutboundInput) {
@@ -323,9 +271,9 @@ export class AccountStoreTestHost extends DurableObject {
     return decideApproval(this.ctx.storage, input);
   }
 
-  claimDispatch(input: ClaimDispatchInput) {
+  claimJob(input: ClaimJobInput) {
     this.#ensureReady();
-    return claimDispatch(this.ctx.storage, input);
+    return claimJob(this.ctx.storage, input);
   }
 
   completeAttempt(input: CompleteAttemptInput) {
@@ -333,19 +281,28 @@ export class AccountStoreTestHost extends DurableObject {
     return completeAttempt(this.ctx.storage, input);
   }
 
-  rejectReadyDispatch(input: RejectReadyDispatchInput) {
+  readDispatch(jobId: string) {
     this.#ensureReady();
-    return rejectReadyDispatch(this.ctx.storage, input);
+    return readDispatch(this.ctx.storage, jobId);
   }
 
-  getOutboundDispatch(jobId: string) {
+  expireDueApprovals(nowIso: string) {
     this.#ensureReady();
-    return getOutboundDispatch(this.ctx.storage, jobId);
+    expireDueApprovals(this.ctx.storage, nowIso);
   }
 
-  recoverOutbound(input: { readonly nowIso: string; readonly limit: number }) {
+  settleAbandonedClaims(nowIso: string) {
     this.#ensureReady();
-    return recoverOutbound(this.ctx.storage, input);
+    settleAbandonedClaims(this.ctx.storage, nowIso);
+  }
+
+  // Specs install fake ports with `runInDurableObject` before running the alarm.
+  dueWorkPorts: DueWorkPorts<never> | undefined;
+
+  override async alarm() {
+    this.#ensureReady();
+    if (this.dueWorkPorts === undefined) throw new Error("dueWorkPorts not installed");
+    await Effect.runPromise(runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()));
   }
 
   getOutboundJob(jobId: string, viewer: JobViewer) {

@@ -30,13 +30,11 @@
     "vitest.config.ts",
     "vitest.worker.config.ts",
     "tsdown.config.ts",
-    "scripts/**/*.ts",
     "apps/cli/src/**/*.ts",
     "apps/cli/test/**/*.ts",
     "packages/api-contract/src/**/*.ts",
     "packages/api-contract/test/**/*.ts",
     "tests/**/*.ts",
-    "packages/mail-content/src/**/*.d.ts",
     "apps/server/src/**/*.ts",
     "apps/server/test/**/*.ts"
   ],
@@ -48,6 +46,7 @@
     "apps/server/test/**/worker-host.ts",
     "apps/server/test/account/harness.ts",
     "apps/server/test/api/human-pages.browser.spec.ts",
+    "apps/server/test/mail/html-semantics.browser.spec.ts",
     "apps/server/test/api/human-pages-browser-fixture.ts"
   ]
 }

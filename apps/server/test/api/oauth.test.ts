@@ -76,14 +76,13 @@ describe("OAuth-only operator and client lifecycle", () => {
     ).toEqual([{ clientSecret: null }]);
   });
 
-  it("uses self-registered public Device Authorization with exact resource and scopes", async () => {
+  it("authorizes the static CLI client through Device Authorization for the REST resource", async () => {
     const world = await createWorld();
-    const registered = await registerDeviceClient(world);
     const issued = await world.fetch("http://umail.test/api/auth/device/code", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: registered.client_id,
+        client_id: "umail-cli",
         scope: "umail:access offline_access",
         resource: "https://umail.test",
       }).toString(),
@@ -103,6 +102,37 @@ describe("OAuth-only operator and client lifecycle", () => {
       body: new URLSearchParams({ userCode: codes.user_code }).toString(),
     });
     expect(approved.status).toBe(200);
+  });
+
+  it("refuses dynamic registration of device-code clients and REST-resource clients", async () => {
+    const world = await createWorld();
+    const register = (body: Record<string, unknown>) =>
+      world.fetch("http://umail.test/api/auth/oauth2/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Impostor CLI",
+          application_type: "native",
+          token_endpoint_auth_method: "none",
+          subject_type: "public",
+          dpop_bound_access_tokens: false,
+          ...body,
+        }),
+      });
+    const device = await register({
+      grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+      resources: ["https://umail.test"],
+    });
+    const rest = await register({
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      redirect_uris: ["http://127.0.0.1/callback"],
+      resources: ["https://umail.test"],
+    });
+    expect([device.status, rest.status]).toEqual([400, 400]);
+    expect(
+      await world.db.all("SELECT clientId FROM oauthClient WHERE name = ?", "Impostor CLI"),
+    ).toEqual([]);
   });
 
   it("rotates refresh tokens and recovers the replacement pair during the reuse window", async () => {
@@ -484,22 +514,4 @@ function authorizeWith(
     }).toString()}`,
     { redirect: "manual", headers: { cookie: world.sessionCookie } },
   );
-}
-
-async function registerDeviceClient(world: Awaited<ReturnType<typeof createWorld>>) {
-  const response = await world.fetch("http://umail.test/api/auth/oauth2/register", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_name: "uMail CLI test",
-      application_type: "native",
-      token_endpoint_auth_method: "none",
-      grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-      subject_type: "public",
-      dpop_bound_access_tokens: false,
-      resources: ["https://umail.test"],
-    }),
-  });
-  expect(response.status, await response.clone().text()).toBe(201);
-  return Schema.decodeUnknownSync(DynamicClient)(await response.json());
 }

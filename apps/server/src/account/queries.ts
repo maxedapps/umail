@@ -7,7 +7,7 @@ import {
   loadReferencesByMessageIds,
   pageLimit,
 } from "./commands.ts";
-import { cancelUndispatchedJobsForMessages } from "./jobs.ts";
+import { rejectUndispatched } from "./jobs.ts";
 import {
   AddressRow,
   AttachmentWithMessageRow,
@@ -37,7 +37,7 @@ import {
   type ThreadSummary,
   type ThreadSummaryPage,
 } from "./domain.ts";
-import { InboundMessageIntegrityError, ThreadNotFoundError } from "./errors.ts";
+import { MessageIntegrityError, ThreadNotFoundError } from "./errors.ts";
 import { bindJsonStringArray, firstDecoded, type AccountSqliteStorage } from "./sqlite.ts";
 
 const MESSAGE_SUMMARY_SELECT = `msg.id AS id,
@@ -274,7 +274,7 @@ export function getMessageSource(
       return { direction: "outbound", messageId: row.id, mailboxId: row.mailbox_id };
     }
     if (row.raw_key === null) {
-      throw new InboundMessageIntegrityError({
+      throw new MessageIntegrityError({
         messageId: row.id,
         reason: "receipt_missing",
       });
@@ -323,7 +323,7 @@ export function softDeleteThread(
         .exec(`SELECT id FROM messages ${live}`, threadId, ...scopeBinds(mailboxScope))
         .toArray(),
     ).map((row) => row.id);
-    cancelUndispatchedJobsForMessages(storage, messageIds, deletedAt);
+    rejectUndispatched(storage, messageIds, { failureClass: "cancelled" }, deletedAt);
     storage.sql.exec(
       `UPDATE messages SET deleted_at = ? ${live}`,
       deletedAt,
@@ -495,7 +495,7 @@ function loadSendingIdentitiesByIds(
                 addresses.address AS address,
                 addresses.display_name AS display_name,
                 addresses.active AS active,
-                addresses.forwarding_destination_id AS forwarding_destination_id,
+                addresses.forward_to AS forward_to,
                 addresses.created_at AS created_at,
                 addresses.updated_at AS updated_at
          FROM addresses
@@ -507,13 +507,6 @@ function loadSendingIdentitiesByIds(
   );
   return new Map(rows.map((row) => [row.id, toSendingIdentity(row)]));
 }
-
-const UNKNOWN_OUTBOUND_JOB: MessageOutboundJob = {
-  state: "unknown",
-  failureClass: null,
-  failureDetail: null,
-  providerMessageId: null,
-};
 
 function enrichMessageSummaries(
   storage: AccountSqliteStorage,
@@ -561,11 +554,11 @@ function enrichMessageSummaries(
       });
       continue;
     }
-    items.push({
-      direction: "outbound",
-      ...summaryFields,
-      outboundJob: jobsById.get(row.id) ?? UNKNOWN_OUTBOUND_JOB,
-    });
+    const outboundJob = jobsById.get(row.id);
+    if (outboundJob === undefined) {
+      throw new MessageIntegrityError({ messageId: row.id, reason: "job_missing" });
+    }
+    items.push({ direction: "outbound", ...summaryFields, outboundJob });
   }
   return items;
 }
@@ -577,7 +570,7 @@ function requireInboundSummaryReceipt(row: MessageSummaryRow) {
     row.receipt_envelope_to === null ||
     row.receipt_forward_outcome === null
   ) {
-    throw new InboundMessageIntegrityError({
+    throw new MessageIntegrityError({
       messageId: row.id,
       reason: "receipt_missing",
     });

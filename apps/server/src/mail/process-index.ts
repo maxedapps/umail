@@ -13,10 +13,10 @@ import {
   parseExternalMailAddress,
   parseUtcInstant,
 } from "@umail/api-contract";
-import type { MailHtmlPolicy, StoredMailHtml } from "@umail/mail-content";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import type { MailHtmlPolicy, StoredMailHtml } from "./html-policy.ts";
 import { inboundAttachmentId, type InboundMessageId } from "./archive.ts";
 import {
   attachmentObjectKey,
@@ -27,6 +27,13 @@ import {
   sanitizeFilename,
   utf8ByteLength,
 } from "./policy.ts";
+
+// The MailIndex queue message: one receipt to index.
+export const IndexReceiptWork = Schema.Struct({
+  version: Schema.Literal(1),
+  receiptId: Schema.String,
+});
+export type IndexReceiptWork = typeof IndexReceiptWork.Type;
 
 export class IndexFailure extends Schema.TaggedError<IndexFailure>()("IndexFailure", {
   reason: Schema.String,
@@ -49,7 +56,7 @@ export type IndexDeps<R> = {
 };
 
 // Success acks the queue message and any failure retries it. A receipt that is still `ready` once
-// the queue gives up is redriven by Recovery.
+// the queue gives up is redriven by the store's due-work pass.
 export const indexReceipt = <R>(
   receiptId: string,
   deps: IndexDeps<R>,

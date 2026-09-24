@@ -6,7 +6,7 @@ import {
   type MailHtmlPolicy,
   type MailHtmlSanitization,
   type StoredMailHtml,
-} from "@umail/mail-content";
+} from "../../src/mail/html-policy.ts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
@@ -105,7 +105,6 @@ export type MailAccount = Pick<
   | "registerInboundReceipt"
   | "observeInboundForward"
   | "getAddressByMailbox"
-  | "getDestination"
   | "getInboundReceipt"
   | "acceptInbound"
   | "failInboundReceiptPolicy"
@@ -117,7 +116,6 @@ export function effectAccount(stub: RpcAsync<MailAccount>): MailAccount {
     registerInboundReceipt: (input) => Effect.promise(() => stub.registerInboundReceipt(input)),
     observeInboundForward: (input) => Effect.promise(() => stub.observeInboundForward(input)),
     getAddressByMailbox: (address) => Effect.promise(() => stub.getAddressByMailbox(address)),
-    getDestination: (id) => Effect.promise(() => stub.getDestination(id)),
     getInboundReceipt: (id) => Effect.promise(() => stub.getInboundReceipt(id)),
     acceptInbound: (input) => Effect.promise(() => stub.acceptInbound(input)),
     failInboundReceiptPolicy: (input) => Effect.promise(() => stub.failInboundReceiptPolicy(input)),

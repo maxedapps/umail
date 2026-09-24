@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import { ExternalMailAddress } from "@umail/api-contract";
 
-import { gatedAuthHandler } from "../../src/auth/deployment-gate.ts";
 import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
 import { DISABLED_AUTH_PATHS, sameOriginReturnPath } from "../../src/auth/runtime-surface.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
@@ -411,23 +410,6 @@ describe("runtime authentication surface", () => {
     });
     expect(staleDevice.status).toBe(400);
   });
-
-  it("discards an in-flight credential response when generation changes", async () => {
-    const world = await createWorld();
-    const response = await gatedAuthHandler(
-      world.db,
-      async () => {
-        await rotateOperatorPassword(world, "replacement-passphrase");
-        return new Response("ok", {
-          status: 200,
-          headers: { "set-cookie": "better-auth.session_token=stolen; Path=/" },
-        });
-      },
-      new Request("http://umail.test/api/auth/sign-in/email", { method: "POST" }),
-    );
-    expect(response.status).toBe(503);
-    expect(response.headers.get("set-cookie")).toBeNull();
-  });
 });
 
 function decodeAccessToken(token: string) {
@@ -518,6 +500,8 @@ async function consentForCode(world: World, consentPage: URL, redirectUri: strin
       oauth_query: consentPage.search.startsWith("?")
         ? consentPage.search.slice(1)
         : consentPage.searchParams.toString(),
+      mailboxes: "all",
+      sendMode: "requireApproval",
     }),
   });
   const consent = Schema.decodeUnknownSync(RedirectResult)(await consented.json());

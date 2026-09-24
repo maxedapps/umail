@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -6,7 +7,7 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import { CreateAddressPayload, ListMessagesQuery, ListThreadsQuery } from "../src/api-spec.ts";
-import { configFromEnvironment, makeUmailClient, type UmailClientConfig } from "../src/client.ts";
+import { makeUmailClient, umailBaseUrl, type UmailClientConfig } from "../src/client.ts";
 
 interface CapturedRequest {
   readonly method: string;
@@ -48,7 +49,7 @@ function testHttpClient(captured: Array<CapturedRequest>) {
         address: "inbox@umail.example.test",
         displayName: null,
         active: true,
-        forwardingDestinationId: null,
+        forwardTo: null,
         createdAt: "2026-08-25T10:00:00.000Z",
         updatedAt: "2026-08-25T10:00:00.000Z",
       });
@@ -205,7 +206,7 @@ describe("shared client configuration", () => {
     "http://localhost.example.test",
     "http://[2001:db8::1]",
   ])("rejects plaintext non-loopback origin %s", async (origin) => {
-    await expect(Effect.runPromise(configFromEnvironment({ UMAIL_URL: origin }))).rejects.toThrow(
+    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: origin }))).rejects.toThrow(
       "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
     );
   });
@@ -217,28 +218,31 @@ describe("shared client configuration", () => {
     "https://umail.example.test",
     "https://192.168.1.2:8787",
   ])("accepts secure or loopback origin %s", async (origin) => {
-    await expect(Effect.runPromise(configFromEnvironment({ UMAIL_URL: origin }))).resolves.toEqual({
-      baseUrl: origin,
-    });
+    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: origin }))).resolves.toBe(origin);
   });
 
   it("accepts only a valid configured origin", async () => {
     const configured = await Effect.runPromise(
-      configFromEnvironment({ UMAIL_URL: "https://umail.example.test/" }),
+      baseUrlFrom({ UMAIL_URL: "https://umail.example.test/" }),
     );
 
-    expect(configured.baseUrl).toBe("https://umail.example.test");
+    expect(configured).toBe("https://umail.example.test");
   });
 
   it("reports safe errors for missing or invalid environment values", async () => {
-    await expect(Effect.runPromise(configFromEnvironment({}))).rejects.toThrow(
-      "UMAIL_URL is required",
+    await expect(Effect.runPromise(baseUrlFrom({}))).rejects.toThrow("UMAIL_URL is required");
+    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: "not a URL" }))).rejects.toThrow(
+      "UMAIL_URL must be a valid HTTP(S) origin",
     );
     await expect(
-      Effect.runPromise(configFromEnvironment({ UMAIL_URL: "not a URL" })),
-    ).rejects.toThrow("UMAIL_URL must be a valid HTTP(S) origin");
-    await expect(
-      Effect.runPromise(configFromEnvironment({ UMAIL_URL: "https://umail.example.test/api" })),
+      Effect.runPromise(baseUrlFrom({ UMAIL_URL: "https://umail.example.test/api" })),
     ).rejects.toThrow("UMAIL_URL must be a valid HTTP(S) origin");
   });
 });
+
+// Reads UMAIL_URL from the given environment instead of the process's.
+function baseUrlFrom(env: Record<string, string>) {
+  return umailBaseUrl.pipe(
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
+  );
+}

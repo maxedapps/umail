@@ -104,8 +104,8 @@ describe("human pages in Chromium", () => {
 
   it.each([
     ["accepted", 200, "accepted by Cloudflare for delivery"],
-    ["failed", 200, "Cloudflare did not confirm submission"],
-    ["queued", 200, "submission outcome is not confirmed"],
+    ["failed", 200, "Cloudflare rejected it (E_RECIPIENT_SUPPRESSED)"],
+    ["queued", 200, "AgentMail is sending this email now"],
     ["denied", 200, "No provider call was made"],
     ["expired", 410, "no longer available"],
     ["unknown", 404, "was not found"],

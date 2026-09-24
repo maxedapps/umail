@@ -1,4 +1,9 @@
-import { ApprovalTokenHash } from "@umail/api-contract";
+import {
+  ApprovalTokenHash,
+  requireApprovalSendMode,
+  type PrincipalPolicy,
+  type PrincipalSendMode,
+} from "@umail/api-contract";
 import { env, runInDurableObject } from "cloudflare:test";
 import * as Encoding from "effect/Encoding";
 import * as Result from "effect/Result";
@@ -53,5 +58,19 @@ export function approvalMaterial(expiresAt: string) {
       Encoding.encodeHex(crypto.getRandomValues(new Uint8Array(32))),
     ),
     expiresAt,
+  };
+}
+
+// A client policy for specs; the store takes the requester's policy as an argument.
+export function testPolicy(
+  sendMode: PrincipalSendMode = requireApprovalSendMode(),
+  overrides: Partial<PrincipalPolicy> = {},
+): PrincipalPolicy {
+  return {
+    mailboxIds: "all",
+    canRead: true,
+    sendMode,
+    recipientAllowlist: "any",
+    ...overrides,
   };
 }

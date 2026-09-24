@@ -9,7 +9,7 @@ import {
 export default defineConfig({
   plugins: [humanPageBrowserFixture()],
   test: {
-    include: ["test/api/human-pages.browser.spec.ts"],
+    include: ["test/api/human-pages.browser.spec.ts", "test/mail/html-semantics.browser.spec.ts"],
     fileParallelism: false,
     browser: {
       enabled: true,

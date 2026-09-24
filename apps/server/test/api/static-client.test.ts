@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { CURSOR_CLOUD_CALLBACK_URI, CURSOR_GROK_BOT_CLIENT_ID } from "../../src/auth/options.ts";
 import { connectedMcp } from "./mcp-drivers.ts";
 import { issueMcpAccessToken } from "./oauth-flow.ts";
-import { createWorld, listMcpPolicyRows, type World } from "./world.ts";
+import { createWorld, listMcpPolicyRows, operatorCookieHeaders, type World } from "./world.ts";
 
 const STATIC_CLIENT = {
   clientId: CURSOR_GROK_BOT_CLIENT_ID,
@@ -36,9 +36,91 @@ describe("first-party static OAuth client", () => {
       clients: [{ clientDiscoveryId: "umail-first-party" }],
       resources: [{ resourceId: "https://umail.test/mcp" }],
     });
-    expect(await listMcpPolicyRows(world)).toEqual([
-      { client_id: CURSOR_GROK_BOT_CLIENT_ID, state: "active" },
-    ]);
+    expect(await listMcpPolicyRows(world)).toHaveLength(1);
+  });
+
+  it("records the scope chosen at consent and lists the client at once", async () => {
+    const world = await createWorld();
+    await issueMcpAccessToken(world, STATIC_CLIENT, { mailboxes: "box-1", sendMode: "deny" });
+    const [row] = await listMcpPolicyRows(world);
+    expect(JSON.parse(String(row?.policy))).toEqual({
+      mailboxIds: ["box-1"],
+      canRead: true,
+      sendMode: { kind: "deny" },
+      recipientAllowlist: "any",
+    });
+    const clients = await world.fetch("http://umail.test/clients", {
+      headers: { cookie: world.sessionCookie },
+    });
+    const html = await clients.text();
+    expect(html).toContain(CURSOR_GROK_BOT_CLIENT_ID);
+    expect(html).toContain('value="box-1"');
+    expect(html).toContain("umail-cli");
+  });
+
+  it("rejects a consent without a valid policy and leaves no consent behind", async () => {
+    const world = await createWorld();
+    const consentPage = new URL(
+      (await authorize(world, {})).headers.get("location") ?? "",
+      "http://umail.test",
+    );
+    const consented = await world.fetch("http://umail.test/api/auth/oauth2/consent", {
+      method: "POST",
+      headers: {
+        cookie: world.sessionCookie,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        accept: true,
+        oauth_query: consentPage.search.slice(1),
+        mailboxes: " , ",
+        sendMode: "requireApproval",
+      }),
+    });
+    expect(consented.status).toBe(400);
+    expect(await world.db.all("SELECT id FROM oauthConsent")).toEqual([]);
+  });
+
+  it("gives a consent without a policy no MCP access", async () => {
+    const world = await createWorld();
+    const token = await issueMcpAccessToken(world, STATIC_CLIENT);
+    await world.db.exec("DELETE FROM mcpPolicy");
+    const response = await world.fetch("http://umail.test/mcp", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("revokes the static client but keeps its registration so it can reconnect", async () => {
+    const world = await createWorld();
+    await issueMcpAccessToken(world, STATIC_CLIENT);
+    const revoked = await world.fetch(
+      `http://umail.test/clients/${CURSOR_GROK_BOT_CLIENT_ID}/revoke`,
+      { method: "POST", redirect: "manual", headers: operatorCookieHeaders(world.sessionCookie) },
+    );
+    expect(revoked.status).toBe(303);
+    expect(await listMcpPolicyRows(world)).toEqual([]);
+    expect((await staticClientRows(world)).clients).toHaveLength(1);
+    // With the consent gone, authorizing asks for consent again.
+    const again = new URL(
+      (await authorize(world, {})).headers.get("location") ?? "",
+      "http://umail.test",
+    );
+    expect(again.pathname).toBe("/consent");
+    const token = await issueMcpAccessToken(world, STATIC_CLIENT);
+    const client = await connectedMcp(world, token.access_token);
+    try {
+      expect((await client.listTools()).tools).toHaveLength(MCP_TOOL_COUNT);
+    } finally {
+      await client.close();
+    }
   });
 
   it("skips the consent page on re-authorization and persists the client exactly once", async () => {

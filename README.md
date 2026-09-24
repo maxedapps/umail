@@ -89,11 +89,11 @@ pnpm umail messages compose \
 pnpm umail jobs get --id <job-id>
 ```
 
-The operator CLI sends without approval. Sending is asynchronous and can take about a minute. `accepted` means provider acceptance, not recipient delivery; `rejected` means the provider refused or failed the message; investigate `unknown` before resending. To retry a submit whose response was lost, pass your own `--request-id <uuid>` and reuse it with the identical payload; this cannot send twice. Any new send, including one after `rejected` or an investigated `unknown`, needs a new ID; omit the flag to generate one.
+The operator CLI sends without approval. Sending is asynchronous and usually starts within seconds. `accepted` means provider acceptance, not recipient delivery; `rejected` means the provider refused or failed the message; investigate `unknown` before resending. To retry a submit whose response was lost, pass your own `--request-id <uuid>` and reuse it with the identical payload; this cannot send twice. Any new send, including one after `rejected` or an investigated `unknown`, needs a new ID; omit the flag to generate one.
 
-For forwarding, run `pnpm umail destinations create --email <destination>`, follow the verification email, refresh with `destinations get --id <destination-id>`, then run `forwarding associate --address-id <mailbox-id> --destination-id <destination-id>`.
+To forward a mailbox's inbound mail, run `pnpm umail forwarding set --address-id <mailbox-id> --email <inbox>`. Cloudflare emails that inbox a verification link, and forwards only once it is confirmed; the command reports `verified`, so run it again to check. `pnpm umail forwarding remove --address-id <mailbox-id>` stops forwarding.
 
-Run `pnpm umail --help` or `pnpm umail <command> --help` for more commands. Credentials live in `$XDG_STATE_HOME/umail/oauth.json` (default `~/.local/state/umail/oauth.json`); keep that file private and use `pnpm umail logout` to revoke the CLI grant.
+Run `pnpm umail --help` or `pnpm umail <command> --help` for more commands. Credentials live in `$XDG_STATE_HOME/umail/oauth.json` (default `~/.local/state/umail/oauth.json`); keep that file private. `pnpm umail logout` revokes the CLI's access on the server first and removes the local credentials only if that worked.
 
 For another machine, run `pnpm build:clients`, copy `dist/clients/umail.mjs`, and use `node umail.mjs login` with Node.js 22.18+ and `UMAIL_URL` exported.
 
@@ -103,7 +103,7 @@ Add `https://mail.example.com/mcp` as a remote HTTP MCP server in a client suppo
 
 Tools: `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messages`, `umail_get_thread`, `umail_get_message`, `umail_get_message_headers`, `umail_set_thread_read_state`, `umail_send_message`, `umail_reply_to_message`, `umail_get_job`.
 
-**New clients can initially read all mailboxes.** Sending requires approval at the operator inbox; deletion and administration are disabled. Connect only trusted clients. After the first authenticated request, use `https://mail.example.com/clients` to narrow mailbox/recipient permissions, change sending policy, disable, or revoke access.
+**The consent screen decides what a client may do:** which mailboxes it may use (default: all) and whether it may send without approval (default: every send waits for your approval at the operator inbox). A client gets no access until you consent. `https://mail.example.com/clients` lists every client with access, including the CLI; change a client's mailboxes, recipients, or send mode there, or revoke it. Revoking ends its access at once; the client can ask again and you see the consent screen again.
 
 ## Update
 
@@ -116,7 +116,7 @@ pnpm exec alchemy plan --stage prod --profile default
 pnpm exec alchemy deploy --stage prod --profile default
 ```
 
-Password changes require redeployment and invalidate existing sessions/grants. New Recovery cron triggers can take up to 15 minutes to start; verify a mail round trip after deployment. **Deleting a conversation hides it but does not erase its archived raw objects.**
+Password changes require redeployment and invalidate existing sessions/grants. Verify a mail round trip after deployment. **Deleting a conversation hides it but does not erase its archived raw objects.**
 
 This project uses prerelease Alchemy/Effect dependencies and [maintained patches](docs/operations.md#dependency-patches). There are no stable release or support guarantees yet. See [operations and recovery limits](docs/operations.md).
 

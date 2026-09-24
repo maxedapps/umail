@@ -23,17 +23,6 @@ describe("account-store RPC boundary", () => {
     );
   });
 
-  it("fails with a typed AccountConflictError for a duplicate destination", () => {
-    const { account } = createMemoryAccount();
-    Effect.runSync(account.insertDestination("cf-1", "a@example.com", null, NOW));
-
-    const exit = Effect.runSyncExit(account.insertDestination("cf-1", "b@example.com", null, NOW));
-
-    expect(Option.map(Exit.findErrorOption(exit), (error) => error._tag)).toEqual(
-      Option.some("AccountConflictError"),
-    );
-  });
-
   it("recognizes expected failures as class instances and as plain RPC envelopes", () => {
     expect(isExpectedStoreFailure(new AccountConflictError({ resource: "address", id: "a" }))).toBe(
       true,

@@ -10,20 +10,28 @@ import {
   SubmissionRequestId,
   requireApprovalSendMode,
   type Principal,
+  type PrincipalPolicy,
 } from "@umail/api-contract";
 import { submitMessage } from "../../src/api/operations.ts";
-import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
-import { sendClaimUntilIso } from "../../src/mail/policy.ts";
-import { consumeSendJob } from "../../src/mail/send.ts";
 import {
   APPLICATION_URL,
   MAIL_DOMAIN,
   seedMailbox,
   authorized,
   createWorld,
+  runDueWorkPass,
   type World,
 } from "./world.ts";
 import { REMOTE_HTML_MATERIALIZED, REMOTE_HTML_SOURCE, REMOTE_HTML_STORED } from "./fakes.ts";
+
+// The requesting MCP client's policy; these principals have no OAuth consent, so the due-work pass
+// is handed the same policy.
+const APPROVAL_POLICY = {
+  mailboxIds: "all",
+  canRead: true,
+  sendMode: requireApprovalSendMode(),
+  recipientAllowlist: "any",
+} as const satisfies PrincipalPolicy;
 
 type QueuedApproval = {
   readonly job: OutboundJobStatus;
@@ -81,7 +89,7 @@ describe("public approval flow", () => {
     const terminal = await world.fetch(queued.reviewUrl);
     expect(terminal.status).toBe(200);
     const terminalHtml = await terminal.text();
-    expect(terminalHtml).toContain("submission outcome is not confirmed");
+    expect(terminalHtml).toContain("AgentMail is sending this email now");
     expect(terminalHtml).not.toContain("formaction=");
 
     const oppositeReplay = await world.fetch(queued.denyUrl, {
@@ -94,23 +102,11 @@ describe("public approval flow", () => {
       world.account.getOutboundJob(queued.job.jobId, { kind: "operator" }),
     );
     expect(job?.state).toBe("ready");
-
-    const token = tokenFromReviewUrl(queued.reviewUrl);
-    const stored = JSON.stringify(await Effect.runPromise(world.account.listMcpOAuthPolicies()));
-    expect(stored).not.toContain(token);
-    expect(stored).not.toContain(queued.reviewUrl);
   });
 
   it("persists and renders the stable OAuth requester snapshot", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    await Effect.runPromise(
-      world.account.ensureMcpOAuthPolicy({
-        clientId: "oauth-client-42",
-        label: "OAuth client oauth-client-42",
-        createdAt: "2026-08-28T10:00:00.000Z",
-      }),
-    );
     const principal = {
       authority: "mcp",
       identity: {
@@ -119,14 +115,7 @@ describe("public approval flow", () => {
         clientId: "oauth-client-42",
         clientLabel: "OAuth client oauth-client-42",
       },
-      policy: {
-        mailboxIds: "all",
-        canRead: true,
-        canDelete: false,
-        sendMode: requireApprovalSendMode(),
-        recipientAllowlist: "any",
-        canAdmin: false,
-      },
+      policy: APPROVAL_POLICY,
     } as const satisfies Principal;
     const job = await Effect.runPromise(
       submitMessage(
@@ -150,27 +139,24 @@ describe("public approval flow", () => {
     expect(await review.text()).toContain("OAuth client oauth-client-42");
   });
 
-  it("keeps GET read-only and converges only a due POST to expired", async () => {
+  it("answers a due approval with 410 and leaves its expiry to the store's pass", async () => {
     const world = await createWorld();
     const queued = await queueApproval(world);
     world.approvalClock.set("2026-08-29T10:00:00.000Z");
-    const writesBeforeGet = world.accountStorage.writeCount;
+    const writesBefore = world.accountStorage.writeCount;
 
     const gone = await world.fetch(queued.reviewUrl);
     expect(gone.status).toBe(410);
     expect(await gone.text()).toContain("no longer available");
-    expect(world.accountStorage.writeCount).toBe(writesBeforeGet);
+    const late = await world.fetch(queued.approveUrl, { method: "POST", redirect: "manual" });
+    expect(late.status).toBe(410);
+    expect(world.accountStorage.writeCount).toBe(writesBefore);
     const pending = await Effect.runPromise(
       world.account.getOutboundJob(queued.job.jobId, { kind: "operator" }),
     );
     expect(pending?.state).toBe("waiting_approval");
 
-    const expired = await world.fetch(queued.approveUrl, {
-      method: "POST",
-      redirect: "manual",
-    });
-    expect(expired.status).toBe(303);
-    expect(expired.headers.get("x-umail-approval-state")).toBe("expired");
+    await runDueWorkPass(world, { mcpPolicy: APPROVAL_POLICY });
     const after = await Effect.runPromise(
       world.account.getOutboundJob(queued.job.jobId, { kind: "operator" }),
     );
@@ -228,20 +214,25 @@ describe("public approval flow", () => {
     expect(deny.headers.get("x-umail-approval-state")).toBe(state);
   });
 
-  it("renders approved plus ready as an ambiguous submission and never retries it", async () => {
+  it("reports each approved outcome and never offers a second decision", async () => {
     const world = await createWorld();
     const queued = await queueApproval(world);
     await world.fetch(queued.approveUrl, { method: "POST", redirect: "manual" });
 
-    const terminal = await world.fetch(queued.reviewUrl);
+    const sending = await (await world.fetch(queued.reviewUrl)).text();
+    expect(sending).toContain("AgentMail is sending this email now");
+    expect(sending).not.toContain("formaction");
     const replay = await world.fetch(queued.approveUrl, { method: "POST", redirect: "manual" });
-    const html = await terminal.text();
-
-    expect(terminal.status).toBe(200);
-    expect(html).toContain("submission outcome is not confirmed");
-    expect(html).toContain("Do not retry automatically");
     expect(replay.status).toBe(303);
     expect(replay.headers.get("x-umail-approval-state")).toBe("approved");
+
+    await runDueWorkPass(world, {
+      mcpPolicy: APPROVAL_POLICY,
+      outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED" },
+    });
+    expect(await (await world.fetch(queued.reviewUrl)).text()).toContain(
+      "Cloudflare rejected it (E_RECIPIENT_SUPPRESSED)",
+    );
   });
 
   it("serves stored HTML only through the sandboxed preview boundary", async () => {
@@ -326,13 +317,6 @@ async function queueApproval(
   const mailbox = await seedMailbox(world);
   const clientLabel = input.clientLabel ?? "Approval reviewer";
   const clientId = `client-${clientLabel}`;
-  await Effect.runPromise(
-    world.account.ensureMcpOAuthPolicy({
-      clientId,
-      label: clientLabel,
-      createdAt: "2026-08-28T10:00:00.000Z",
-    }),
-  );
   const principal = {
     authority: "mcp",
     identity: {
@@ -341,14 +325,7 @@ async function queueApproval(
       clientId,
       clientLabel,
     },
-    policy: {
-      mailboxIds: "all" as const,
-      canRead: true,
-      canDelete: false,
-      sendMode: requireApprovalSendMode(),
-      recipientAllowlist: "any" as const,
-      canAdmin: false,
-    },
+    policy: APPROVAL_POLICY,
   } satisfies Principal;
   type ApprovalComposeDraft = {
     intent: "compose";
@@ -391,38 +368,10 @@ async function queueApproval(
   return { job, reviewUrl, reviewHtml, ...actions };
 }
 
-// Sends the ready approval notification through SendConsumer and reads the review token from the
-// email, as the operator would.
+// Sends the ready approval notification through the store's due-work pass and reads the review
+// token from the email, as the operator would.
 async function sentApprovalToken(world: World): Promise<string> {
-  const mails: ProviderOutboundMail[] = [];
-  const now = await Effect.runPromise(world.approvalClock.now);
-  const ports = {
-    account: world.account,
-    sender: {
-      send: (mail: ProviderOutboundMail) =>
-        Effect.sync(() => {
-          mails.push(mail);
-          return { kind: "accepted", providerMessageId: "notify", rfcMessageId: null } as const;
-        }),
-    },
-    htmlPolicy: world.htmlPolicy,
-    applicationUrl: APPLICATION_URL,
-    nowIso: DateTime.formatIso(now),
-    claimExpiresAt: sendClaimUntilIso(DateTime.toEpochMillis(now)),
-    notification: {
-      key: world.notificationKey,
-      mailDomain: MAIL_DOMAIN,
-      approvalAdminEmail: world.operatorEmail,
-    },
-  };
-  const jobs = await Effect.runPromise(
-    world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
-  );
-  for (const job of jobs.items) {
-    if (job.purpose === "approval_notification" && job.state === "ready") {
-      await Effect.runPromise(consumeSendJob(job.jobId, ports));
-    }
-  }
+  const mails = await runDueWorkPass(world, { mcpPolicy: APPROVAL_POLICY });
   const token = /\/approvals\/([0-9a-f]{64})/u.exec(mails.at(-1)?.text ?? "")?.[1];
   if (token === undefined) {
     throw new Error("expected an approval notification email");

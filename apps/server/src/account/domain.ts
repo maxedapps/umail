@@ -7,8 +7,6 @@ import {
   OutboundJobFailureClass,
   OutboundJobPurpose,
   OutboundJobState,
-  PrincipalMailboxIds,
-  PrincipalRecipientAllowlist,
   UtcInstant,
   type PrincipalPolicy,
   type SubmissionRequestId,
@@ -306,7 +304,7 @@ export type AccountAddress = {
   readonly address: MailboxAddress;
   readonly displayName: string | null;
   readonly active: boolean;
-  readonly forwardingDestinationId: string | null;
+  readonly forwardTo: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -314,47 +312,6 @@ export type AccountAddress = {
 export type PatchAddressInput = {
   readonly displayName?: string | null;
   readonly active?: boolean;
-};
-
-export type AccountDestination = {
-  readonly id: string;
-  readonly cloudflareId: string;
-  readonly email: string;
-  readonly verificationStatus: "pending" | "verified";
-  readonly verifiedAt: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-};
-
-export const McpOAuthPolicyState = Schema.Literals(["active", "disabled", "revoked"]);
-export type McpOAuthPolicyState = typeof McpOAuthPolicyState.Type;
-
-export type McpOAuthPolicy = {
-  readonly clientId: string;
-  readonly label: string;
-  readonly state: McpOAuthPolicyState;
-  readonly policy: PrincipalPolicy;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-};
-
-export type EnsureMcpOAuthPolicyInput = {
-  readonly clientId: string;
-  readonly label: string;
-  readonly createdAt: string;
-};
-
-export type UpdateMcpOAuthPolicyInput = {
-  readonly clientId: string;
-  readonly label: string;
-  readonly policy: PrincipalPolicy;
-  readonly updatedAt: string;
-};
-
-export type SetMcpOAuthPolicyStateInput = {
-  readonly clientId: string;
-  readonly state: "active" | "disabled";
-  readonly updatedAt: string;
 };
 
 export const MessageSummaryRow = Schema.Struct({
@@ -468,42 +425,11 @@ export const AddressRow = Schema.Struct({
   address: MailboxAddress,
   display_name: Schema.NullOr(Schema.String),
   active: Schema.Finite,
-  forwarding_destination_id: Schema.NullOr(Schema.String),
+  forward_to: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
 });
 export type AddressRow = typeof AddressRow.Type;
-
-export const DestinationRow = Schema.Struct({
-  id: Schema.String,
-  cloudflare_id: Schema.String,
-  email: Schema.String,
-  verification_status: Schema.Literals(["pending", "verified"]),
-  verified_at: Schema.NullOr(Schema.String),
-  created_at: Schema.String,
-  updated_at: Schema.String,
-});
-export type DestinationRow = typeof DestinationRow.Type;
-
-export const McpOAuthPolicyRow = Schema.Struct({
-  client_id: Schema.String,
-  label: Schema.String,
-  state: McpOAuthPolicyState,
-  mailbox_ids_json: Schema.String,
-  can_read: Schema.Literals([0, 1]),
-  can_delete: Schema.Literals([0, 1]),
-  send_mode: Schema.Literals(["deny", "allow", "requireApproval"]),
-  recipient_allowlist_json: Schema.String,
-  preapproved_recipients_json: Schema.String,
-  can_admin: Schema.Literals([0, 1]),
-  created_at: Schema.String,
-  updated_at: Schema.String,
-});
-export type McpOAuthPolicyRow = typeof McpOAuthPolicyRow.Type;
-
-export const StoredMailboxIds = Schema.fromJsonString(PrincipalMailboxIds);
-export const StoredRecipientAllowlist = Schema.fromJsonString(PrincipalRecipientAllowlist);
-export const StoredPreapprovedRecipients = Schema.fromJsonString(Schema.Array(ExternalMailAddress));
 
 export const MAX_OUTBOUND_RECIPIENTS = 50 as const;
 
@@ -530,6 +456,8 @@ export type ApprovalCapabilityWrite = {
 export type SubmitOutboundInput = {
   readonly requestId: SubmissionRequestId;
   readonly requester: OutboundRequester;
+  // The requester's current policy; the store checks the send against it.
+  readonly policy: PrincipalPolicy;
   readonly mailboxId: string;
   readonly subject: string;
   readonly textBody: string | null;
@@ -592,13 +520,15 @@ export type ApprovalDecisionResult =
   | { readonly kind: "unavailable"; readonly state: "pending" }
   | { readonly kind: "missing" };
 
-export type ClaimDispatchInput = {
+export type ClaimJobInput = {
   readonly jobId: string;
   readonly nowIso: string;
   readonly claimExpiresAt: string;
+  // The requester's policy at claim time; null when the requester no longer has access.
+  readonly policy: PrincipalPolicy | null;
 };
 
-export type ClaimDispatchResult =
+export type ClaimJobResult =
   | { readonly kind: "claimed"; readonly attemptId: string; readonly job: OutboundJob }
   | { readonly kind: "not_claimable"; readonly job: OutboundJob }
   | { readonly kind: "rejected"; readonly job: OutboundJob }
@@ -622,17 +552,6 @@ export type CompleteAttemptInput = {
 
 export type CompleteAttemptResult =
   | { readonly kind: "applied"; readonly job: OutboundJob }
-  | { readonly kind: "stale"; readonly job: OutboundJob }
-  | { readonly kind: "missing" };
-
-export type RejectReadyDispatchInput = {
-  readonly jobId: string;
-  readonly nowIso: string;
-  readonly failureDetail: string | null;
-};
-
-export type RejectReadyDispatchResult =
-  | { readonly kind: "rejected"; readonly job: OutboundJob }
   | { readonly kind: "stale"; readonly job: OutboundJob }
   | { readonly kind: "missing" };
 

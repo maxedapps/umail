@@ -1,6 +1,4 @@
-import { builtinModules } from "node:module";
-import * as Bundle from "alchemy/Bundle";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Artifacts from "alchemy/Artifacts";
@@ -35,62 +33,4 @@ export function bundleWorker(main: string, id: string, props: Cloudflare.WorkerP
       Effect.scoped,
     ),
   );
-}
-
-// Workerd tests need runtime bundles too: Vite's plain TS transform retains deployment imports.
-export async function bundleMailTestModules(root: string) {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { pathToFileURL } = await import("node:url");
-  const modules = [
-    "archive",
-    "email-sender",
-    "indexing",
-    "send",
-    "notifications",
-    "inbound",
-    "recovery",
-  ];
-  const directory = resolve(root, ".alchemy/test-runtime");
-  await mkdir(directory, { recursive: true });
-  const facade = resolve(directory, "mail-modules.ts");
-  await writeFile(
-    facade,
-    modules
-      .map(
-        (name) =>
-          `export * from ${JSON.stringify(pathToFileURL(resolve(root, "apps/server/src/mail", `${name}.ts`)).href)};`,
-      )
-      .join("\n") + "\nexport default {};\n",
-  );
-  // Share the test runner's Effect instance: Schema adapters are instance-sensitive.
-  const output = resolve(directory, "mail-modules");
-  const bundle = await Effect.runPromise(
-    Bundle.build(
-      {
-        input: facade,
-        external: (id) =>
-          id === "effect" ||
-          id.startsWith("effect/") ||
-          id.startsWith("node:") ||
-          id.startsWith("cloudflare:") ||
-          id.startsWith("@effect/platform-bun/") ||
-          builtinModules.includes(id),
-        resolve: { conditionNames: ["workerd", "worker", "node", "default"] },
-        preserveEntrySignatures: "strict",
-      },
-      { dir: output, format: "esm", entryFileNames: "index.js" },
-    ),
-  );
-  const entry = resolve(output, bundle.files[0].path);
-  const sources = new Set(
-    modules.map((name) => resolve(root, "apps/server/src/mail", `${name}.ts`)),
-  );
-  return {
-    name: "alchemy-runtime-test-modules",
-    enforce: "pre" as const,
-    resolveId(source: string, importer: string | undefined) {
-      if (importer && sources.has(resolve(dirname(importer), source))) return entry;
-      return undefined;
-    },
-  };
 }

@@ -9,23 +9,14 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { AuthDb } from "../resources.ts";
 import {
-  AuthDb,
-  AUTH_CONTROL_ROW_ID,
-  AUTH_CONTROL_TABLE,
-  AUTH_CONTROL_TABLE_SQL,
-  readAuthControl,
-  type AuthControl,
-} from "./auth-control.ts";
-import {
-  CURSOR_CLOUD_CALLBACK_URI,
-  CURSOR_GROK_BOT_CLIENT_ID,
   FIRST_PARTY_CLIENT_DISCOVERY_ID,
-  FIRST_PARTY_CLIENT_METADATA_JSON,
   OFFLINE_ACCESS_SCOPE,
   UMAIL_OAUTH_SCOPE,
-  cursorGrokBotClient,
+  firstPartyClients,
   makeAuthOptions,
+  type FirstPartyClient,
 } from "./options.ts";
 
 const CREDENTIAL_PROVIDER_ID = "credential" as const;
@@ -109,7 +100,6 @@ async function applyAuthSchema(database: AuthD1Database): Promise<void> {
     telemetry: { enabled: false },
   });
   await migrations.runMigrations();
-  await database.exec(AUTH_CONTROL_TABLE_SQL);
 }
 
 export async function provisionAuth(
@@ -122,28 +112,35 @@ export async function provisionAuth(
   if (request.password.length < 12) {
     throw new Error("UMAIL_OPERATOR_PASSWORD must be at least 12 characters");
   }
-  const canonicalEmail = canonicalOperatorEmail(request.operatorEmail);
-  const operatorEmail = betterAuthLookupEmail(canonicalEmail);
+  const operatorEmail = betterAuthLookupEmail(canonicalOperatorEmail(request.operatorEmail));
   await applyAuthSchema(database);
   const now = new Date().toISOString();
-  const control = await readAuthControl(database);
-  const operatorId = control?.operatorId ?? crypto.randomUUID();
+  // The operator is the user with the configured email.
+  const existingUser = await database
+    .prepare(`SELECT id FROM user WHERE email = ?`)
+    .bind(operatorEmail)
+    .first();
+  const operatorId =
+    existingUser === null
+      ? crypto.randomUUID()
+      : Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(existingUser).id;
   const existingAccount = await loadCredentialAccount(database, operatorId);
   const passwordHash = await nextPasswordHash(request.password, existingAccount?.password ?? null);
-  const generation = nextGeneration(control, passwordHash.changed);
 
   await persistOperatorIdentity(database, {
     operatorId,
     operatorEmail,
-    canonicalEmail,
+    userExists: existingUser !== null,
+    account: existingAccount,
     passwordHash: passwordHash.hash,
     passwordChanged: passwordHash.changed,
-    generation,
     now,
   });
   await provisionStaticResources(database, request, now);
-  await provisionStaticClient(database, request.mcpResource, now);
-  await markAuthReady(database, now);
+  for (const { client, resource } of firstPartyClients()) {
+    const resourceUrl = resource === "rest" ? request.restResource : request.mcpResource;
+    await provisionStaticClient(database, client, resourceUrl, now);
+  }
 
   return { operatorId };
 }
@@ -174,12 +171,6 @@ async function nextPasswordHash(
   return { hash: await hashPassword(password), changed: true };
 }
 
-function nextGeneration(control: AuthControl | null, passwordChanged: boolean): number {
-  if (control === null) return 1;
-  if (passwordChanged) return control.credentialGeneration + 1;
-  return control.credentialGeneration;
-}
-
 async function loadCredentialAccount(
   database: AuthD1Database,
   operatorId: string,
@@ -205,38 +196,26 @@ async function persistOperatorIdentity(
   input: {
     readonly operatorId: string;
     readonly operatorEmail: ExternalMailAddress;
-    readonly canonicalEmail: ExternalMailAddress;
+    readonly userExists: boolean;
+    readonly account: typeof ExistingAccountRow.Type | null;
     readonly passwordHash: string;
     readonly passwordChanged: boolean;
-    readonly generation: number;
     readonly now: string;
   },
 ): Promise<void> {
-  const user = await database
-    .prepare(`SELECT id FROM user WHERE id = ?`)
-    .bind(input.operatorId)
-    .first();
-  const account = await loadCredentialAccount(database, input.operatorId);
-  const statements: AuthD1Statement[] = [];
-
-  if (user === null) {
-    statements.push(
-      database
-        .prepare(
-          `INSERT INTO user (id, name, email, emailVerified, image, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-        )
-        .bind(input.operatorId, "operator", input.operatorEmail, 1, input.now, input.now),
-    );
-  } else {
-    statements.push(
-      database
-        .prepare(
-          `UPDATE user SET email = ?, name = ?, emailVerified = ?, updatedAt = ? WHERE id = ?`,
-        )
-        .bind(input.operatorEmail, "operator", 1, input.now, input.operatorId),
-    );
-  }
+  const account = input.account;
+  const statements: AuthD1Statement[] = [
+    input.userExists
+      ? database
+          .prepare(`UPDATE user SET name = ?, emailVerified = ?, updatedAt = ? WHERE id = ?`)
+          .bind("operator", 1, input.now, input.operatorId)
+      : database
+          .prepare(
+            `INSERT INTO user (id, name, email, emailVerified, image, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+          )
+          .bind(input.operatorId, "operator", input.operatorEmail, 1, input.now, input.now),
+  ];
 
   if (account === null) {
     statements.push(
@@ -258,81 +237,27 @@ async function persistOperatorIdentity(
           input.now,
         ),
     );
-  } else if (
-    account.issuer !== CREDENTIAL_ISSUER ||
-    account.accountId !== input.operatorId ||
-    account.userId !== input.operatorId ||
-    input.passwordChanged
-  ) {
+  } else if (account.issuer !== CREDENTIAL_ISSUER || input.passwordChanged) {
     statements.push(
       database
-        .prepare(
-          `UPDATE account
-           SET issuer = ?, accountId = ?, userId = ?, providerId = ?, password = ?, updatedAt = ?
-           WHERE id = ?`,
-        )
-        .bind(
-          CREDENTIAL_ISSUER,
-          input.operatorId,
-          input.operatorId,
-          CREDENTIAL_PROVIDER_ID,
-          input.passwordHash,
-          input.now,
-          account.id,
-        ),
+        .prepare(`UPDATE account SET issuer = ?, password = ?, updatedAt = ? WHERE id = ?`)
+        .bind(CREDENTIAL_ISSUER, input.passwordHash, input.now, account.id),
     );
   }
 
+  // A new password ends every session and grant made with the old one.
   if (input.passwordChanged && account !== null) {
     statements.push(
       database.prepare(`DELETE FROM session WHERE userId = ?`).bind(input.operatorId),
-      database.prepare(`DELETE FROM oauthRefreshToken WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM oauthAccessToken WHERE userId = ?`).bind(input.operatorId),
+      database.prepare(`DELETE FROM oauthRefreshToken WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM oauthConsent WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM verification`).bind(),
       database.prepare(`DELETE FROM deviceCode`).bind(),
     );
   }
 
-  const existingControl = await readAuthControl(database);
-  if (existingControl === null) {
-    statements.push(
-      database
-        .prepare(
-          `INSERT INTO ${AUTH_CONTROL_TABLE} (
-             id, operatorId, canonicalEmail, credentialGeneration, ready, createdAt, updatedAt
-           ) VALUES (?, ?, ?, ?, 0, ?, ?)`,
-        )
-        .bind(
-          AUTH_CONTROL_ROW_ID,
-          input.operatorId,
-          input.canonicalEmail,
-          input.generation,
-          input.now,
-          input.now,
-        ),
-    );
-  } else {
-    statements.push(
-      database
-        .prepare(
-          `UPDATE ${AUTH_CONTROL_TABLE}
-           SET operatorId = ?, canonicalEmail = ?, credentialGeneration = ?, updatedAt = ?
-           WHERE id = ?`,
-        )
-        .bind(
-          input.operatorId,
-          input.canonicalEmail,
-          input.generation,
-          input.now,
-          AUTH_CONTROL_ROW_ID,
-        ),
-    );
-  }
-
-  if (statements.length > 0) {
-    await database.batch(statements);
-  }
+  await database.batch(statements);
 }
 
 async function provisionStaticResources(
@@ -404,47 +329,42 @@ async function upsertOwnedResource(
 
 async function provisionStaticClient(
   database: AuthD1Database,
-  mcpResource: string,
+  client: FirstPartyClient,
+  resource: string,
   now: string,
 ): Promise<void> {
-  const client = cursorGrokBotClient();
   const existing = await database
     .prepare(`SELECT clientId, clientDiscoveryId FROM oauthClient WHERE clientId = ?`)
     .bind(client.clientId)
     .first();
+  const fields = [
+    client.name ?? client.clientId,
+    "none",
+    jsonText(client.grantTypes ?? []),
+    jsonText(client.responseTypes ?? []),
+    jsonText(client.redirectUris ?? []),
+    jsonText([UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE]),
+    client.requirePKCE === true ? 1 : 0,
+    client.metadata ?? null,
+  ] as const;
   if (existing === null) {
     await database
       .prepare(
         `INSERT INTO oauthClient (
            id, clientId, clientDiscoveryId, name, tokenEndpointAuthMethod, grantTypes, responseTypes,
-           redirectUris, scopes, requirePKCE, disabled, metadata, createdAt, updatedAt
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           redirectUris, scopes, requirePKCE, metadata, disabled, createdAt, updatedAt
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
-      .bind(
-        CURSOR_GROK_BOT_CLIENT_ID,
-        client.clientId,
-        FIRST_PARTY_CLIENT_DISCOVERY_ID,
-        client.name ?? "Cursor / Grok Bot",
-        "none",
-        jsonText(["authorization_code", "refresh_token"]),
-        jsonText(["code"]),
-        jsonText([CURSOR_CLOUD_CALLBACK_URI]),
-        jsonText([UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE]),
-        1,
-        0,
-        FIRST_PARTY_CLIENT_METADATA_JSON,
-        now,
-        now,
-      )
+      .bind(client.clientId, client.clientId, FIRST_PARTY_CLIENT_DISCOVERY_ID, ...fields, now, now)
       .run();
   } else {
     const decoded = Schema.decodeUnknownResult(ExistingClientRow)(existing);
     if (Result.isFailure(decoded)) {
-      throw new Error("oauthClient row for the static client is not usable");
+      throw new Error(`oauthClient row for ${client.clientId} is not usable`);
     }
     if (decoded.success.clientDiscoveryId !== FIRST_PARTY_CLIENT_DISCOVERY_ID) {
       throw new Error(
-        `oauthClient ${CURSOR_GROK_BOT_CLIENT_ID} is owned by ${decoded.success.clientDiscoveryId ?? "another registrant"}`,
+        `oauthClient ${client.clientId} is owned by ${decoded.success.clientDiscoveryId ?? "another registrant"}`,
       );
     }
     await database
@@ -454,24 +374,13 @@ async function provisionStaticClient(
              redirectUris = ?, scopes = ?, requirePKCE = ?, metadata = ?, updatedAt = ?
          WHERE clientId = ?`,
       )
-      .bind(
-        client.name ?? "Cursor / Grok Bot",
-        "none",
-        jsonText(["authorization_code", "refresh_token"]),
-        jsonText(["code"]),
-        jsonText([CURSOR_CLOUD_CALLBACK_URI]),
-        jsonText([UMAIL_OAUTH_SCOPE, OFFLINE_ACCESS_SCOPE]),
-        1,
-        FIRST_PARTY_CLIENT_METADATA_JSON,
-        now,
-        client.clientId,
-      )
+      .bind(...fields, now, client.clientId)
       .run();
   }
 
   const link = await database
     .prepare(`SELECT clientId FROM oauthClientResource WHERE clientId = ? AND resourceId = ?`)
-    .bind(client.clientId, mcpResource)
+    .bind(client.clientId, resource)
     .first();
   if (link === null) {
     await database
@@ -479,16 +388,9 @@ async function provisionStaticClient(
         `INSERT INTO oauthClientResource (id, clientId, resourceId, metadata, createdAt)
          VALUES (?, ?, ?, NULL, ?)`,
       )
-      .bind(crypto.randomUUID(), client.clientId, mcpResource, now)
+      .bind(crypto.randomUUID(), client.clientId, resource, now)
       .run();
   }
-}
-
-async function markAuthReady(database: AuthD1Database, now: string): Promise<void> {
-  await database
-    .prepare(`UPDATE ${AUTH_CONTROL_TABLE} SET ready = 1, updatedAt = ? WHERE id = ?`)
-    .bind(now, AUTH_CONTROL_ROW_ID)
-    .run();
 }
 
 function jsonText(values: ReadonlyArray<string>): string {

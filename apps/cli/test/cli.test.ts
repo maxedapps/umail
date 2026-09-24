@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ApprovalToken } from "@umail/api-contract";
-import { type UmailClientEnvironment } from "@umail/api-contract/client";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -42,9 +42,12 @@ interface CapturedRequest {
 
 type CliResponseFactory = (request: HttpClientRequest.HttpClientRequest, url: URL) => Response;
 
+// The environment the CLI reads its configuration from.
+type CliEnv = { readonly UMAIL_URL?: string };
+
 const testEnv = {
   UMAIL_URL: "https://umail.example.test",
-} satisfies UmailClientEnvironment;
+} satisfies CliEnv;
 
 const testCredentialStore = {
   read: Effect.succeed({
@@ -61,7 +64,7 @@ const testCredentialStore = {
     generation: 0,
   }),
   commit: () => Effect.succeed("committed" as const),
-  takeLogoutSnapshot: () => Effect.succeed(null),
+  clearTokens: () => Effect.void,
   withRefreshLock: (body) => body,
 } satisfies OAuthCredentialStoreService;
 
@@ -90,7 +93,7 @@ const address = {
   address: "inbox@umail.example.test",
   displayName: "Inbox",
   active: true,
-  forwardingDestinationId: null,
+  forwardTo: null,
   createdAt: "2026-08-25T10:00:00.000Z",
   updatedAt: "2026-08-25T10:00:00.000Z",
 };
@@ -99,32 +102,6 @@ const sendingIdentity = {
   id: "address-1",
   address: "inbox@umail.example.test",
   displayName: "Inbox",
-};
-
-const mcpClient = {
-  clientId: "agent-1",
-  label: "Agent one",
-  state: "active",
-  policy: {
-    mailboxIds: ["mailbox-1"],
-    canRead: true,
-    canDelete: false,
-    sendMode: { kind: "requireApproval", preapprovedRecipients: ["exempt@example.com"] },
-    recipientAllowlist: ["allowed@example.com"],
-    canAdmin: false,
-  },
-  createdAt: "2026-08-25T10:00:00.000Z",
-  updatedAt: "2026-08-25T10:00:00.000Z",
-};
-
-const destination = {
-  id: "destination-1",
-  cloudflareId: "cloudflare-destination-1",
-  email: "forward@example.com",
-  verificationStatus: "verified",
-  verifiedAt: "2026-08-25T10:00:00.000Z",
-  createdAt: "2026-08-25T10:00:00.000Z",
-  updatedAt: "2026-08-25T10:00:00.000Z",
 };
 
 const threadPage = {
@@ -231,32 +208,20 @@ function jsonResponse(value: Json) {
 }
 
 function defaultResponse(request: HttpClientRequest.HttpClientRequest, url: URL) {
-  if (
-    request.method === "DELETE" &&
-    (url.pathname.startsWith("/forwarding-destinations/") || url.pathname.startsWith("/threads/"))
-  ) {
+  if (request.method === "DELETE" && url.pathname.startsWith("/threads/")) {
     return new Response(null, { status: 204 });
   }
   if (url.pathname === "/addresses") {
     return request.method === "GET" ? jsonResponse([]) : jsonResponse(address);
+  }
+  if (url.pathname.endsWith("/forwarding") && request.method === "PUT") {
+    return jsonResponse({ address, verified: false });
   }
   if (url.pathname.startsWith("/addresses/")) {
     return jsonResponse(address);
   }
   if (url.pathname === "/sending-identities") {
     return jsonResponse([sendingIdentity]);
-  }
-  if (url.pathname === "/forwarding-destinations") {
-    return request.method === "GET" ? jsonResponse([destination]) : jsonResponse(destination);
-  }
-  if (url.pathname.startsWith("/forwarding-destinations/")) {
-    return jsonResponse(destination);
-  }
-  if (url.pathname === "/mcp-clients") {
-    return jsonResponse([mcpClient]);
-  }
-  if (url.pathname.startsWith("/mcp-clients/")) {
-    return jsonResponse(mcpClient);
   }
   if (url.pathname === "/threads") {
     return jsonResponse(threadPage);
@@ -315,7 +280,7 @@ function cliTestLayer() {
 
 function runDispatch(
   argv: ReadonlyArray<string>,
-  env: UmailClientEnvironment,
+  env: CliEnv,
   httpClient: HttpClient.HttpClient,
   tokenSource: ApprovalTokenSourceService = unusedApprovalTokenSource,
   credentialStore: OAuthCredentialStoreService = testCredentialStore,
@@ -336,13 +301,17 @@ function runDispatch(
 
 function runProgram(
   argv: ReadonlyArray<string>,
-  env: UmailClientEnvironment,
+  env: CliEnv,
   httpClient: HttpClient.HttpClient,
   tokenSource: ApprovalTokenSourceService = unusedApprovalTokenSource,
   credentialStore: OAuthCredentialStoreService = testCredentialStore,
 ) {
   return Effect.gen(function* () {
-    const outcome = yield* Effect.exit(program(argv, env));
+    const outcome = yield* Effect.exit(
+      program(argv).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
+      ),
+    );
     const stdout = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(
       yield* TestConsole.logLines,
     );
@@ -361,7 +330,7 @@ function runProgram(
 
 function dispatchEffect(
   argv: ReadonlyArray<string>,
-  env: UmailClientEnvironment,
+  env: CliEnv,
   httpClient: HttpClient.HttpClient,
   tokenSource: ApprovalTokenSourceService = unusedApprovalTokenSource,
   credentialStore: OAuthCredentialStoreService = testCredentialStore,
@@ -418,7 +387,9 @@ interface ApprovalFailureFixture {
 function runApprovalFailure(httpClient: HttpClient.HttpClient) {
   return Effect.gen(function* () {
     const result = yield* Effect.result(
-      program(["approvals", "approve"], { UMAIL_URL: testEnv.UMAIL_URL }),
+      program(["approvals", "approve"]).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(testEnv)),
+      ),
     );
     if (Result.isSuccess(result)) {
       return yield* Effect.die("Expected approval request to fail");
@@ -454,81 +425,6 @@ function serializeApprovalFailureCapture(captured: ApprovalFailureCapture): stri
 }
 
 describe("retained CLI dispatch", () => {
-  it("merges only the supplied flags into an MCP client policy", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    await runDispatch(["clients", "list"], testEnv, httpClient);
-    await runDispatch(
-      ["clients", "set-policy", "--id", "agent-1", "--send-mode", "allow"],
-      testEnv,
-      httpClient,
-    );
-
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/mcp-clients"],
-      ["GET", "/mcp-clients/agent-1"],
-      ["PUT", "/mcp-clients/agent-1/policy"],
-    ]);
-    expect(JSON.parse(captured[2]?.body ?? "")).toEqual({
-      label: "Agent one",
-      active: true,
-      policy: {
-        mailboxIds: ["mailbox-1"],
-        canRead: true,
-        canDelete: false,
-        sendMode: { kind: "allow" },
-        recipientAllowlist: ["allowed@example.com"],
-        canAdmin: false,
-      },
-    });
-  });
-
-  it("keeps the stored exemption list when only the label changes", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    await runDispatch(
-      ["clients", "set-policy", "--id", "agent-1", "--label", "Renamed", "--active", "false"],
-      testEnv,
-      httpClient,
-    );
-
-    const body = JSON.parse(captured[1]?.body ?? "");
-    expect(body.label).toBe("Renamed");
-    expect(body.active).toBe(false);
-    expect(body.policy.sendMode).toEqual({
-      kind: "requireApproval",
-      preapprovedRecipients: ["exempt@example.com"],
-    });
-  });
-
-  it("refuses a policy list flag that would silently empty or corrupt the list", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    await expect(
-      runDispatch(
-        [
-          "clients",
-          "set-policy",
-          "--id",
-          "agent-1",
-          "--recipients",
-          "good@example.com,not-an-address",
-        ],
-        testEnv,
-        httpClient,
-      ),
-    ).rejects.toThrow();
-    await expect(
-      runDispatch(
-        ["clients", "set-policy", "--id", "agent-1", "--mailboxes", " , "],
-        testEnv,
-        httpClient,
-      ),
-    ).rejects.toThrow();
-
-    expect(captured.every(({ method }) => method === "GET")).toBe(true);
-  });
-
   it("dispatches every address and sending-identity operation to root routes", async () => {
     const { captured, httpClient } = capturingClient();
 
@@ -567,34 +463,23 @@ describe("retained CLI dispatch", () => {
     expect(identities).toEqual([sendingIdentity]);
   });
 
-  it("dispatches destination and forwarding operations with exact payloads", async () => {
+  it("dispatches forwarding set and remove with exact payloads", async () => {
     const { captured, httpClient } = capturingClient();
 
-    await runDispatch(["destinations", "list"], testEnv, httpClient);
-    await runDispatch(
-      ["destinations", "create", "--email", "forward@example.com"],
-      testEnv,
-      httpClient,
-    );
-    await runDispatch(["destinations", "get", "--id", "destination-1"], testEnv, httpClient);
-    await runDispatch(["destinations", "delete", "--id", "destination-1"], testEnv, httpClient);
-    await runDispatch(
-      ["forwarding", "associate", "--address-id", "address-1", "--destination-id", "destination-1"],
-      testEnv,
-      httpClient,
-    );
+    expect(
+      await runDispatch(
+        ["forwarding", "set", "--address-id", "address-1", "--email", "owner@example.com"],
+        testEnv,
+        httpClient,
+      ),
+    ).toMatchObject({ verified: false });
     await runDispatch(["forwarding", "remove", "--address-id", "address-1"], testEnv, httpClient);
 
     expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/forwarding-destinations"],
-      ["POST", "/forwarding-destinations"],
-      ["GET", "/forwarding-destinations/destination-1"],
-      ["DELETE", "/forwarding-destinations/destination-1"],
       ["PUT", "/addresses/address-1/forwarding"],
       ["DELETE", "/addresses/address-1/forwarding"],
     ]);
-    expect(JSON.parse(captured[1]?.body ?? "")).toEqual({ email: "forward@example.com" });
-    expect(JSON.parse(captured[4]?.body ?? "")).toEqual({ destinationId: "destination-1" });
+    expect(JSON.parse(captured[0]?.body ?? "")).toEqual({ email: "owner@example.com" });
   });
 
   it("dispatches thread list/detail/state/delete operations and preserves query values", async () => {
@@ -1384,6 +1269,7 @@ describe("removed CLI surface and safe errors", () => {
       ["api-keys", "list"],
       ["keys", "list"],
       ["approvals", "list"],
+      ["clients", "list"],
     ] as const) {
       const captured = await Effect.runPromise(runProgram(argv, testEnv, unusedHttpClient()));
       expect(Exit.isFailure(captured.outcome)).toBe(true);
@@ -1477,7 +1363,6 @@ describe("removed CLI surface and safe errors", () => {
         "logout",
         "addresses",
         "sending-identities",
-        "destinations",
         "forwarding",
         "threads",
         "jobs",
@@ -1492,7 +1377,7 @@ describe("removed CLI surface and safe errors", () => {
         "--local-part",
         "--request-id",
         "browser device flow",
-        "owner-only state file",
+        "Revoke this CLI's access on the server",
       ] as const) {
         expect(help).toContain(retained);
       }
@@ -1508,6 +1393,9 @@ describe("removed CLI surface and safe errors", () => {
         "--api-key",
         "--secret",
         "approvals list",
+        "set-policy",
+        "mcp oauth clients",
+        "destinations",
         "better-auth",
         "messages send",
       ] as const) {
@@ -1518,16 +1406,12 @@ describe("removed CLI surface and safe errors", () => {
   );
 
   it("prints each failure once and stays silent on interruption", async () => {
-    const defect = await Effect.runPromise(
-      runProgram(
-        ["clients", "set-policy", "--id", "agent-1", "--label", ""],
-        testEnv,
-        capturingClient().httpClient,
-      ),
+    const unconfigured = await Effect.runPromise(
+      runProgram(["threads", "list"], {}, unusedHttpClient()),
     );
-    expect(Exit.isFailure(defect.outcome)).toBe(true);
-    expect(defect.stdout).toEqual([]);
-    expect(defect.stderr).toEqual(["Schema validation failed"]);
+    expect(Exit.isFailure(unconfigured.outcome)).toBe(true);
+    expect(unconfigured.stdout).toEqual([]);
+    expect(unconfigured.stderr).toEqual(["UMAIL_URL is required"]);
 
     const usage = await Effect.runPromise(
       runProgram(

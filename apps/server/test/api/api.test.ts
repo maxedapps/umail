@@ -5,9 +5,8 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import { describe, expect, it } from "vitest";
 
 import {
-  ForwardingDestination,
+  AddressForwarding,
   MailMessagePage,
-  McpClient,
   NormalizedRfcMessageId,
   type McpPrincipal,
   type PrincipalPolicy,
@@ -31,6 +30,7 @@ import {
   authorized,
   createWorld,
   jsonHeaders,
+  runDueWorkPass,
   seedInboundMessage,
   seedMailbox,
   unauthorized,
@@ -54,7 +54,8 @@ describe("API contract", () => {
     });
     expect(paths).toContain("/addresses");
     expect(paths).toContain("/sending-identities");
-    expect(paths).toContain("/forwarding-destinations");
+    expect(paths).toContain("/addresses/:id/forwarding");
+    expect(paths).not.toContain("/forwarding-destinations");
     expect(paths).toContain("/threads");
     expect(paths).toContain("/messages");
     expect(paths).toContain("/submissions");
@@ -177,7 +178,6 @@ describe("root authorization boundary", () => {
     const responses = await Promise.all([
       world.fetch("http://umail.test/addresses", authorized(world)),
       world.fetch("http://umail.test/sending-identities", authorized(world)),
-      world.fetch("http://umail.test/forwarding-destinations", authorized(world)),
       world.fetch("http://umail.test/threads", authorized(world)),
       world.fetch("http://umail.test/messages", authorized(world)),
       world.fetch("http://umail.test/jobs", authorized(world)),
@@ -192,7 +192,7 @@ describe("root authorization boundary", () => {
       ),
     ]);
     expect(responses.map((response) => response.status)).toEqual([
-      200, 200, 200, 200, 200, 200, 200, 200, 200,
+      200, 200, 200, 200, 200, 200, 200, 200,
     ]);
     expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
   });
@@ -224,9 +224,9 @@ describe("root authorization boundary", () => {
         body: JSON.stringify({ localPart: "blocked" }),
         headers: jsonHeaders(wrong.headers),
       }),
-      world.fetch("http://umail.test/forwarding-destinations", {
+      world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
         ...wrong,
-        method: "POST",
+        method: "PUT",
         body: JSON.stringify({ email: "blocked@example.com" }),
         headers: jsonHeaders(wrong.headers),
       }),
@@ -250,10 +250,7 @@ describe("root authorization boundary", () => {
     ]);
     expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401]);
     expect(world.accountStorage.writeCount).toBe(writesBefore);
-    expect(world.destinations.items.size).toBe(0);
-    expect(world.destinations.createCalls).toEqual([]);
-    expect(world.destinations.getCalls).toEqual([]);
-    expect(world.destinations.deleteCalls).toEqual([]);
+    expect(world.destinations.ensureCalls).toEqual([]);
     expect(world.archive.getCalls).toEqual([]);
   });
 });
@@ -409,21 +406,6 @@ describe("root mailbox API", () => {
     );
     expect(stored.sendState).toBe("ready");
     expect(stored.direction).toBe("outbound");
-  });
-
-  it("uses the destination provider and persists its actor-free result", async () => {
-    const world = await createWorld();
-    const response = await world.fetch("http://umail.test/forwarding-destinations", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ email: "forward@example.com" }),
-    });
-
-    expect(response.status, await response.clone().text()).toBe(200);
-    expect(world.destinations.createCalls).toEqual(["forward@example.com"]);
-    const stored = await Effect.runPromise(world.account.listDestinations());
-    expect(stored.map((destination) => destination.email)).toEqual(["forward@example.com"]);
-    expect(stored[0]?.verificationStatus).toBe("pending");
   });
 
   it("paginates threads without duplicates and rejects malformed cursors", async () => {
@@ -591,28 +573,12 @@ describe("root mailbox API", () => {
     expect(sendResponse.status, await sendResponse.clone().text()).toBe(200);
     const sent = await Schema.decodeUnknownPromise(OutboundJobStatus)(await sendResponse.json());
 
-    const claimed = await Effect.runPromise(
-      world.account.claimDispatch({
-        jobId: sent.jobId,
-        nowIso: "2026-01-01T00:00:00.000Z",
-        claimExpiresAt: "2026-01-01T00:15:00.000Z",
-      }),
-    );
-    if (claimed.kind !== "claimed") {
-      throw new Error("expected a dispatch claim");
-    }
-    await Effect.runPromise(
-      world.account.completeAttempt({
-        jobId: sent.jobId,
-        attemptId: claimed.attemptId,
-        nowIso: "2026-01-01T00:00:01.000Z",
-        outcome: {
-          kind: "accepted",
-          providerMessageId: "prov-1",
-          rfcMessageId: PROVIDER_RFC_ID,
-        },
-      }),
-    );
+    await runDueWorkPass(world, {
+      outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_RFC_ID },
+    });
+    expect(
+      await Effect.runPromise(world.account.getOutboundJob(sent.jobId, { kind: "operator" })),
+    ).toMatchObject({ state: "accepted" });
 
     const replyResponse = await world.fetch("http://umail.test/submissions", {
       method: "POST",
@@ -640,163 +606,6 @@ describe("root mailbox API", () => {
     expect(reply.parentMessageId).toBe(sent.messageId);
   });
 
-  it("lists, reads and replaces MCP client policies over the JSON API", async () => {
-    const world = await createWorld();
-    await Effect.runPromise(
-      world.account.ensureMcpOAuthPolicy({
-        clientId: "agent-1",
-        label: "Agent one",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-
-    const listed = await world.fetch("http://umail.test/mcp-clients", authorized(world));
-    expect(listed.status, await listed.clone().text()).toBe(200);
-    const clients = await Schema.decodeUnknownPromise(Schema.Array(McpClient))(await listed.json());
-    const seeded = clients.find((entry) => entry.clientId === "agent-1");
-    expect(seeded?.label).toBe("Agent one");
-    expect(seeded?.policy.sendMode.kind).toBe("requireApproval");
-
-    const updated = await world.fetch("http://umail.test/mcp-clients/agent-1/policy", {
-      method: "PUT",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        label: "Agent one",
-        active: true,
-        policy: {
-          mailboxIds: "all",
-          canRead: true,
-          canDelete: false,
-          sendMode: { kind: "allow" },
-          recipientAllowlist: "any",
-          canAdmin: false,
-        },
-      }),
-    });
-    expect(updated.status, await updated.clone().text()).toBe(200);
-    const client = await Schema.decodeUnknownPromise(McpClient)(await updated.json());
-    expect(client.policy.sendMode.kind).toBe("allow");
-    expect(client.state).toBe("active");
-
-    const stored = await Effect.runPromise(world.account.getMcpOAuthPolicy("agent-1"));
-    expect(stored?.policy.sendMode.kind).toBe("allow");
-
-    const fetched = await world.fetch("http://umail.test/mcp-clients/agent-1", authorized(world));
-    expect(
-      (await Schema.decodeUnknownPromise(McpClient)(await fetched.json())).policy.sendMode.kind,
-    ).toBe("allow");
-
-    const disabled = await world.fetch("http://umail.test/mcp-clients/agent-1/policy", {
-      method: "PUT",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        label: "Agent one",
-        active: false,
-        policy: {
-          mailboxIds: "all",
-          canRead: true,
-          canDelete: false,
-          sendMode: { kind: "allow" },
-          recipientAllowlist: "any",
-          canAdmin: false,
-        },
-      }),
-    });
-    expect((await Schema.decodeUnknownPromise(McpClient)(await disabled.json())).state).toBe(
-      "disabled",
-    );
-    expect((await Effect.runPromise(world.account.getMcpOAuthPolicy("agent-1")))?.state).toBe(
-      "disabled",
-    );
-  });
-
-  it("rejects an unauthenticated caller and a policy that would empty a required list", async () => {
-    const world = await createWorld();
-    await Effect.runPromise(
-      world.account.ensureMcpOAuthPolicy({
-        clientId: "agent-3",
-        label: "Agent three",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-    const body = {
-      label: "Agent three",
-      active: true,
-      policy: {
-        mailboxIds: "all",
-        canRead: true,
-        canDelete: false,
-        sendMode: { kind: "allow" },
-        recipientAllowlist: "any",
-        canAdmin: true,
-      },
-    };
-
-    expect((await world.fetch("http://umail.test/mcp-clients", unauthorized())).status).toBe(401);
-    const anonymousWrite = await world.fetch("http://umail.test/mcp-clients/agent-3/policy", {
-      method: "PUT",
-      headers: jsonHeaders(unauthorized().headers),
-      body: JSON.stringify(body),
-    });
-    expect(anonymousWrite.status).toBe(401);
-    expect(
-      (await Effect.runPromise(world.account.getMcpOAuthPolicy("agent-3")))?.policy.canAdmin,
-    ).toBe(false);
-
-    for (const invalid of [
-      { ...body, policy: { ...body.policy, mailboxIds: [] } },
-      { ...body, policy: { ...body.policy, recipientAllowlist: [] } },
-    ]) {
-      const response = await world.fetch("http://umail.test/mcp-clients/agent-3/policy", {
-        method: "PUT",
-        headers: jsonHeaders(authorized(world).headers),
-        body: JSON.stringify(invalid),
-      });
-      expect(response.status, await response.clone().text()).toBe(400);
-    }
-    expect(
-      (await Effect.runPromise(world.account.getMcpOAuthPolicy("agent-3")))?.policy.sendMode.kind,
-    ).toBe("requireApproval");
-  });
-
-  it("refuses an unknown client and never restores a revoked one", async () => {
-    const world = await createWorld();
-    expect(
-      (await world.fetch("http://umail.test/mcp-clients/nobody", authorized(world))).status,
-    ).toBe(404);
-
-    await Effect.runPromise(
-      world.account.ensureMcpOAuthPolicy({
-        clientId: "agent-2",
-        label: "Agent two",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-    await Effect.runPromise(
-      world.account.revokeMcpOAuthPolicy("agent-2", "2026-01-02T00:00:00.000Z"),
-    );
-    const revoked = await world.fetch("http://umail.test/mcp-clients/agent-2/policy", {
-      method: "PUT",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        label: "Agent two",
-        active: true,
-        policy: {
-          mailboxIds: "all",
-          canRead: true,
-          canDelete: false,
-          sendMode: { kind: "allow" },
-          recipientAllowlist: "any",
-          canAdmin: false,
-        },
-      }),
-    });
-    expect(revoked.status).toBe(400);
-    const stored = await Effect.runPromise(world.account.getMcpOAuthPolicy("agent-2"));
-    expect(stored?.state).toBe("revoked");
-    expect(stored?.policy.sendMode.kind).toBe("requireApproval");
-  });
-
   it("returns reply errors without creating a job", async () => {
     const world = await createWorld();
     const missing = await world.fetch(
@@ -810,122 +619,64 @@ describe("root mailbox API", () => {
     expect(jobs.items).toEqual([]);
   });
 
-  it("associates and removes only verified forwarding destinations", async () => {
+  it("forwards an address to any email and reports Cloudflare's live verification", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const now = "2026-01-01T00:00:00.000Z";
-    const verified = await Effect.runPromise(
-      world.account.insertDestination("cf-verified", "verified@example.com", now, now),
+    const forward = (email: string) =>
+      world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
+        method: "PUT",
+        headers: jsonHeaders(authorized(world).headers),
+        body: JSON.stringify({ email }),
+      });
+
+    const pending = await forward("owner@example.com");
+    expect(pending.status, await pending.clone().text()).toBe(200);
+    expect(
+      await Schema.decodeUnknownPromise(AddressForwarding)(await pending.json()),
+    ).toMatchObject({
+      address: { id: mailbox.id, forwardTo: "owner@example.com" },
+      verified: false,
+    });
+    world.destinations.verify("owner@example.com");
+    const verified = await Schema.decodeUnknownPromise(AddressForwarding)(
+      await (await forward("owner@example.com")).json(),
     );
-    const pending = await Effect.runPromise(
-      world.account.insertDestination("cf-pending", "pending@example.com", null, now),
+    expect(verified.verified).toBe(true);
+    expect(world.destinations.ensureCalls).toEqual(["owner@example.com", "owner@example.com"]);
+
+    world.destinations.failNext("This email address is not allowed.");
+    const refused = await forward("blocked@example.com");
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ message: "This email address is not allowed." });
+    expect((await Effect.runPromise(world.account.getAddress(mailbox.id)))?.forwardTo).toBe(
+      "owner@example.com",
+    );
+  });
+
+  it("answers an unknown address and clears forwarding without calling Cloudflare", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    await Effect.runPromise(
+      world.account.setAddressForwarding(
+        mailbox.id,
+        "owner@example.com",
+        "2026-01-01T00:00:00.000Z",
+      ),
     );
 
-    const rejected = await world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
+    const unknown = await world.fetch("http://umail.test/addresses/missing/forwarding", {
       method: "PUT",
       headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ destinationId: pending.id }),
+      body: JSON.stringify({ email: "owner@example.com" }),
     });
-    expect(rejected.status).toBe(400);
-
-    const associated = await world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
-      method: "PUT",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ destinationId: verified.id }),
-    });
-    expect(associated.status).toBe(200);
-    const afterAssociate = await Effect.runPromise(world.account.getAddress(mailbox.id));
-    expect(afterAssociate?.forwardingDestinationId).toBe(verified.id);
-
+    expect(unknown.status).toBe(404);
     const removed = await world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
-      ...authorized(world),
       method: "DELETE",
+      ...authorized(world),
     });
     expect(removed.status).toBe(200);
-    const afterRemove = await Effect.runPromise(world.account.getAddress(mailbox.id));
-    expect(afterRemove?.forwardingDestinationId).toBeNull();
-  });
-
-  it("refreshes, lists, gets, and deletes destinations with provider semantics", async () => {
-    const world = await createWorld();
-    const createdResponse = await world.fetch("http://umail.test/forwarding-destinations", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ email: "lifecycle@example.com" }),
-    });
-    expect(createdResponse.status).toBe(200);
-    const created = await Schema.decodeUnknownPromise(ForwardingDestination)(
-      await createdResponse.json(),
-    );
-    const cloudflareId =
-      world.destinations.createCalls.length === 1
-        ? [...world.destinations.items.keys()][0]
-        : undefined;
-    expect(cloudflareId).toBeDefined();
-    if (cloudflareId === undefined) return;
-    world.destinations.items.set(cloudflareId, {
-      cloudflareId,
-      email: "lifecycle@example.com",
-      verifiedAt: "2026-02-01T00:00:00.000Z",
-    });
-
-    const listed = await world.fetch(
-      "http://umail.test/forwarding-destinations",
-      authorized(world),
-    );
-    expect(listed.status).toBe(200);
-    expect(await listed.json()).toEqual([created]);
-
-    const refreshed = await world.fetch(
-      `http://umail.test/forwarding-destinations/${created.id}`,
-      authorized(world),
-    );
-    expect(refreshed.status).toBe(200);
-    const refreshedDestination = await Schema.decodeUnknownPromise(ForwardingDestination)(
-      await refreshed.json(),
-    );
-    expect(refreshedDestination.verificationStatus).toBe("verified");
-    expect(world.destinations.getCalls).toEqual([cloudflareId]);
-
-    const removed = await world.fetch(`http://umail.test/forwarding-destinations/${created.id}`, {
-      ...authorized(world),
-      method: "DELETE",
-    });
-    expect(removed.status).toBe(204);
-    expect(world.destinations.deleteCalls).toEqual([cloudflareId]);
-    expect(await Effect.runPromise(world.account.listDestinations())).toEqual([]);
-
-    world.destinations.failNext("This email address is already in use.");
-    const rejected = await world.fetch("http://umail.test/forwarding-destinations", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ email: "duplicate@example.com" }),
-    });
-    expect(rejected.status).toBe(400);
-    expect(await rejected.json()).toEqual({
-      _tag: "ApiProblem",
-      message: "This email address is already in use.",
-    });
-  });
-
-  it("keeps a local destination when the provider refuses deletion", async () => {
-    const world = await createWorld();
-    const createdResponse = await world.fetch("http://umail.test/forwarding-destinations", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ email: "keep@example.com" }),
-    });
-    const created = await Schema.decodeUnknownPromise(ForwardingDestination)(
-      await createdResponse.json(),
-    );
-    world.destinations.failNext("Provider refused deletion.");
-    const removed = await world.fetch(`http://umail.test/forwarding-destinations/${created.id}`, {
-      ...authorized(world),
-      method: "DELETE",
-    });
-    expect(removed.status).toBe(400);
-    const remaining = await Effect.runPromise(world.account.getDestination(created.id));
-    expect(remaining?.id).toBe(created.id);
+    expect(await removed.json()).toMatchObject({ id: mailbox.id, forwardTo: null });
+    expect(world.destinations.ensureCalls).toEqual([]);
   });
 
   it("serves exact attachment bytes and does not map archive transport failure to NotFound", async () => {
@@ -1074,7 +825,7 @@ describe("root mailbox API", () => {
     );
     expect(wrongBearer.status).toBe(401);
 
-    const outOfScope = await storedMcpPrincipal(world, "out-of-scope-reader", {
+    const outOfScope = mcpPrincipal(world, "out-of-scope-reader", {
       mailboxIds: [probe.id],
       canRead: true,
     });
@@ -1082,7 +833,7 @@ describe("root mailbox API", () => {
       Effect.runPromise(readMessageSource(world.deps, outOfScope, inbound.messageId)),
     ).rejects.toMatchObject({ _tag: "NotFound" });
 
-    const cannotRead = await storedMcpPrincipal(world, "no-read-client", {
+    const cannotRead = mcpPrincipal(world, "no-read-client", {
       mailboxIds: "all",
       canRead: false,
     });
@@ -1334,39 +1085,12 @@ function failOverRpc(error: unknown): Effect.Effect<never, AccountStoreError> {
   return Effect.fail(error as AccountStoreError);
 }
 
-type StoredMcpReadAccess = Pick<PrincipalPolicy, "mailboxIds" | "canRead">;
+type McpReadAccess = Pick<PrincipalPolicy, "mailboxIds" | "canRead">;
 
-async function storedMcpPrincipal(
-  world: World,
-  clientId: string,
-  access: StoredMcpReadAccess,
-): Promise<McpPrincipal> {
-  const policy = {
-    mailboxIds: access.mailboxIds,
-    canRead: access.canRead,
-    canDelete: false,
-    sendMode: { kind: "deny" },
-    recipientAllowlist: "any",
-    canAdmin: false,
-  } satisfies PrincipalPolicy;
-  await Effect.runPromise(
-    world.account.ensureMcpOAuthPolicy({
-      clientId,
-      label: clientId,
-      createdAt: "2026-08-28T10:00:00.000Z",
-    }),
-  );
-  await Effect.runPromise(
-    world.account.updateMcpOAuthPolicy({
-      clientId,
-      label: clientId,
-      policy,
-      updatedAt: "2026-08-28T10:01:00.000Z",
-    }),
-  );
+function mcpPrincipal(world: World, clientId: string, access: McpReadAccess): McpPrincipal {
   return {
     authority: "mcp",
     identity: { kind: "oauth", userId: world.operatorId, clientId, clientLabel: clientId },
-    policy,
+    policy: { ...access, sendMode: { kind: "deny" }, recipientAllowlist: "any" },
   };
 }

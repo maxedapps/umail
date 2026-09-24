@@ -84,45 +84,15 @@ export const replyToFlag = Flag.string("reply-to").pipe(
   Flag.withDescription("Reply to this message id"),
 );
 
-export const clientLabelFlag = Flag.optional(
-  Flag.string("label").pipe(Flag.withDescription("Human-readable client label")),
-);
-
-export const sendModeFlag = Flag.optional(
-  Flag.choice("send-mode", ["deny", "allow", "requireApproval"]).pipe(
-    Flag.withDescription("How this client may send: deny, allow, or requireApproval"),
+export const forwardEmailFlag = Flag.string("email").pipe(
+  Flag.withDescription("Inbox to forward to"),
+  Flag.filterMap(
+    (raw) => {
+      const parsed = parseExternalMailAddress(raw);
+      return parsed.kind === "ok" ? Option.some(parsed.address) : Option.none();
+    },
+    () => "a valid email address",
   ),
-);
-
-export const preapprovedFlag = Flag.optional(
-  Flag.string("preapproved").pipe(
-    Flag.withDescription(
-      "Comma-separated recipients exempt from approval; only read for requireApproval",
-    ),
-  ),
-);
-
-export const mailboxesFlag = Flag.optional(
-  Flag.string("mailboxes").pipe(
-    Flag.withDescription("'all' or a comma-separated list of mailbox ids"),
-  ),
-);
-
-export const recipientAllowlistFlag = Flag.optional(
-  Flag.string("recipients").pipe(
-    Flag.withDescription("'any' or a comma-separated recipient allowlist"),
-  ),
-);
-
-export const activeFlag = booleanChoiceFlag("active", "Whether the client stays active");
-
-export const canReadFlag = booleanChoiceFlag("can-read", "Allow reading mail");
-
-export const canDeleteFlag = booleanChoiceFlag("can-delete", "Allow deleting mail");
-
-export const canAdminFlag = booleanChoiceFlag(
-  "can-admin",
-  "Allow administration, including editing client policies",
 );
 
 export const replyAllFlag = Flag.boolean("reply-all").pipe(
@@ -135,15 +105,6 @@ export const tokenFileFlag = Flag.optional(
     Flag.withDescription("Read the approval token from a protected file; omit for a masked prompt"),
   ),
 );
-
-function booleanChoiceFlag(name: string, description: string) {
-  return Flag.optional(
-    Flag.choiceWithValue(name, [
-      ["true", true],
-      ["false", false],
-    ]).pipe(Flag.withDescription(description)),
-  );
-}
 
 function recipientFlag(name: string) {
   return Flag.string(name).pipe(

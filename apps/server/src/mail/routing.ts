@@ -2,38 +2,28 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { Input } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
-import { isResolved, type Diff } from "alchemy/Diff";
+import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import { Resource, type Resource as AlchemyResource } from "alchemy/Resource";
+import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-
-import {
-  EmailRoutingDomainsApi,
-  type EmailRoutingDomainApiError,
-  type EmailRoutingDomainIdentity,
-  type EmailRoutingDomainInspection,
-  type EmailRoutingDomainRegistration,
-  type EmailRoutingDomainsApiService,
-  type EmailRoutingDomainStatus,
-} from "./routing-api.ts";
 
 import { stageSendsMail, type StageSite } from "../site.ts";
 
 const EmailRoutingDomainTypeId = "uMail.Email.RoutingDomain" as const;
 type EmailRoutingDomainTypeId = typeof EmailRoutingDomainTypeId;
 
-export interface EmailRoutingDomainProps extends EmailRoutingDomainIdentity {}
-
-export interface EmailRoutingDomainAttributes extends EmailRoutingDomainRegistration {
-  readonly apexEnabled: boolean;
+export interface EmailRoutingDomainProps {
+  readonly zoneId: string;
+  readonly name: string;
 }
 
 export type EmailRoutingDomain = AlchemyResource<
   EmailRoutingDomainTypeId,
   EmailRoutingDomainProps,
-  EmailRoutingDomainAttributes
+  EmailRoutingDomainProps
 >;
 
 export const EmailRoutingDomain = Resource<EmailRoutingDomain>(EmailRoutingDomainTypeId);
@@ -44,144 +34,84 @@ export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDo
   readonly message: string;
 }> {}
 
-export interface EmailRoutingDomainLifecycle {
-  read(
-    props: EmailRoutingDomainProps,
-    output: EmailRoutingDomainAttributes | undefined,
-  ): Effect.Effect<EmailRoutingDomainAttributes | undefined, EmailRoutingDomainApiError>;
-  diff(
-    olds: EmailRoutingDomainProps,
-    news: EmailRoutingDomainProps,
-    output: EmailRoutingDomainAttributes | undefined,
-  ): Effect.Effect<Diff | void, EmailRoutingDomainApiError>;
-  reconcile(
-    props: EmailRoutingDomainProps,
-  ): Effect.Effect<
-    EmailRoutingDomainAttributes,
-    EmailRoutingDomainApiError | EmailRoutingDomainNotReady
-  >;
-}
+// The zone apex reports readiness in its routing settings. A subdomain is ready
+// once Cloudflare lists no missing DNS records for it.
+const inspect = Effect.fn(function* ({ zoneId, name }: EmailRoutingDomainProps) {
+  const settings = yield* emailRouting.getEmailRouting({ zoneId });
+  if (settings.name === name) {
+    return { apex: true, ready: settings.enabled && settings.status === "ready" };
+  }
+  const dns = yield* emailRouting.getDns({ zoneId, subdomain: name });
+  return { apex: false, ready: (dns.errors ?? []).length === 0 };
+});
 
-function isApex(inspection: EmailRoutingDomainInspection, identity: EmailRoutingDomainIdentity) {
-  return identity.name === inspection.zoneName;
-}
-
-function isReady(inspection: EmailRoutingDomainInspection) {
-  return (
-    inspection.apexEnabled &&
-    inspection.exact?.enabled === true &&
-    inspection.exact.status === "ready" &&
-    inspection.exact.dnsReady
-  );
-}
-
-function toAttributes(
-  inspection: EmailRoutingDomainInspection,
-): EmailRoutingDomainAttributes | undefined {
-  const exact = inspection.exact;
-  if (exact === undefined) return undefined;
-  return {
-    ...exact,
-    apexEnabled: inspection.apexEnabled,
-  };
-}
-
-function notReadyError(identity: EmailRoutingDomainIdentity) {
-  return new EmailRoutingDomainNotReady({
-    ...identity,
-    message: `Email Routing DNS for ${identity.name} did not become ready in time.`,
-  });
-}
-
-function waitUntilReady(
-  api: EmailRoutingDomainsApiService,
-  identity: EmailRoutingDomainIdentity,
-): Effect.Effect<
-  EmailRoutingDomainInspection,
-  EmailRoutingDomainApiError | EmailRoutingDomainNotReady
-> {
-  return api.inspect(identity).pipe(
+function waitUntilReady(domain: EmailRoutingDomainProps) {
+  return inspect(domain).pipe(
     Effect.repeat({
       schedule: Schedule.spaced("5 seconds"),
-      until: isReady,
+      until: ({ ready }) => ready,
       times: 12,
     }),
-    Effect.flatMap((inspection) =>
-      isReady(inspection) ? Effect.succeed(inspection) : Effect.fail(notReadyError(identity)),
+    Effect.flatMap(({ ready }) =>
+      ready
+        ? Effect.void
+        : Effect.fail(
+            new EmailRoutingDomainNotReady({
+              ...domain,
+              message: `Email Routing DNS for ${domain.name} did not become ready in time.`,
+            }),
+          ),
     ),
   );
 }
 
-export function makeEmailRoutingDomainLifecycle(
-  api: EmailRoutingDomainsApiService,
-): EmailRoutingDomainLifecycle {
-  return {
-    read: (props, output) =>
-      api.inspect(props).pipe(
-        Effect.map(toAttributes),
-        Effect.map((attributes) =>
-          attributes === undefined || output !== undefined ? attributes : Unowned(attributes),
-        ),
-      ),
-    diff: (olds, news, output) => {
-      if (olds.zoneId !== news.zoneId || olds.name !== news.name) {
-        return Effect.succeed({ action: "replace" } as const);
-      }
-      if (output === undefined) return Effect.void;
-      return api.inspect(news).pipe(
-        Effect.map((inspection) => {
-          const exact = inspection.exact;
-          return isReady(inspection) && exact?.subdomainId === output.subdomainId
-            ? undefined
-            : ({ action: "update" } as const);
-        }),
-      );
-    },
-    reconcile: (props) =>
-      Effect.gen(function* () {
-        const inspection = yield* api.inspect(props);
-        if (isReady(inspection)) {
-          const attributes = toAttributes(inspection);
-          if (attributes !== undefined) return attributes;
-        }
-        if (isApex(inspection, props)) {
-          yield* api.enableApex(props);
-        } else {
-          yield* api.enable(props);
-        }
-        const ready = yield* waitUntilReady(api, props);
-        const attributes = toAttributes(ready);
-        if (attributes === undefined) return yield* notReadyError(props);
-        return attributes;
-      }),
-  };
-}
+export const readEmailRoutingDomain = Effect.fn(function* (
+  domain: EmailRoutingDomainProps,
+  output: EmailRoutingDomainProps | undefined,
+) {
+  const { ready } = yield* inspect(domain);
+  if (!ready) return undefined;
+  const attributes = { zoneId: domain.zoneId, name: domain.name };
+  return output === undefined ? Unowned(attributes) : attributes;
+});
+
+export const diffEmailRoutingDomain = Effect.fn(function* (
+  olds: EmailRoutingDomainProps,
+  news: EmailRoutingDomainProps,
+  output: EmailRoutingDomainProps | undefined,
+) {
+  if (olds.zoneId !== news.zoneId || olds.name !== news.name) {
+    return { action: "replace" } as const;
+  }
+  if (output === undefined) return undefined;
+  const { ready } = yield* inspect(news);
+  return ready ? undefined : ({ action: "update" } as const);
+});
+
+export const reconcileEmailRoutingDomain = Effect.fn(function* (domain: EmailRoutingDomainProps) {
+  const { zoneId, name } = domain;
+  const { apex, ready } = yield* inspect(domain);
+  if (!ready) {
+    yield* emailRouting.createDns(apex ? { zoneId } : { zoneId, name });
+    yield* waitUntilReady(domain);
+  }
+  return { zoneId, name };
+});
 
 export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
   stables: ["zoneId", "name"],
-  diff: Effect.fn(function* ({ olds, news, output }) {
-    if (!isResolved(news)) return undefined;
-    const api = yield* EmailRoutingDomainsApi;
-    return yield* makeEmailRoutingDomainLifecycle(api).diff(olds, news, output);
-  }),
-  read: Effect.fn(function* ({ olds, output }) {
-    const api = yield* EmailRoutingDomainsApi;
-    return yield* makeEmailRoutingDomainLifecycle(api).read(olds, output);
-  }),
-  reconcile: Effect.fn(function* ({ news }) {
-    const api = yield* EmailRoutingDomainsApi;
-    return yield* makeEmailRoutingDomainLifecycle(api).reconcile(news);
-  }),
+  diff: ({ olds, news, output }) =>
+    isResolved(news) ? diffEmailRoutingDomain(olds, news, output) : Effect.void,
+  read: ({ olds, output }) => readEmailRoutingDomain(olds, output),
+  reconcile: ({ news }) => reconcileEmailRoutingDomain(news),
   // Never runs: MailRoutingDomain is retained. Alchemy still requires a delete handler.
   delete: () => Effect.void,
 });
 
-export type { EmailRoutingDomainStatus };
-
 export const configureMailRouting = Effect.fn(function* (
   site: StageSite,
   stage: string,
-  inboundWorkerName: Input<string>,
+  workerName: Input<string>,
 ) {
   const routing = yield* Cloudflare.Email.Routing("MailRouting", {
     zone: site.mailDomain,
@@ -200,7 +130,7 @@ export const configureMailRouting = Effect.fn(function* (
   if (site.kind === "prod") {
     yield* Cloudflare.Email.CatchAll("MailCatchAll", {
       zone: routingDomain.zoneId,
-      actions: [{ type: "worker", value: [inboundWorkerName] }],
+      actions: [{ type: "worker", value: [workerName] }],
     });
   } else {
     const mailRule = (localPart: (typeof site.testLocalParts)[number]) =>
@@ -213,7 +143,7 @@ export const configureMailRouting = Effect.fn(function* (
             value: `${localPart}@${site.mailDomain}`,
           },
         ],
-        actions: [{ type: "worker", value: [inboundWorkerName] }],
+        actions: [{ type: "worker", value: [workerName] }],
       });
     for (const localPart of site.testLocalParts) {
       yield* mailRule(localPart);

@@ -1,176 +1,63 @@
+import { fromApiToken } from "@distilled.cloud/cloudflare";
+import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
-export type CloudflareDestination = {
-  readonly cloudflareId: string;
+// Forwarding destinations are account-wide Cloudflare resources, and Cloudflare alone knows whether
+// one is verified. AgentMail keeps no copy: it adopts the destination or creates it, and reads its
+// verification live.
+
+export class DestinationError extends Schema.TaggedError<DestinationError>()("DestinationError", {
+  message: Schema.String,
+}) {}
+
+export type ForwardingDestination = {
   readonly email: string;
-  readonly verifiedAt: string | null;
+  readonly verified: boolean;
 };
-
-export class DestinationsError extends Schema.TaggedError<DestinationsError>()(
-  "DestinationsError",
-  {
-    reason: Schema.String,
-    message: Schema.String,
-  },
-) {}
 
 export interface DestinationsClient {
-  create(email: string): Effect.Effect<CloudflareDestination, DestinationsError>;
-  get(cloudflareId: string): Effect.Effect<CloudflareDestination, DestinationsError>;
-  delete(cloudflareId: string): Effect.Effect<void, DestinationsError>;
+  ensure(email: string): Effect.Effect<ForwardingDestination, DestinationError>;
 }
 
-const CloudflareAddress = Schema.Struct({
-  id: Schema.String,
-  email: Schema.String,
-  verified: Schema.optionalKey(Schema.NullOr(Schema.String)),
-});
-
-const CloudflareErrorItem = Schema.Struct({
-  code: Schema.optionalKey(Schema.Finite),
-  message: Schema.String,
-});
-
-const CloudflareErrorEnvelope = Schema.Struct({
-  errors: Schema.Array(CloudflareErrorItem),
-});
-
-const CloudflareEnvelope = Schema.Struct({
-  success: Schema.Boolean,
-  result: Schema.optionalKey(Schema.NullOr(CloudflareAddress)),
-  errors: Schema.optionalKey(Schema.Array(CloudflareErrorItem)),
-});
-
-const EMAIL_ADDRESS_NOT_FOUND = 2015;
-
-const FALLBACK_MESSAGE = "Could not create the forwarding destination.";
-
-export type CloudflareDestinationsConfig = {
+export function cloudflareDestinations(config: {
   readonly token: Redacted.Redacted<string>;
   readonly accountId: string;
-};
-
-export function cloudflareDestinationsClient(
-  config: CloudflareDestinationsConfig,
-): DestinationsClient {
+}): DestinationsClient {
+  const cloudflare = Layer.merge(
+    fromApiToken({ apiToken: Redacted.value(config.token) }),
+    FetchHttpClient.layer,
+  );
+  const accountId = config.accountId;
   return {
-    create: (email) =>
-      requestJson(config, "POST", "", { email }).pipe(
-        Effect.flatMap((envelope) => decodeDestination(envelope)),
-      ),
-    get: (cloudflareId) =>
-      requestJson(config, "GET", `/${cloudflareId}`).pipe(
-        Effect.flatMap((envelope) => decodeDestination(envelope)),
-      ),
-    delete: (cloudflareId) => requestJson(config, "DELETE", `/${cloudflareId}`).pipe(Effect.asVoid),
-  };
-}
-
-function requestJson(
-  config: CloudflareDestinationsConfig,
-  method: "GET" | "POST" | "DELETE",
-  pathSuffix: string,
-  body?: { readonly email: string },
-): Effect.Effect<typeof CloudflareEnvelope.Type, DestinationsError> {
-  return Effect.gen(function* () {
-    const init: RequestInit = {
-      method,
-      headers: {
-        authorization: `Bearer ${Redacted.value(config.token)}`,
-        "content-type": "application/json",
-      },
-    };
-    if (body !== undefined) {
-      init.body = JSON.stringify(body);
-    }
-    const response = yield* Effect.tryPromise({
-      try: () =>
-        fetch(
-          `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/email/routing/addresses${pathSuffix}`,
-          init,
+    ensure: (email) =>
+      Effect.gen(function* () {
+        const wanted = email.toLowerCase();
+        const existing = yield* emailRouting.listAddresses.items({ accountId }).pipe(
+          Stream.filter((address) => address.email?.toLowerCase() === wanted),
+          Stream.runHead,
+        );
+        const address = Option.isSome(existing)
+          ? existing.value
+          : yield* emailRouting.createAddress({ accountId, email });
+        return { email: address.email ?? email, verified: typeof address.verified === "string" };
+      }).pipe(
+        // Cloudflare's own message (e.g. an address it will not accept) is shown as is.
+        Effect.mapError(
+          (error) =>
+            new DestinationError({
+              message:
+                error._tag === "HttpClientError" || error.message.length === 0
+                  ? "Could not reach Cloudflare."
+                  : error.message,
+            }),
         ),
-      catch: () =>
-        new DestinationsError({
-          reason: "request_failed",
-          message: FALLBACK_MESSAGE,
-        }),
-    });
-    const payloadJson = yield* Effect.tryPromise({
-      try: () => response.json(),
-      catch: () =>
-        new DestinationsError({
-          reason: "request_failed",
-          message: FALLBACK_MESSAGE,
-        }),
-    });
-    const decoded = Schema.decodeUnknownResult(CloudflareEnvelope)(payloadJson);
-    if (Result.isFailure(decoded)) {
-      if (method === "DELETE" && response.status === 404) {
-        return { success: true, result: null, errors: [] };
-      }
-      const errors = Schema.decodeUnknownResult(CloudflareErrorEnvelope)(payloadJson);
-      return yield* new DestinationsError({
-        reason: response.ok ? "decode_failed" : "http_failed",
-        message: Result.isFailure(errors)
-          ? FALLBACK_MESSAGE
-          : userMessageFromErrors(errors.success.errors),
-      });
-    }
-    const payload = decoded.success;
-    if (method === "DELETE" && isAlreadyRemoved(response.status, payload)) {
-      return { success: true, result: null, errors: [] };
-    }
-    if (!response.ok || payload.success === false) {
-      return yield* new DestinationsError({
-        reason: "http_failed",
-        message: userMessageFromErrors(payload.errors),
-      });
-    }
-    return payload;
-  });
-}
-
-function isAlreadyRemoved(status: number, envelope: typeof CloudflareEnvelope.Type): boolean {
-  if (status === 404) return true;
-  return envelope.errors?.some((error) => error.code === EMAIL_ADDRESS_NOT_FOUND) === true;
-}
-
-function decodeDestination(
-  envelope: typeof CloudflareEnvelope.Type,
-): Effect.Effect<CloudflareDestination, DestinationsError> {
-  const result = envelope.result;
-  if (!envelope.success || result === undefined || result === null) {
-    return Effect.fail(
-      new DestinationsError({
-        reason: "decode_failed",
-        message: userMessageFromErrors(envelope.errors),
-      }),
-    );
-  }
-  return Effect.succeed(toDestination(result));
-}
-
-function userMessageFromErrors(
-  errors: ReadonlyArray<typeof CloudflareErrorItem.Type> | undefined,
-): string {
-  if (errors === undefined) {
-    return FALLBACK_MESSAGE;
-  }
-  const first = errors[0];
-  if (first === undefined) {
-    return FALLBACK_MESSAGE;
-  }
-  return first.message;
-}
-
-function toDestination(address: typeof CloudflareAddress.Type): CloudflareDestination {
-  const verified = address.verified;
-  return {
-    cloudflareId: address.id,
-    email: address.email,
-    verifiedAt: verified === undefined ? null : verified,
+        Effect.provide(cloudflare),
+      ),
   };
 }

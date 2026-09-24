@@ -1,9 +1,5 @@
 import type { MailboxAddress } from "@umail/api-contract";
-import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
 import { sha256Hex } from "./policy.ts";
-
-export const MailArchive = Cloudflare.R2.Bucket("MailArchive").pipe(Alchemy.RemovalPolicy.retain());
 
 export type InboundMessageId = `in_${string}`;
 export type InboundAttachmentId = `att_${string}`;

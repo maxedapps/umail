@@ -7,18 +7,15 @@ const RedirectResult = Schema.Struct({
   url: Schema.optionalKey(Schema.String),
 });
 
+// What the operator grants on the consent screen.
+export type ConsentChoice = {
+  readonly mailboxes?: string;
+  readonly sendMode?: "deny" | "allow" | "requireApproval";
+};
+
 export async function registerMcpClient(
   world: World,
-  input: {
-    readonly label?: string;
-    readonly redirectUri?: string;
-    readonly mailboxIds?: string;
-    readonly canRead?: boolean;
-    readonly canDelete?: boolean;
-    readonly sendMode?: "deny" | "allow" | "requireApproval";
-    readonly recipientAllowlist?: string;
-    readonly canAdmin?: boolean;
-  } = {},
+  input: { readonly label?: string; readonly redirectUri?: string } = {},
 ) {
   const redirectUri = input.redirectUri ?? "http://127.0.0.1/callback";
   const response = await world.fetch("http://umail.test/api/auth/oauth2/register", {
@@ -51,6 +48,7 @@ export async function registerMcpClient(
 export async function issueMcpAccessToken(
   world: World,
   client: { readonly clientId: string; readonly redirectUri: string },
+  choice: ConsentChoice = {},
 ) {
   const verifier = "umail-test-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
   const challenge = Buffer.from(
@@ -76,7 +74,7 @@ export async function issueMcpAccessToken(
   const location = new URL(authorize.headers.get("location") ?? "", "http://umail.test");
   const callback = location.searchParams.has("code")
     ? location
-    : await grantConsent(world, location, client.redirectUri);
+    : await grantConsent(world, location, client.redirectUri, choice);
   if (callback.searchParams.get("state") !== state) {
     throw new Error("OAuth callback state mismatch");
   }
@@ -106,7 +104,12 @@ export async function issueMcpAccessToken(
   )(await token.json());
 }
 
-async function grantConsent(world: World, consentPage: URL, redirectUri: string): Promise<URL> {
+async function grantConsent(
+  world: World,
+  consentPage: URL,
+  redirectUri: string,
+  choice: ConsentChoice,
+): Promise<URL> {
   const oauthQuery = consentPage.search.startsWith("?")
     ? consentPage.search.slice(1)
     : consentPage.searchParams.toString();
@@ -117,7 +120,12 @@ async function grantConsent(world: World, consentPage: URL, redirectUri: string)
       "content-type": "application/json",
       accept: "application/json",
     },
-    body: JSON.stringify({ accept: true, oauth_query: oauthQuery }),
+    body: JSON.stringify({
+      accept: true,
+      oauth_query: oauthQuery,
+      mailboxes: choice.mailboxes ?? "all",
+      sendMode: choice.sendMode ?? "requireApproval",
+    }),
   });
   if (!consented.ok) {
     throw new Error(`OAuth consent failed: ${consented.status} ${await consented.text()}`);

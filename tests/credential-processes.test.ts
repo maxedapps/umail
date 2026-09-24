@@ -33,10 +33,7 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI_BIN = join(REPO_ROOT, "apps/cli/src/bin.ts");
 const CREDENTIAL_STORE_HREF = new URL("../apps/cli/src/credential-store.ts", import.meta.url).href;
 const LockWorkerOutput = Schema.Union([
-  Schema.Struct({
-    ok: Schema.Literal(true),
-    revoked: Schema.Boolean,
-  }),
+  Schema.Struct({ ok: Schema.Literal(true) }),
   Schema.Struct({
     ok: Schema.Literal(false),
     tag: Schema.Literals(["OAuthCredentialLockError", "OAuthCredentialStoreError"]),
@@ -153,25 +150,25 @@ describe("credential transitions across processes", () => {
     const result = await login.finished;
     expect(result.status).toBe(130);
     expectNoSecrets(result);
-    const state = await readState(stateHome);
-    expect(state).toMatchObject({ kind: "registered", clientId: CLIENT_ID });
-    expect(state).not.toHaveProperty("accessToken");
+    expect(await readState(stateHome)).toBeNull();
     expectLockFilesGone(stateHome);
   }, 15_000);
 
-  it("completes logout when remote revocation stalls", async () => {
+  it("keeps the local credentials and exits non-zero when remote revocation stalls", async () => {
     const { server, stateHome, env } = await startHarness();
     writeAuthorizedState(stateHome, server.baseUrl, Date.now() + 3_600_000);
     server.control.hangRevoke = true;
     const started = Date.now();
     const result = await spawnCli(["logout"], env).finished;
     expect(Date.now() - started).toBeLessThan(8_000);
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("remote revocation could not be confirmed");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("local OAuth credentials were kept");
     expectNoSecrets(result);
-    const state = await readState(stateHome);
-    expect(state).toMatchObject({ kind: "registered", generation: 1 });
-    expect(state).not.toHaveProperty("refreshToken");
+    expect(await readState(stateHome)).toMatchObject({
+      kind: "authorized",
+      generation: 0,
+      refreshToken: REFRESH_TOKEN,
+    });
   }, 15_000);
 
   it("terminates a stalled refresh instead of hanging", async () => {
@@ -295,12 +292,12 @@ import * as Result from "effect/Result";
 import { makeCredentialStore } from ${JSON.stringify(CREDENTIAL_STORE_HREF)};
 
 const result = await Effect.runPromise(
-  Effect.result(makeCredentialStore(process.env).takeLogoutSnapshot(${JSON.stringify(origin)})),
+  Effect.result(makeCredentialStore(process.env).clearTokens(${JSON.stringify(origin)})),
 );
 if (Result.isFailure(result)) {
   process.stdout.write(JSON.stringify({ ok: false, tag: result.failure._tag }));
 } else {
-  process.stdout.write(JSON.stringify({ ok: true, revoked: result.success !== null }));
+  process.stdout.write(JSON.stringify({ ok: true }));
 }
 `;
   return trackChild(
@@ -450,15 +447,10 @@ async function handleOAuthRequest(
   if (method === "GET" && url.pathname === "/.well-known/oauth-authorization-server/api/auth") {
     jsonResponse(response, 200, {
       issuer: `${origin}/api/auth`,
-      registration_endpoint: `${origin}/api/auth/oauth2/register`,
       device_authorization_endpoint: `${origin}/api/auth/device/code`,
       token_endpoint: `${origin}/api/auth/oauth2/token`,
       revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
     });
-    return;
-  }
-  if (method === "POST" && url.pathname === "/api/auth/oauth2/register") {
-    jsonResponse(response, 201, { client_id: CLIENT_ID, token_endpoint_auth_method: "none" });
     return;
   }
   if (method === "POST" && url.pathname === "/api/auth/device/code") {

@@ -1,6 +1,5 @@
 import * as DateTime from "effect/DateTime";
 
-export const SEND_CONSUMER_CONCURRENCY = 4 as const;
 export const SEND_CLAIM_TTL_MS = 15 * 60 * 1000;
 
 export function sendClaimUntilIso(nowMs: number): string {
@@ -28,7 +27,9 @@ export const MAX_ATTACHMENTS = 50;
 export const MAX_PERSISTED_MESSAGE_BYTES = 1_750_000;
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  // The DOM lib types only accept ArrayBuffer-backed views; nothing here is shared memory.
+  const view = bytes as Uint8Array<ArrayBuffer>;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", view));
   let hex = "";
   for (const byte of digest) {
     hex += byte.toString(16).padStart(2, "0");

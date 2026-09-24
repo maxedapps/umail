@@ -3,6 +3,7 @@ import { env, SELF, runInDurableObject, evictDurableObject } from "cloudflare:te
 import { describe, expect, it } from "vitest";
 
 // Exercise the generated bridge and its real SQLite storage.
+const DUE_AT = "2030-01-01T00:00:00.000Z";
 const testEnv = env as {
   AccountStore: DurableObjectNamespace;
   AuthDb: D1Database;
@@ -50,5 +51,22 @@ describe("generated application runtime", () => {
       { address: "inbox@dev-mail.umail.example.com" },
       { address: "probe@dev-mail.umail.example.com" },
     ]);
+  });
+
+  it("arms the store's alarm on start for the due work it finds", async () => {
+    const stub = testEnv.AccountStore.getByName("operator");
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO inbound_receipts (id, envelope_from, envelope_to, raw_key, received_at, retry_after)
+         VALUES ('stuck', 'sender@example.com', 'inbox@dev-mail.umail.example.com', 'raw/stuck', ?, ?)`,
+        DUE_AT,
+        DUE_AT,
+      );
+      return state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub);
+    expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).toBe(
+      Date.parse(DUE_AT),
+    );
   });
 });
