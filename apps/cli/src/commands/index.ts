@@ -234,7 +234,7 @@ const threadsCommand = Command.make("threads").pipe(
     ).pipe(Command.withDescription("List threads")),
     Command.make("get", { id: idFlag, ...pageFlags }, ({ id, ...page }) =>
       callApi((client) =>
-        client.Threads.listThreadMessages({
+        client.Threads.getThread({
           params: { id },
           query: new ListThreadMessagesQuery(presentOptions(page)),
         }),

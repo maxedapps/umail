@@ -299,7 +299,7 @@ describe("public approval flow", () => {
     const deletedWorld = await createWorld();
     const deleted = await queueApproval(deletedWorld);
     const deletion = await deletedWorld.fetch(
-      `http://umail.test/threads/${encodeURIComponent(deleted.job.threadHandle)}`,
+      `http://umail.test/threads/${encodeURIComponent(deleted.job.threadId)}`,
       { ...authorized(deletedWorld), method: "DELETE" },
     );
     expect(deletion.status).toBe(204);

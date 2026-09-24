@@ -261,7 +261,7 @@ describe("account-store job execution", () => {
       nowIso: LATER,
       parsedDate: null,
     });
-    const page = await store.listThreadMessageSummaries(submitted.job.threadHandle, {
+    const page = await store.listThreadMessageSummaries(submitted.job.threadId, {
       mailboxScope: "all",
     });
     expect(page.items.map((item) => item.id).sort()).toEqual(
@@ -291,9 +291,7 @@ describe("account-store job execution", () => {
     });
     // Messages that share a Message-ID share a thread.
     expect(
-      (
-        await store.listThreadMessageSummaries(repeat.job.threadHandle, { mailboxScope: "all" })
-      ).items
+      (await store.listThreadMessageSummaries(repeat.job.threadId, { mailboxScope: "all" })).items
         .map((item) => item.id)
         .sort(),
     ).toEqual(["inbound-reply", submitted.job.messageId, repeat.job.messageId].sort());

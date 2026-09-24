@@ -207,7 +207,7 @@ export type MessageOutboundJob = {
 
 type MessageSummaryFields = StoredParticipants & {
   readonly id: string;
-  readonly threadHandle: string;
+  readonly threadId: string;
   readonly parentMessageId: string | null;
   readonly mailboxId: string;
   readonly subject: string | null;
@@ -251,7 +251,7 @@ export type AccountSendingIdentity = {
 };
 
 export type ThreadSummary = {
-  readonly threadHandle: string;
+  readonly threadId: string;
   readonly subject: string | null;
   readonly latestSender: AccountMailContact | null;
   readonly latestRecipients: ReadonlyArray<AccountMailContact>;
@@ -267,7 +267,7 @@ export type ThreadSummaryPage = {
 };
 
 export type ThreadMessageSummaryPage = {
-  readonly threadHandle: string;
+  readonly threadId: string;
   readonly items: ReadonlyArray<MessageSummary>;
   readonly nextCursor: PageCursor | null;
 };
@@ -548,7 +548,7 @@ export type OutboundJob = {
   readonly requestId: string;
   readonly requester: OutboundRequester;
   readonly messageId: string;
-  readonly threadHandle: string;
+  readonly threadId: string;
   readonly mailboxId: string;
   readonly purpose: OutboundJobPurpose;
   readonly state: OutboundJobState;

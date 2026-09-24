@@ -288,7 +288,7 @@ describe("account-store thread reads", () => {
       page = await store.listThreadSummaries({ ...query, cursor: page.nextCursor });
       items.push(...page.items);
     }
-    const seen = items.map((item) => [item.threadHandle, item.lastActivityAt, item.messageCount]);
+    const seen = items.map((item) => [item.threadId, item.lastActivityAt, item.messageCount]);
     expect(seen).toEqual([
       ["t5", isoAt(4), 1],
       ["t4", isoAt(3), 1],
@@ -308,7 +308,7 @@ describe("account-store thread reads", () => {
 
     const members = async (threadId: string) =>
       (await store.listThreadMessageSummaries(threadId, { mailboxScope: "all" })).items.map(
-        (item) => [item.id, item.threadHandle, item.parentMessageId],
+        (item) => [item.id, item.threadId, item.parentMessageId],
       );
     expect(await members(a.threadId)).toEqual([
       ["a-root", "a-root", null],

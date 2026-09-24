@@ -21,9 +21,8 @@ export class InboundMessageIntegrityError extends Data.TaggedError("InboundMessa
   readonly reason: "receipt_missing";
 }> {}
 
-export class ThreadHandleError extends Data.TaggedError("ThreadHandleError")<{
-  readonly handle: string;
-  readonly reason: "not_found";
+export class ThreadNotFoundError extends Data.TaggedError("ThreadNotFoundError")<{
+  readonly threadId: string;
 }> {}
 
 export class AccountConflictError extends Data.TaggedError("AccountConflictError")<{
@@ -49,14 +48,14 @@ export class SubmissionConflictError extends Data.TaggedError("SubmissionConflic
 }> {}
 
 export type AccountStoreError =
-  | ThreadHandleError
+  | ThreadNotFoundError
   | JobAuthorizationError
   | AccountConflictError
   | SubmissionConflictError
   | MessageConflictError;
 
 export const EXPECTED_TAGS = [
-  "ThreadHandleError",
+  "ThreadNotFoundError",
   "JobAuthorizationError",
   "AccountConflictError",
   "SubmissionConflictError",

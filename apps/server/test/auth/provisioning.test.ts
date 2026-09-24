@@ -97,12 +97,9 @@ describe("auth provisioning", () => {
     const db = emptyAuthDatabase();
     const first = await provisionAuth(db, provisionRequest("nonce-1"));
     const second = await provisionAuth(db, provisionRequest("nonce-2"));
-    expect(second.operatorId).toBe(first.operatorId);
-    expect(second.generation).toBe(1);
-    expect(second.schemaRevision).toBe(first.schemaRevision);
-    expect(first.schemaRevision.length).toBeGreaterThan(0);
-    expect(await db.all("SELECT schemaRevision FROM umailAuthControl")).toEqual([
-      { schemaRevision: first.schemaRevision },
+    expect(second).toEqual({ operatorId: first.operatorId });
+    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
+      { credentialGeneration: 1 },
     ]);
     expect(await db.all("SELECT id FROM user")).toEqual([{ id: first.operatorId }]);
   });
@@ -152,7 +149,9 @@ describe("auth provisioning", () => {
     db.interruptClient = false;
     const result = await provisionAuth(db, provisionRequest("client-retry"));
     expect(result.operatorId).toBe(operatorId);
-    expect(result.generation).toBe(1);
+    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
+      { credentialGeneration: 1 },
+    ]);
     expect(await credentialHash(db)).toBe(hash);
     expect(await db.all("SELECT ready FROM umailAuthControl")).toEqual([{ ready: 1 }]);
     expect(await db.all("SELECT resourceId FROM oauthClientResource")).toEqual([
@@ -179,7 +178,9 @@ describe("auth provisioning", () => {
       .run();
     const second = await provisionAuth(db, provisionRequest("nonce-b"));
     expect(second.operatorId).toBe(first.operatorId);
-    expect(second.generation).toBe(1);
+    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
+      { credentialGeneration: 1 },
+    ]);
     expect(await credentialHash(db)).toBe(hashBefore);
     expect(await db.all("SELECT id FROM session")).toEqual([{ id: "session-1" }]);
   });
@@ -214,11 +215,13 @@ describe("auth provisioning", () => {
       )
       .run();
     const oldHash = await credentialHash(db);
-    const rotated = await provisionAuth(db, {
+    await provisionAuth(db, {
       ...provisionRequest("rotate-2"),
       password: "replacement-passphrase",
     });
-    expect(rotated.generation).toBe(2);
+    expect(await db.all("SELECT credentialGeneration FROM umailAuthControl")).toEqual([
+      { credentialGeneration: 2 },
+    ]);
     const newHash = await credentialHash(db);
     expect(newHash).not.toBe(oldHash);
     expect(await verifyPassword({ hash: oldHash, password: OPERATOR_PASSWORD })).toBe(true);

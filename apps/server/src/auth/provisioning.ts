@@ -4,8 +4,6 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Config from "effect/Config";
 import * as Redacted from "effect/Redacted";
-import { sha256Object } from "alchemy/Util/sha256";
-import { getSchema } from "better-auth/db";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
@@ -44,9 +42,6 @@ type AuthProvisionInput = {
 
 type AuthProvisionResult = {
   readonly operatorId: string;
-  readonly generation: number;
-  readonly ready: true;
-  readonly schemaRevision: string;
 };
 
 export const AuthProvision = Alchemy.Action(
@@ -87,12 +82,6 @@ type AuthD1BatchResult = {
 const ExistingClientRow = Schema.Struct({
   clientId: Schema.String,
   clientDiscoveryId: Schema.NullOr(Schema.String),
-  disabled: Schema.NullOr(Schema.Literals([0, 1])),
-});
-
-const ExistingResourceRow = Schema.Struct({
-  identifier: Schema.String,
-  disabled: Schema.NullOr(Schema.Literals([0, 1])),
 });
 
 const ExistingAccountRow = Schema.Struct({
@@ -105,36 +94,10 @@ const ExistingAccountRow = Schema.Struct({
 });
 
 function authMigrationOptions() {
-  return makeAuthOptions({ apiHostname: "schema.umail.invalid" }, "schema-fingerprint-operator", {
+  return makeAuthOptions({ apiHostname: "schema.umail.invalid" }, "schema-migration-operator", {
     rateLimit: true,
   });
 }
-
-const authSchemaRevision: Effect.Effect<string> = Effect.suspend(() => {
-  const schema = getSchema(authMigrationOptions());
-  const reduced = Object.fromEntries(
-    Object.entries(schema).map(([table, def]) => [
-      table,
-      Object.fromEntries(
-        Object.entries(def.fields).map(([name, field]) => [
-          name,
-          {
-            type: String(field.type),
-            required: field.required ?? false,
-            unique: field.unique ?? false,
-            references: field.references
-              ? {
-                  model: field.references.model,
-                  field: field.references.field,
-                }
-              : undefined,
-          },
-        ]),
-      ),
-    ]),
-  );
-  return sha256Object(reduced);
-});
 
 async function applyAuthSchema(database: AuthD1Database): Promise<void> {
   // Deployment-only: keep migration dependencies out of the Worker startup path.
@@ -161,7 +124,6 @@ export async function provisionAuth(
   }
   const canonicalEmail = canonicalOperatorEmail(request.operatorEmail);
   const operatorEmail = betterAuthLookupEmail(canonicalEmail);
-  const schemaRevision = await Effect.runPromise(authSchemaRevision);
   await applyAuthSchema(database);
   const now = new Date().toISOString();
   const control = await readAuthControl(database);
@@ -177,25 +139,13 @@ export async function provisionAuth(
     passwordHash: passwordHash.hash,
     passwordChanged: passwordHash.changed,
     generation,
-    schemaRevision,
     now,
   });
   await provisionStaticResources(database, request, now);
   await provisionStaticClient(database, request.mcpResource, now);
-  await markAuthReady(database, {
-    operatorId,
-    canonicalEmail,
-    generation,
-    schemaRevision,
-    now,
-  });
+  await markAuthReady(database, now);
 
-  return {
-    operatorId,
-    generation,
-    ready: true,
-    schemaRevision,
-  };
+  return { operatorId };
 }
 
 function canonicalOperatorEmail(raw: string): ExternalMailAddress {
@@ -259,7 +209,6 @@ async function persistOperatorIdentity(
     readonly passwordHash: string;
     readonly passwordChanged: boolean;
     readonly generation: number;
-    readonly schemaRevision: string;
     readonly now: string;
   },
 ): Promise<void> {
@@ -351,15 +300,14 @@ async function persistOperatorIdentity(
       database
         .prepare(
           `INSERT INTO ${AUTH_CONTROL_TABLE} (
-             id, operatorId, canonicalEmail, credentialGeneration, ready, schemaRevision, createdAt, updatedAt
-           ) VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+             id, operatorId, canonicalEmail, credentialGeneration, ready, createdAt, updatedAt
+           ) VALUES (?, ?, ?, ?, 0, ?, ?)`,
         )
         .bind(
           AUTH_CONTROL_ROW_ID,
           input.operatorId,
           input.canonicalEmail,
           input.generation,
-          input.schemaRevision,
           input.now,
           input.now,
         ),
@@ -369,14 +317,13 @@ async function persistOperatorIdentity(
       database
         .prepare(
           `UPDATE ${AUTH_CONTROL_TABLE}
-           SET operatorId = ?, canonicalEmail = ?, credentialGeneration = ?, schemaRevision = ?, updatedAt = ?
+           SET operatorId = ?, canonicalEmail = ?, credentialGeneration = ?, updatedAt = ?
            WHERE id = ?`,
         )
         .bind(
           input.operatorId,
           input.canonicalEmail,
           input.generation,
-          input.schemaRevision,
           input.now,
           AUTH_CONTROL_ROW_ID,
         ),
@@ -418,7 +365,7 @@ async function upsertOwnedResource(
   },
 ): Promise<void> {
   const existing = await database
-    .prepare(`SELECT identifier, disabled FROM oauthResource WHERE identifier = ?`)
+    .prepare(`SELECT identifier FROM oauthResource WHERE identifier = ?`)
     .bind(input.identifier)
     .first();
   if (existing === null) {
@@ -445,11 +392,6 @@ async function upsertOwnedResource(
       .run();
     return;
   }
-  const decoded = Schema.decodeUnknownResult(ExistingResourceRow)(existing);
-  if (Result.isFailure(decoded)) {
-    throw new Error(`oauthResource ${input.identifier} is not a usable resource row`);
-  }
-  const disabled = decoded.success.disabled === 1 ? 1 : 0;
   await database
     .prepare(
       `UPDATE oauthResource
@@ -458,12 +400,6 @@ async function upsertOwnedResource(
     )
     .bind(input.name, 300, input.allowedScopes, input.now, input.identifier)
     .run();
-  if (disabled === 1) {
-    await database
-      .prepare(`UPDATE oauthResource SET disabled = 1 WHERE identifier = ?`)
-      .bind(input.identifier)
-      .run();
-  }
 }
 
 async function provisionStaticClient(
@@ -473,7 +409,7 @@ async function provisionStaticClient(
 ): Promise<void> {
   const client = cursorGrokBotClient();
   const existing = await database
-    .prepare(`SELECT clientId, clientDiscoveryId, disabled FROM oauthClient WHERE clientId = ?`)
+    .prepare(`SELECT clientId, clientDiscoveryId FROM oauthClient WHERE clientId = ?`)
     .bind(client.clientId)
     .first();
   if (existing === null) {
@@ -511,7 +447,6 @@ async function provisionStaticClient(
         `oauthClient ${CURSOR_GROK_BOT_CLIENT_ID} is owned by ${decoded.success.clientDiscoveryId ?? "another registrant"}`,
       );
     }
-    const disabled = decoded.success.disabled === 1 ? 1 : 0;
     await database
       .prepare(
         `UPDATE oauthClient
@@ -532,12 +467,6 @@ async function provisionStaticClient(
         client.clientId,
       )
       .run();
-    if (disabled === 1) {
-      await database
-        .prepare(`UPDATE oauthClient SET disabled = 1 WHERE clientId = ?`)
-        .bind(client.clientId)
-        .run();
-    }
   }
 
   const link = await database
@@ -555,30 +484,10 @@ async function provisionStaticClient(
   }
 }
 
-async function markAuthReady(
-  database: AuthD1Database,
-  input: {
-    readonly operatorId: string;
-    readonly canonicalEmail: ExternalMailAddress;
-    readonly generation: number;
-    readonly schemaRevision: string;
-    readonly now: string;
-  },
-): Promise<void> {
+async function markAuthReady(database: AuthD1Database, now: string): Promise<void> {
   await database
-    .prepare(
-      `UPDATE ${AUTH_CONTROL_TABLE}
-       SET operatorId = ?, canonicalEmail = ?, credentialGeneration = ?, ready = 1, schemaRevision = ?, updatedAt = ?
-       WHERE id = ?`,
-    )
-    .bind(
-      input.operatorId,
-      input.canonicalEmail,
-      input.generation,
-      input.schemaRevision,
-      input.now,
-      AUTH_CONTROL_ROW_ID,
-    )
+    .prepare(`UPDATE ${AUTH_CONTROL_TABLE} SET ready = 1, updatedAt = ? WHERE id = ?`)
+    .bind(now, AUTH_CONTROL_ROW_ID)
     .run();
 }
 

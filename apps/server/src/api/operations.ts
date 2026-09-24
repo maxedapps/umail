@@ -2,6 +2,7 @@ import {
   MAX_OUTBOUND_RECIPIENTS,
   type AccountMailContact,
   type JobViewer,
+  type MessageSummary,
   type OutboundRequester,
   type PageCursor,
   type SubmitOutboundInput,
@@ -14,7 +15,6 @@ import {
   MailContact,
   MailMessagePage,
   MailThreadDetail,
-  MailThreadMessagePage,
   MailThreadPage,
   McpClient,
   OutboundJobStatusPage,
@@ -48,7 +48,7 @@ import {
   projectThreadSummary,
 } from "./projection.ts";
 import { mailboxAllowed, mailboxScopeOf, requireRead, requireSend } from "./principal.ts";
-import { deriveReplyRecipients } from "./reply-plan.ts";
+import { deriveReplyRecipients, type ReplyMode } from "./reply-plan.ts";
 
 const HTML_BODY_VALIDATION_PROBLEM = "The HTML body could not be processed safely." as const;
 
@@ -69,7 +69,7 @@ export const storeCall = <A, R>(
       return Effect.die(error);
     }
     switch (error._tag) {
-      case "ThreadHandleError":
+      case "ThreadNotFoundError":
         return Effect.fail(new HttpApiError.NotFound());
       case "JobAuthorizationError":
         return Effect.fail(new HttpApiError.Forbidden());
@@ -112,27 +112,12 @@ export function listThreads(
   });
 }
 
+// One page of a thread's message summaries, oldest first.
 export function getThread(
   deps: ApiDeps,
   principal: Principal,
   threadId: string,
   query: ListThreadMessagesQuery = {},
-) {
-  return Effect.gen(function* () {
-    const page = yield* listThreadMessages(deps, principal, threadId, query);
-    return new MailThreadDetail({
-      threadId: page.threadHandle,
-      messages: page.items,
-      nextCursor: page.nextCursor,
-    });
-  });
-}
-
-export function listThreadMessages(
-  deps: ApiDeps,
-  principal: Principal,
-  threadId: string,
-  query: ListThreadMessagesQuery,
 ) {
   return Effect.gen(function* () {
     yield* requireRead(principal);
@@ -143,9 +128,9 @@ export function listThreadMessages(
         cursor: yield* decodeCursor(query.cursor),
       })
       .pipe(storeCall);
-    return new MailThreadMessagePage({
-      threadHandle: page.threadHandle,
-      items: page.items.map(projectMessageSummary),
+    return new MailThreadDetail({
+      threadId: page.threadId,
+      messages: page.items.map(projectMessageSummary),
       nextCursor: encodeCursor(page.nextCursor),
     });
   });
@@ -313,47 +298,68 @@ export function getReplyPlan(
   deps: ApiDeps,
   principal: Principal,
   messageId: string,
-  mode: "reply" | "reply-all",
-  sendingAddressId?: string,
+  mode: ReplyMode,
 ) {
   return Effect.gen(function* () {
+    const parent = yield* readReplyParent(deps, principal, messageId);
+    const recipients = yield* replyRecipients(deps, parent, mode, parent.mailboxId);
+    return new ReplyPlan({
+      replyToMessageId: messageId,
+      replyMode: mode,
+      fromAddressId: parent.mailboxId,
+      to: recipients.to,
+      cc: recipients.cc,
+      subject: parent.subject,
+    });
+  });
+}
+
+// Replying requires read access to the message being answered.
+function readReplyParent(deps: ApiDeps, principal: Principal, messageId: string) {
+  return Effect.gen(function* () {
     yield* requireRead(principal);
-    const summary = yield* deps.account
+    const parent = yield* deps.account
       .getMessageSummary(messageId, mailboxScopeOf(principal))
       .pipe(storeCall);
-    if (summary === null) {
+    if (parent === null) {
       return yield* new HttpApiError.NotFound();
     }
+    return parent;
+  });
+}
+
+// Derives the reply's To/CC from the parent, as sent from `sendingAddressId`.
+function replyRecipients(
+  deps: ApiDeps,
+  parent: MessageSummary,
+  mode: ReplyMode,
+  sendingAddressId: string,
+) {
+  return Effect.gen(function* () {
     const addresses = yield* deps.account.listAddresses().pipe(storeCall);
     const registered = new Set(addresses.map((address) => address.address));
-    const sendingId = sendingAddressId ?? summary.mailboxId;
-    const sending = yield* deps.account.getAddress(sendingId).pipe(storeCall);
+    const sending = yield* deps.account.getAddress(sendingAddressId).pipe(storeCall);
     const recipients = deriveReplyRecipients(
-      summary.direction,
+      parent.direction,
       mode,
       {
-        from: summary.from.map(toMailContact),
-        replyTo: summary.replyTo.map(toMailContact),
-        to: summary.to.map(toMailContact),
-        cc: summary.cc.map(toMailContact),
+        from: parent.from.map(toMailContact),
+        replyTo: parent.replyTo.map(toMailContact),
+        to: parent.to.map(toMailContact),
+        cc: parent.cc.map(toMailContact),
       },
       registered,
       deps.mailDomain,
       sending?.address,
     );
-    if (recipients.to.length === 0) {
+    const [first, ...rest] = recipients.to;
+    if (first === undefined) {
       return yield* new ApiProblem({
         message: "The message being replied to has no recipients.",
       });
     }
-    return new ReplyPlan({
-      replyToMessageId: messageId,
-      replyMode: mode,
-      fromAddressId: summary.mailboxId,
-      to: recipients.to,
-      cc: recipients.cc,
-      subject: summary.subject,
-    });
+    const to: readonly [MailContact, ...Array<MailContact>] = [first, ...rest];
+    return { to, cc: recipients.cc };
   });
 }
 
@@ -418,30 +424,20 @@ function resolveSubmitRecipients(
         referencesHeader: null,
       };
     }
-    const plan = yield* getReplyPlan(
+    const parent = yield* readReplyParent(deps, principal, payload.replyToMessageId);
+    const recipients = yield* replyRecipients(
       deps,
-      principal,
-      payload.replyToMessageId,
+      parent,
       payload.replyMode,
       payload.fromAddressId,
     );
-    const parent = yield* deps.account
-      .getMessageSummary(payload.replyToMessageId, mailboxScopeOf(principal))
-      .pipe(storeCall);
-    if (parent === null) {
-      return yield* new HttpApiError.NotFound();
-    }
     const references =
       parent.rfcMessageId === null
         ? []
         : buildOutboundReferences(parent.rfcMessageId, parent.references);
-    const to = nonEmptyContacts(plan.to);
-    if (to === null) {
-      return yield* new ApiProblem({ message: "At least one recipient is required." });
-    }
     return {
-      to,
-      cc: plan.cc,
+      to: recipients.to,
+      cc: recipients.cc,
       inReplyToHeader: parent.rfcMessageId,
       referencesHeader: references.length === 0 ? null : joinRfcMessageIds(references),
     };
@@ -477,16 +473,6 @@ function submitPrepared(
       })
       .pipe(storeCall);
   });
-}
-
-function nonEmptyContacts(
-  contacts: ReadonlyArray<MailContact>,
-): readonly [MailContact, ...Array<MailContact>] | null {
-  const first = contacts[0];
-  if (first === undefined) {
-    return null;
-  }
-  return [first, ...contacts.slice(1)];
 }
 
 function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {

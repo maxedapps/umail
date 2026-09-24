@@ -24,7 +24,7 @@ const UNKNOWN_EXTERNAL = ExternalMailAddress.make("unknown@invalid");
 
 export function projectThreadSummary(summary: ThreadSummary): MailThreadSummary {
   return new MailThreadSummary({
-    threadId: summary.threadHandle,
+    threadId: summary.threadId,
     subject: summary.subject,
     latestSender: projectLatestSender(summary.latestSender),
     latestRecipients: summary.latestRecipients.map(projectParticipantParty),
@@ -38,7 +38,6 @@ export function projectThreadSummary(summary: ThreadSummary): MailThreadSummary 
 }
 
 export function projectMessageSummary(summary: MessageSummary): MailMessageSummary {
-  const threadId = summary.threadHandle;
   const contacts = projectParticipants(summary);
   const attachments = summary.attachments.map((meta) => new AttachmentMeta(meta));
   const updatedAt = summary.updatedAt ?? summary.createdAt;
@@ -46,12 +45,11 @@ export function projectMessageSummary(summary: MessageSummary): MailMessageSumma
     return new InboundMailMessageSummary({
       direction: "inbound",
       id: summary.id,
-      threadId,
+      threadId: summary.threadId,
       parentMessageId: summary.parentMessageId,
       addressId: summary.mailboxId,
       subject: summary.subject,
       occurredAt: summary.occurredAt,
-      deletedAt: null,
       from: contacts.from,
       replyTo: contacts.replyTo,
       to: contacts.to,
@@ -66,8 +64,6 @@ export function projectMessageSummary(summary: MessageSummary): MailMessageSumma
       envelopeFrom: summary.envelopeFrom,
       envelopeTo: summary.envelopeTo,
       parsedDate: summary.parsedDate,
-      processingState: "indexed",
-      processingError: null,
       isRead: summary.isRead,
       readAt: summary.readAt,
       forwardOutcome: summary.forwardOutcome,
@@ -78,12 +74,11 @@ export function projectMessageSummary(summary: MessageSummary): MailMessageSumma
   return new OutboundMailMessageSummary({
     direction: "outbound",
     id: summary.id,
-    threadId,
+    threadId: summary.threadId,
     parentMessageId: summary.parentMessageId,
     addressId: summary.mailboxId,
     subject: summary.subject,
     occurredAt: summary.occurredAt,
-    deletedAt: null,
     from: contacts.from,
     replyTo: contacts.replyTo,
     to: contacts.to,
@@ -125,7 +120,7 @@ export function projectJobStatus(job: OutboundJob): OutboundJobStatus {
     jobId: job.jobId,
     requestId: job.requestId,
     messageId: job.messageId,
-    threadHandle: job.threadHandle,
+    threadId: job.threadId,
     state: job.state,
     purpose: job.purpose,
     attemptId: job.attemptId,

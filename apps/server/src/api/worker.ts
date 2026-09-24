@@ -11,7 +11,7 @@ import * as Redacted from "effect/Redacted";
 import { AuthDb } from "../auth/auth-control.ts";
 import { MailArchive } from "../mail/archive.ts";
 import { ProvisionedOperator } from "../auth/auth-control.ts";
-import { currentSite, operatorEmail } from "../site.ts";
+import { currentSite } from "../site.ts";
 import { AccountStore, AccountStoreLive, OPERATOR_ACCOUNT } from "../account/worker.ts";
 import { ArchiveTransportError, makeApiHttpEffect } from "./app.ts";
 import type { AuthControlDatabase } from "../auth/auth-control.ts";
@@ -50,7 +50,6 @@ export default Api.make(
     const authDb = yield* Cloudflare.D1.QueryDatabase(AuthDb);
     const archive = yield* Cloudflare.R2.ReadBucket(MailArchive);
     const routingToken = yield* Config.redacted("CF_EMAIL_ROUTING_TOKEN");
-    const approvalAdminEmail = yield* operatorEmail;
     const operatorId = globalThis.__ALCHEMY_RUNTIME__
       ? yield* Config.string("AUTH_OPERATOR_ID")
       : "plan";
@@ -83,7 +82,6 @@ export default Api.make(
       mailDomain,
       applicationUrl,
       operatorId,
-      approvalAdminEmail,
       approvalClock: { now: DateTime.now },
       notificationKey,
     };

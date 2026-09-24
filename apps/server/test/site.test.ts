@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -98,14 +99,29 @@ describe("rootDomain", () => {
 });
 
 describe("operatorEmail", () => {
-  it("parses UMAIL_OPERATOR_EMAIL and rejects an invalid address", () => {
-    const read = (value: string) =>
-      Effect.runSyncExit(
-        operatorEmail.parse(ConfigProvider.fromEnv({ env: { UMAIL_OPERATOR_EMAIL: value } })),
-      );
+  const read = (value: string) =>
+    Effect.runSyncExit(
+      operatorEmail.parse(
+        ConfigProvider.fromEnv({
+          env: { UMAIL_DOMAIN: "umail.example.com", UMAIL_OPERATOR_EMAIL: value },
+        }),
+      ),
+    );
+  const failureMessage = (exit: Exit.Exit<unknown, unknown>) =>
+    Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : "";
+
+  it("parses an inbox outside UMAIL_DOMAIN and rejects an invalid address", () => {
     expect(read(" Operator@Example.NET ")).toStrictEqual(Exit.succeed("Operator@example.net"));
-    expect(Exit.isFailure(read("not-an-address"))).toBe(true);
+    expect(failureMessage(read("not-an-address"))).toContain("not a valid email address");
   });
+
+  // An inbox umail hosts would let a client that reads it approve its own sends.
+  it.each(["operator@umail.example.com", "operator@Dev-Mail.Umail.Example.com"])(
+    "rejects %s because umail hosts it",
+    (address) => {
+      expect(failureMessage(read(address))).toContain("must be an inbox outside UMAIL_DOMAIN");
+    },
+  );
 });
 
 describe("stageSendsMail", () => {

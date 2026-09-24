@@ -4,7 +4,7 @@
 
 Keep the same Cloudflare account, profile, stage, and private configuration when following the README's update commands. Inspect unexpected replacements. Use `--force` only after diagnosing a reconciliation failure.
 
-Changing `UMAIL_OPERATOR_PASSWORD` and redeploying invalidates sessions and OAuth grants; unchanged credentials preserve them. Keep `UMAIL_NOTIFICATION_KEY` stable: the deployment accepts one key, and approval links are derived from it. Replacing it breaks approval notifications that have not been sent yet; links already emailed keep working. Replace Cloudflare tokens through their issuing account, update private configuration, redeploy, and verify the affected operation.
+`UMAIL_OPERATOR_EMAIL` receives send approvals, so it must be an inbox outside `UMAIL_DOMAIN`: deployment fails for an address on that domain or any subdomain, since a client that can read the inbox could approve its own sends. Changing `UMAIL_OPERATOR_PASSWORD` and redeploying invalidates sessions and OAuth grants; unchanged credentials preserve them. Keep `UMAIL_NOTIFICATION_KEY` stable: the deployment accepts one key, and approval links are derived from it. Replacing it breaks approval notifications that have not been sent yet; links already emailed keep working. Replace Cloudflare tokens through their issuing account, update private configuration, redeploy, and verify the affected operation.
 
 ## Troubleshooting
 

@@ -36,13 +36,21 @@ export const rootDomain: Config.Config<MailDomain> = Config.string("UMAIL_DOMAIN
   }),
 );
 
-export const operatorEmail: Config.Config<ExternalMailAddress> = Config.string(
-  "UMAIL_OPERATOR_EMAIL",
-).pipe(
-  Config.mapOrFail((raw) => {
+// The operator inbox receives send approvals, so it must not be a mailbox umail hosts: a client that
+// can read it could approve its own sends. Every stage's mail domain is the root or a subdomain.
+export const operatorEmail: Config.Config<ExternalMailAddress> = Config.all([
+  rootDomain,
+  Config.string("UMAIL_OPERATOR_EMAIL"),
+]).pipe(
+  Config.mapOrFail(([root, raw]) => {
     const parsed = parseExternalMailAddress(raw);
     if (parsed.kind === "invalid") {
       return Effect.die(new Error("UMAIL_OPERATOR_EMAIL is not a valid email address."));
+    }
+    if (parsed.domain === root || parsed.domain.endsWith(`.${root}`)) {
+      return Effect.die(
+        new Error(`UMAIL_OPERATOR_EMAIL must be an inbox outside UMAIL_DOMAIN (${root}).`),
+      );
     }
     return Effect.succeed(parsed.address);
   }),

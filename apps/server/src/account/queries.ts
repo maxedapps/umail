@@ -37,7 +37,7 @@ import {
   type ThreadSummary,
   type ThreadSummaryPage,
 } from "./domain.ts";
-import { InboundMessageIntegrityError, ThreadHandleError } from "./errors.ts";
+import { InboundMessageIntegrityError, ThreadNotFoundError } from "./errors.ts";
 import { bindJsonStringArray, firstDecoded, type AccountSqliteStorage } from "./sqlite.ts";
 
 const MESSAGE_SUMMARY_SELECT = `msg.id AS id,
@@ -141,7 +141,7 @@ export function listThreadMessageSummaries(
     );
     const pageRows = lookahead.slice(0, limit);
     return {
-      threadHandle: threadId,
+      threadId,
       items: enrichMessageSummaries(storage, pageRows),
       nextCursor: nextMessageCursor(lookahead, pageRows, limit),
     };
@@ -444,7 +444,7 @@ function enrichThreadSummaries(
     const stats = statsById.get(head.thread_id);
     const participants = participantsById.get(head.latest_message_id) ?? emptyParticipants();
     return {
-      threadHandle: head.thread_id,
+      threadId: head.thread_id,
       subject: head.subject,
       latestSender: participants.from[0] ?? null,
       latestRecipients: participants.to,
@@ -529,7 +529,7 @@ function enrichMessageSummaries(
     const participants = participantsById.get(row.id) ?? emptyParticipants();
     const summaryFields = {
       id: row.id,
-      threadHandle: row.thread_id,
+      threadId: row.thread_id,
       parentMessageId: row.parent_message_id,
       mailboxId: row.mailbox_id,
       subject: row.subject,
@@ -686,7 +686,7 @@ function resolveThread(
       .toArray(),
   );
   if (row === undefined) {
-    throw new ThreadHandleError({ handle, reason: "not_found" });
+    throw new ThreadNotFoundError({ threadId: handle });
   }
   return row.thread_id;
 }

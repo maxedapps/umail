@@ -36,7 +36,7 @@ describe("submission and job contracts", () => {
       jobId: "job-1",
       requestId: REQUEST_ID,
       messageId: "message-1",
-      threadHandle: "message-1",
+      threadId: "message-1",
       state: "ready",
       purpose: "message",
       attemptId: null,
@@ -82,6 +82,19 @@ describe("submission and job contracts", () => {
       ),
     ).not.toContain("POST /messages");
     expect(UmailApi.groups.Submissions.endpoints.submitMessage.method).toBe("POST");
-    expect(UmailApi.groups.Threads.endpoints.listThreadMessages.path).toBe("/threads/:id/messages");
+  });
+
+  it("serves a thread and its message pages from one route", () => {
+    expect(
+      Object.values(UmailApi.groups.Threads.endpoints).map(
+        (endpoint) => `${endpoint.method} ${endpoint.path}`,
+      ),
+    ).toEqual([
+      "GET /threads",
+      "GET /threads/:id",
+      "PATCH /threads/:id/read",
+      "PATCH /threads/:id/unread",
+      "DELETE /threads/:id",
+    ]);
   });
 });

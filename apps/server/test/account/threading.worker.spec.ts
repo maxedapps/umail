@@ -156,7 +156,7 @@ describe("account-store threading", () => {
     const mailbox = await requireAddress(store, "inbox");
     const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
     const sentId = submitted.job.messageId;
-    expect(submitted.job.threadHandle).toBe(sentId);
+    expect(submitted.job.threadId).toBe(sentId);
     const claimed = await store.claimDispatch({
       jobId: submitted.job.jobId,
       nowIso: NOW,
@@ -182,7 +182,7 @@ describe("account-store threading", () => {
     });
     expect(completed).toMatchObject({
       kind: "applied",
-      job: { state: "accepted", threadHandle: sentId },
+      job: { state: "accepted", threadId: sentId },
     });
     const joined = {
       threadId: sentId,
@@ -220,12 +220,12 @@ describe("account-store threading", () => {
     expect(probe.threadId).toBe("probe");
   });
 
-  it("answers an unknown thread id with ThreadHandleError", async () => {
+  it("answers an unknown thread id with ThreadNotFoundError", async () => {
     const store = accountStore("threading-unknown-id");
     const failure = await failureOf(store, (host) =>
       host.listThreadMessageSummaries("no-such-message", { mailboxScope: "all" }),
     );
-    expect(taggedName(failure)).toBe("ThreadHandleError");
+    expect(taggedName(failure)).toBe("ThreadNotFoundError");
   });
 });
 
@@ -233,7 +233,7 @@ describe("account-store threading", () => {
 async function thread(store: Store, messageId: string) {
   const page = await store.listThreadMessageSummaries(messageId, { mailboxScope: "all" });
   return {
-    threadId: page.threadHandle,
+    threadId: page.threadId,
     members: page.items.map((item) => [item.id, item.parentMessageId]),
   };
 }

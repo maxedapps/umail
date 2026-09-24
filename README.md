@@ -27,16 +27,16 @@ cp .env.example .env
 
 Edit `.env`. Replace example domains with your own; keep credentials private.
 
-| Variable                  | Required for          | Value                                                                                      |
-| ------------------------- | --------------------- | ------------------------------------------------------------------------------------------ |
-| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                      |
-| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox; the only operator allowed to sign in.                                      |
-| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                 |
-| `UMAIL_NOTIFICATION_KEY`  | Deployment            | 32 random bytes encoded as base64url; keep stable across deployments.                      |
-| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                               |
-| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`. |
-| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                       |
-| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                 |
+| Variable                  | Required for          | Value                                                                                                 |
+| ------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                                 |
+| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox outside `UMAIL_DOMAIN`, since it approves sends; the only operator allowed to sign in. |
+| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                            |
+| `UMAIL_NOTIFICATION_KEY`  | Deployment            | 32 random bytes encoded as base64url; keep stable across deployments.                                 |
+| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                                          |
+| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.            |
+| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                                  |
+| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                            |
 
 Generate the notification key and copy the output into `.env`:
 

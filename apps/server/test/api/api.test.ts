@@ -12,7 +12,6 @@ import {
   type McpPrincipal,
   type PrincipalPolicy,
   MailThreadDetail,
-  MailThreadMessagePage,
   MailThreadPage,
   OutboundJobStatus,
   OutboundThreadMessage,
@@ -106,14 +105,6 @@ describe("authoritative inbound message metadata", () => {
         await world.fetch(`http://umail.test/messages/${inbound.messageId}`, authorized(world))
       ).json(),
     );
-    const threadMessages = await Schema.decodeUnknownPromise(MailThreadMessagePage)(
-      await (
-        await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}/messages`,
-          authorized(world),
-        )
-      ).json(),
-    );
     const thread = await Schema.decodeUnknownPromise(MailThreadDetail)(
       await (
         await world.fetch(
@@ -123,7 +114,7 @@ describe("authoritative inbound message metadata", () => {
       ).json(),
     );
 
-    const summaries = [list.items[0], message, threadMessages.items[0], thread.messages[0]];
+    const summaries = [list.items[0], message, thread.messages[0]];
     for (const summary of summaries) {
       expect(summary?.direction).toBe("inbound");
       if (summary?.direction === "inbound") {
@@ -132,8 +123,6 @@ describe("authoritative inbound message metadata", () => {
           envelopeTo: FROM_ADDRESS,
           parsedDate: "2026-08-25T10:00:00.000Z",
           occurredAt: "2026-08-25T11:00:00.000Z",
-          processingState: "indexed",
-          processingError: null,
           forwardOutcome: "failure",
           forwardDestination: "forward@example.net",
         });
@@ -326,7 +315,7 @@ describe("root mailbox API", () => {
     expect(textMessage.htmlBody).toBeNull();
   });
 
-  it("includes nextCursor on getThread when a thread has more than 50 messages", async () => {
+  it("pages getThread with nextCursor when a thread has more than 50 messages", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
     const first = await seedInboundMessage(world, mailbox.id, {
@@ -340,15 +329,23 @@ describe("root mailbox API", () => {
         inReplyToHeader: "<thread-page-0@example.com>",
       });
     }
-    const response = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(first.threadId)}`,
-      authorized(world),
-    );
+    const threadUrl = `http://umail.test/threads/${encodeURIComponent(first.threadId)}`;
+    const response = await world.fetch(threadUrl, authorized(world));
     expect(response.status).toBe(200);
     const detail = await Schema.decodeUnknownPromise(MailThreadDetail)(await response.json());
+    expect(detail.threadId).toBe(first.threadId);
     expect(detail.messages).toHaveLength(50);
-    expect(detail.nextCursor).not.toBeNull();
     expect(detail.messages.map((message) => message.id)).not.toContain("thread-page-50");
+    if (detail.nextCursor === null) throw new Error("expected a second thread page");
+
+    const next = await world.fetch(
+      `${threadUrl}?cursor=${encodeURIComponent(detail.nextCursor)}`,
+      authorized(world),
+    );
+    expect(next.status).toBe(200);
+    const rest = await Schema.decodeUnknownPromise(MailThreadDetail)(await next.json());
+    expect(rest.messages.map((message) => message.id)).toEqual(["thread-page-50"]);
+    expect(rest.nextCursor).toBeNull();
   });
 
   it("stores sanitized outbound HTML as a durable job without sending", async () => {

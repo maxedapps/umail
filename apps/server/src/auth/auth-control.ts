@@ -22,7 +22,6 @@ export const AUTH_CONTROL_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ${AUTH_CONTROL
   canonicalEmail TEXT NOT NULL,
   credentialGeneration INTEGER NOT NULL,
   ready INTEGER NOT NULL,
-  schemaRevision TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 )` as const;
@@ -32,7 +31,6 @@ export type AuthControl = {
   readonly canonicalEmail: string;
   readonly credentialGeneration: number;
   readonly ready: boolean;
-  readonly schemaRevision: string;
 };
 
 export type AuthControlDatabase = {
@@ -52,13 +50,12 @@ const ControlRow = Schema.Struct({
   canonicalEmail: Schema.String,
   credentialGeneration: Schema.Finite,
   ready: Schema.Literals([0, 1]),
-  schemaRevision: Schema.String,
 });
 
 export async function readAuthControl(database: AuthControlDatabase): Promise<AuthControl | null> {
   const row = await database
     .prepare(
-      `SELECT operatorId, canonicalEmail, credentialGeneration, ready, schemaRevision
+      `SELECT operatorId, canonicalEmail, credentialGeneration, ready
        FROM ${AUTH_CONTROL_TABLE}
        WHERE id = ?`,
     )
@@ -74,6 +71,5 @@ export async function readAuthControl(database: AuthControlDatabase): Promise<Au
     canonicalEmail: decoded.success.canonicalEmail,
     credentialGeneration: decoded.success.credentialGeneration,
     ready: decoded.success.ready === 1,
-    schemaRevision: decoded.success.schemaRevision,
   };
 }

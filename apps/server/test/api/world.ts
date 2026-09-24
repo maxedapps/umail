@@ -109,7 +109,6 @@ export async function createWorld(
         authDatabase,
         applicationUrl: APPLICATION_URL,
         operatorId: provision.operatorId,
-        approvalAdminEmail: operatorEmail,
         approvalClock,
         notificationKey,
       } satisfies ApiDeps;

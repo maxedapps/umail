@@ -872,7 +872,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       expect(result.isError).not.toBe(true);
       const { job } = Schema.decodeUnknownSync(JobToolOutput)(result.structuredContent);
       expect(job.state).toBe("ready");
-      expect(job.threadHandle).toBe(parent.threadId);
+      expect(job.threadId).toBe(parent.threadId);
       const reply = await Schema.decodeUnknownPromise(ThreadMessage)(
         await (
           await world.fetch(`http://umail.test/messages/${job.messageId}`, authorized(world))
@@ -948,11 +948,11 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     }
   });
 
-  it("maps a plain ThreadHandleError envelope from the store to the not-found text", async () => {
+  it("maps a plain ThreadNotFoundError envelope from the store to the not-found text", async () => {
     const world = await createWorld({
       account: {
         listThreadMessageSummaries: () =>
-          failOverRpc({ _tag: "ThreadHandleError", handle: "missing", reason: "not_found" }),
+          failOverRpc({ _tag: "ThreadNotFoundError", threadId: "missing" }),
       },
     });
     const token = await issueMcpAccessToken(world, await registerMcpClient(world));

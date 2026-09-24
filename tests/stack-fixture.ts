@@ -86,12 +86,7 @@ export async function evaluateApplication(stage: string) {
 }
 
 export const testOutputs = {
-  AuthProvision: {
-    operatorId: "operator-test",
-    schemaRevision: "test-schema",
-    generation: 1,
-    ready: true,
-  },
+  AuthProvision: { operatorId: "operator-test" },
   Api: { workerName: "api-test" },
   Inbound: { workerName: "inbound-test" },
   IndexConsumer: { workerName: "index-test" },

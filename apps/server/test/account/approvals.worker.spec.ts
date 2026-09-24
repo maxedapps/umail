@@ -192,7 +192,7 @@ describe("account-store approval decisions", () => {
     if (job === null) {
       throw new Error("expected job");
     }
-    await store.softDeleteThread(job.threadHandle, "all", LATER);
+    await store.softDeleteThread(job.threadId, "all", LATER);
     expect(await store.lookupApprovalByTokenHash(seeded.tokenHash)).toMatchObject({
       kind: "found",
       approval: { state: "cancelled" },
@@ -217,7 +217,7 @@ describe("account-store approval decisions", () => {
       claimExpiresAt: CLAIM_EXPIRES,
     });
     expect(claimed.kind).toBe("claimed");
-    await store.softDeleteThread(submitted.job.threadHandle, "all", LATER);
+    await store.softDeleteThread(submitted.job.threadId, "all", LATER);
     expect(await store.getOutboundJob(submitted.job.jobId, { kind: "operator" })).toMatchObject({
       state: "in_flight",
     });
@@ -341,7 +341,7 @@ describe("account-store approval decisions", () => {
     if (job === null) {
       throw new Error("expected job");
     }
-    const page = await store.listThreadMessageSummaries(job.threadHandle, {
+    const page = await store.listThreadMessageSummaries(job.threadId, {
       mailboxScope: "all",
     });
     expect(page.items.find((item) => item.id === job.messageId)?.rfcMessageId).toBe(PROVIDER_ID);

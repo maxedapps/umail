@@ -72,7 +72,7 @@ describe("account-store scoped visibility and mutations", () => {
         mailboxScope: [inbox.id],
       }),
     );
-    expect(taggedName(missing)).toBe("ThreadHandleError");
+    expect(taggedName(missing)).toBe("ThreadNotFoundError");
     const empty = await store.listMessageSummaries({ mailboxScope: [] });
     expect(empty.items).toEqual([]);
   });

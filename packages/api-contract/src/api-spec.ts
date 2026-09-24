@@ -68,7 +68,6 @@ const mailMessageSummaryFields = {
   addressId: Schema.String,
   subject: Schema.NullOr(Schema.String),
   occurredAt: Schema.String,
-  deletedAt: Schema.NullOr(Schema.String),
   from: Schema.Array(MailContact),
   replyTo: Schema.Array(MailContact),
   to: Schema.Array(MailContact),
@@ -86,8 +85,6 @@ const inboundMessageStateFields = {
   envelopeFrom: Schema.String,
   envelopeTo: Schema.String,
   parsedDate: Schema.NullOr(UtcInstant),
-  processingState: Schema.Literal("indexed"),
-  processingError: Schema.Null,
   isRead: Schema.Boolean,
   readAt: Schema.NullOr(Schema.String),
   forwardOutcome: Schema.Literals(["none", "unknown", "success", "failure"]),
@@ -200,14 +197,6 @@ export class ListThreadMessagesQuery extends Schema.Class<ListThreadMessagesQuer
   cursor: Schema.optionalKey(Schema.String),
 }) {}
 
-export class MailThreadMessagePage extends Schema.Class<MailThreadMessagePage>(
-  "MailThreadMessagePage",
-)({
-  threadHandle: Schema.String,
-  items: Schema.Array(MailMessageSummary),
-  nextCursor: Schema.NullOr(Schema.String),
-}) {}
-
 export class ReplyPlanQuery extends Schema.Class<ReplyPlanQuery>("ReplyPlanQuery")({
   mode: Schema.Literals(["reply", "reply-all"]),
 }) {}
@@ -277,7 +266,7 @@ export class OutboundJobStatus extends Schema.Class<OutboundJobStatus>("Outbound
   jobId: Schema.String,
   requestId: Schema.String.check(Schema.isMinLength(1)),
   messageId: Schema.String,
-  threadHandle: Schema.String,
+  threadId: Schema.String,
   state: OutboundJobState,
   purpose: OutboundJobPurpose,
   attemptId: Schema.NullOr(Schema.String),
@@ -451,15 +440,8 @@ export class ThreadsGroup extends HttpApiGroup.make("Threads")
   .add(
     HttpApiEndpoint.get("getThread", "/threads/:id", {
       params: IdParams,
-      success: MailThreadDetail,
-      error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("listThreadMessages", "/threads/:id/messages", {
-      params: IdParams,
       query: ListThreadMessagesQuery,
-      success: MailThreadMessagePage,
+      success: MailThreadDetail,
       error: scopedErrors,
     }),
   )

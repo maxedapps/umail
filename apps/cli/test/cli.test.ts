@@ -135,22 +135,16 @@ const threadPage = {
 const threadDetail = {
   threadId: "message-1",
   messages: [],
-  nextCursor: null,
+  nextCursor: "next-thread-message-cursor",
 };
 
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
-
-const threadMessagePage = {
-  threadHandle: "message-1",
-  items: [],
-  nextCursor: "next-thread-message-cursor",
-};
 
 const outboundJob = {
   jobId: "job-1",
   requestId: REQUEST_ID,
   messageId: "message-1",
-  threadHandle: "message-1",
+  threadId: "message-1",
   state: "ready",
   purpose: "message",
   attemptId: null,
@@ -170,7 +164,6 @@ const sentMessage = {
   addressId: "address-1",
   subject: "Hello",
   occurredAt: "2026-08-25T10:00:00.000Z",
-  deletedAt: null,
   from: [{ address: "inbox@umail.example.test", displayName: "Inbox" }],
   replyTo: [{ address: "inbox@umail.example.test", displayName: "Inbox" }],
   to: [{ address: "bob@example.com", displayName: null }],
@@ -197,7 +190,6 @@ const receivedMessage = {
   addressId: "address-1",
   subject: "Received",
   occurredAt: "2026-08-25T11:00:00.000Z",
-  deletedAt: null,
   from: [{ address: "header-sender@example.com", displayName: null }],
   replyTo: [],
   to: [{ address: "visible-recipient@example.com", displayName: null }],
@@ -214,8 +206,6 @@ const receivedMessage = {
   envelopeFrom: "",
   envelopeTo: "inbox@umail.example.test",
   parsedDate: "2026-08-25T10:00:00.000Z",
-  processingState: "indexed",
-  processingError: null,
   isRead: false,
   readAt: null,
   forwardOutcome: "failure",
@@ -270,9 +260,6 @@ function defaultResponse(request: HttpClientRequest.HttpClientRequest, url: URL)
   }
   if (url.pathname === "/threads") {
     return jsonResponse(threadPage);
-  }
-  if (url.pathname.endsWith("/messages") && url.pathname.startsWith("/threads/")) {
-    return jsonResponse(threadMessagePage);
   }
   if (url.pathname.startsWith("/threads/")) {
     return jsonResponse(threadDetail);
@@ -618,7 +605,7 @@ describe("retained CLI dispatch", () => {
       testEnv,
       httpClient,
     );
-    const threadMessages = await runDispatch(
+    const thread = await runDispatch(
       ["threads", "get", "--id", "thread-1", "--limit", "20", "--cursor", "cursor with +/="],
       testEnv,
       httpClient,
@@ -629,7 +616,7 @@ describe("retained CLI dispatch", () => {
 
     expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
       ["GET", "/threads"],
-      ["GET", "/threads/thread-1/messages"],
+      ["GET", "/threads/thread-1"],
       ["PATCH", "/threads/thread-1/read"],
       ["PATCH", "/threads/thread-1/unread"],
       ["DELETE", "/threads/thread-1"],
@@ -639,7 +626,7 @@ describe("retained CLI dispatch", () => {
     expect(captured[1]?.url.searchParams.get("limit")).toBe("20");
     expect(captured[1]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
     expect(page).toEqual(threadPage);
-    expect(threadMessages).toEqual(threadMessagePage);
+    expect(thread).toEqual(threadDetail);
   });
 
   it("submits compose and reply jobs with actor-free request bodies and visible ids", async () => {

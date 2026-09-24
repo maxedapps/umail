@@ -896,7 +896,7 @@ function toOutboundJob(row: OutboundJobRow): OutboundJob {
     requestId: row.idempotency_key,
     requester: requesterFromRow(row),
     messageId: row.message_id,
-    threadHandle: row.thread_id,
+    threadId: row.thread_id,
     mailboxId: row.mailbox_id,
     purpose: row.purpose,
     state: row.state,

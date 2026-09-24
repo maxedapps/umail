@@ -27,7 +27,6 @@ import {
   PublicApprovalApi,
   UmailApi,
   type CreateDestinationPayload,
-  type ExternalMailAddress,
   type MailDomain,
   type Principal,
 } from "@umail/api-contract";
@@ -68,7 +67,6 @@ import {
   getMcpClient,
   setMcpClientPolicy,
   listSendingIdentities,
-  listThreadMessages,
   listThreads,
   readAttachment,
   readMessageSource,
@@ -103,7 +101,6 @@ export type ApiDeps = {
   readonly authDatabase: AuthControlDatabase;
   readonly applicationUrl: URL;
   readonly operatorId: string;
-  readonly approvalAdminEmail: ExternalMailAddress;
   readonly approvalClock: InstantClock;
   readonly notificationKey: NotificationKey;
 };
@@ -367,16 +364,10 @@ function threadsGroup(deps: ApiDeps) {
           return yield* listThreads(deps, principal, query.limit, query.cursor);
         }),
       )
-      .handle("getThread", ({ params }) =>
+      .handle("getThread", ({ params, query }) =>
         Effect.gen(function* () {
           const principal = yield* CurrentPrincipal;
-          return yield* getThread(deps, principal, params.id);
-        }),
-      )
-      .handle("listThreadMessages", ({ params, query }) =>
-        Effect.gen(function* () {
-          const principal = yield* CurrentPrincipal;
-          return yield* listThreadMessages(deps, principal, params.id, query);
+          return yield* getThread(deps, principal, params.id, query);
         }),
       )
       .handle("markThreadRead", ({ params }) =>

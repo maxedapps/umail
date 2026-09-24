@@ -43,7 +43,7 @@ const CLAIM_EXPIRES = "2026-01-01T00:15:00.000Z";
 const EXPIRES = "2026-01-02T00:00:00.000Z";
 const APPLICATION_URL = new URL("https://umail.example.com");
 const MAIL_DOMAIN = requireMailDomain("umail.example.com");
-const ADMIN = requireExternal("operator@umail.example.com");
+const ADMIN = requireExternal("operator@example.net");
 
 describe("send consumer", () => {
   it("dispatches once for duplicate queue delivery of a ready job", async () => {
@@ -480,7 +480,7 @@ function makeDispatch(input: {
       requestId: Schema.decodeSync(SubmissionRequestId)("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
       requester: { kind: "operator", clientId: "cli", label: "AgentMail CLI" },
       messageId: `msg-${input.jobId}`,
-      threadHandle: `msg-${input.jobId}`,
+      threadId: `msg-${input.jobId}`,
       mailboxId: "mailbox-1",
       purpose: input.purpose ?? "message",
       state: "ready",
