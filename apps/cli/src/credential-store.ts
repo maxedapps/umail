@@ -66,9 +66,6 @@ export interface OAuthLogoutRevocation {
 
 export interface OAuthCredentialStoreService {
   readonly read: Effect.Effect<OAuthCredentialState | null, OAuthCredentialStoreError>;
-  readonly write: (
-    state: OAuthCredentialState,
-  ) => Effect.Effect<void, OAuthCredentialStoreError | OAuthCredentialLockError>;
   readonly commit: (
     expectedGeneration: number,
     state: OAuthCredentialState,
@@ -128,15 +125,6 @@ export function makeCredentialStore(env: NodeJS.ProcessEnv): OAuthCredentialStor
       try: () => readCredentialState(path),
       catch: () => new OAuthCredentialStoreError(),
     }),
-    write: (state) =>
-      withExclusiveLock(
-        credentialLockPath(path),
-        FILE_LOCK_TIMEOUT,
-        Effect.tryPromise({
-          try: () => writeCredentialState(path, state),
-          catch: () => new OAuthCredentialStoreError(),
-        }).pipe(Effect.uninterruptible),
-      ),
     commit: (expectedGeneration, state) =>
       withExclusiveLock(
         credentialLockPath(path),

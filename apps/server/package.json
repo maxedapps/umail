@@ -16,7 +16,6 @@
     "@modelcontextprotocol/server": "2.0.0",
     "@umail/api-contract": "workspace:*",
     "@umail/mail-content": "workspace:*",
-    "@umail/mcp-tools": "workspace:*",
     "better-auth": "1.7.2",
     "effect": "4.0.0-rc.112",
     "postal-mime": "3.0.0"

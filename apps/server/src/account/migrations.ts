@@ -4,45 +4,9 @@ export type AccountMigration = {
   readonly sql: string;
 };
 
-export const accountMigration0009Sql = `CREATE TABLE account_meta (
-  account_id TEXT PRIMARY KEY NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE command_items (
+export const accountMigration0010Sql = `CREATE TABLE messages (
   id TEXT PRIMARY KEY NOT NULL,
-  group_id TEXT NOT NULL,
-  label TEXT NOT NULL
-);
-
-CREATE TABLE thread_nodes (
-  id TEXT PRIMARY KEY NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('placeholder', 'message')),
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE rfc_lookups (
-  rfc_message_id TEXT PRIMARY KEY NOT NULL,
-  node_id TEXT NOT NULL UNIQUE,
-  claimant_node_id TEXT
-);
-
-CREATE TABLE thread_component_links (
-  node_id TEXT PRIMARY KEY NOT NULL,
-  parent_node_id TEXT NOT NULL,
-  rank INTEGER NOT NULL,
-  size INTEGER NOT NULL
-);
-
-CREATE TABLE thread_parent_edges (
-  child_node_id TEXT PRIMARY KEY NOT NULL,
-  parent_node_id TEXT NOT NULL,
-  CHECK (child_node_id <> parent_node_id)
-);
-
-CREATE TABLE messages (
-  id TEXT PRIMARY KEY NOT NULL,
-  node_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
   mailbox_id TEXT NOT NULL,
   direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
   rfc_message_id TEXT,
@@ -67,40 +31,21 @@ CREATE TABLE message_references (
   PRIMARY KEY (message_id, position)
 );
 
-CREATE TABLE threading_diagnostics (
-  id TEXT PRIMARY KEY NOT NULL,
-  message_id TEXT NOT NULL,
-  node_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('parent_cycle', 'parent_replacement', 'threading_limited')),
-  detail TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
 CREATE TABLE inbound_receipts (
   id TEXT PRIMARY KEY NOT NULL,
-  digest TEXT NOT NULL,
   envelope_from TEXT NOT NULL,
   envelope_to TEXT NOT NULL,
   raw_key TEXT NOT NULL,
-  manifest_key TEXT NOT NULL,
-  advertised_raw_size INTEGER NOT NULL,
-  consumed_bytes INTEGER NOT NULL,
   received_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  forward_outcome TEXT NOT NULL CHECK (
-    forward_outcome IN ('none', 'success', 'failure', 'unknown')
+  forward_outcome TEXT NOT NULL DEFAULT 'none' CHECK (
+    forward_outcome IN ('none', 'unknown', 'success', 'failure')
   ),
   forward_destination TEXT,
-  forward_error TEXT,
-  work_state TEXT NOT NULL CHECK (work_state IN (
-    'ready', 'claimed', 'indexed', 'policy_failed', 'terminal', 'operator_reprocess'
-  )),
+  work_state TEXT NOT NULL DEFAULT 'ready' CHECK (
+    work_state IN ('ready', 'indexed', 'policy_failed')
+  ),
   policy_error TEXT,
-  claimed_until TEXT,
-  retry_after TEXT,
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  UNIQUE (digest, envelope_from, envelope_to)
+  retry_after TEXT NOT NULL
 );
 
 CREATE TABLE message_participants (
@@ -109,7 +54,6 @@ CREATE TABLE message_participants (
   role TEXT NOT NULL CHECK (role IN ('from', 'reply_to', 'to', 'cc')),
   position INTEGER NOT NULL CHECK (position >= 0),
   address TEXT NOT NULL,
-  comparison_key TEXT NOT NULL,
   display_name TEXT,
   UNIQUE (message_id, role, position)
 );
@@ -202,6 +146,7 @@ CREATE TABLE outbound_jobs (
 CREATE TABLE approval_requests (
   id TEXT PRIMARY KEY NOT NULL,
   job_id TEXT NOT NULL UNIQUE,
+  notification_job_id TEXT NOT NULL UNIQUE,
   token_hash TEXT NOT NULL UNIQUE,
   state TEXT NOT NULL CHECK (
     state IN ('pending', 'approved', 'denied', 'expired', 'cancelled')
@@ -213,35 +158,17 @@ CREATE TABLE approval_requests (
   expires_at TEXT NOT NULL
 );
 
-CREATE TABLE approval_notifications (
-  id TEXT PRIMARY KEY NOT NULL,
-  approval_id TEXT NOT NULL UNIQUE,
-  job_id TEXT NOT NULL,
-  key_version TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  ciphertext TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  purged_at TEXT
-);
-
-CREATE TABLE recovery_scans (
-  id TEXT PRIMARY KEY NOT NULL,
-  cursor TEXT,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX messages_node_id ON messages (node_id);
+CREATE INDEX messages_thread_idx ON messages (thread_id, occurred_at, id);
+CREATE INDEX messages_rfc_idx ON messages (rfc_message_id) WHERE rfc_message_id IS NOT NULL;
+CREATE INDEX messages_in_reply_to_idx ON messages (in_reply_to_rfc_message_id) WHERE in_reply_to_rfc_message_id IS NOT NULL;
+CREATE INDEX message_references_rfc_idx ON message_references (rfc_message_id);
 CREATE INDEX messages_mailbox_id ON messages (mailbox_id);
-CREATE INDEX thread_component_links_parent_node_id ON thread_component_links (parent_node_id);
-CREATE INDEX threading_diagnostics_message_id ON threading_diagnostics (message_id);
 CREATE INDEX messages_list_occurred_idx ON messages (occurred_at DESC, id) WHERE deleted_at IS NULL;
 CREATE INDEX messages_list_mailbox_occurred_idx ON messages (mailbox_id, occurred_at DESC, id) WHERE deleted_at IS NULL;
 CREATE INDEX messages_unread_inbound_idx ON messages (occurred_at DESC, id) WHERE direction = 'inbound' AND is_read = 0 AND deleted_at IS NULL;
 CREATE INDEX message_participants_message_idx ON message_participants (message_id);
 CREATE INDEX attachments_message_id_idx ON attachments (message_id);
-CREATE INDEX inbound_receipts_work_state ON inbound_receipts (work_state, received_at, id);
-CREATE INDEX inbound_receipts_claimed_until ON inbound_receipts (claimed_until, id) WHERE work_state = 'claimed';
+CREATE INDEX inbound_receipts_due ON inbound_receipts (retry_after, id) WHERE work_state = 'ready';
 CREATE INDEX outbound_jobs_state_created_idx ON outbound_jobs (state, created_at, id);
 CREATE INDEX outbound_jobs_message_id_idx ON outbound_jobs (message_id);
 CREATE INDEX approval_requests_state_expires_idx ON approval_requests (state, expires_at, id);
@@ -249,13 +176,11 @@ CREATE INDEX approval_requests_state_expires_idx ON approval_requests (state, ex
 
 export const accountMigrations = [
   {
-    version: 9,
-    name: "0009_account",
-    sql: accountMigration0009Sql,
+    version: 10,
+    name: "0010_account",
+    sql: accountMigration0010Sql,
   },
 ] as const satisfies readonly AccountMigration[];
-
-export const accountSchemaVersion = 9 as const;
 
 export function sqlStatements(sql: string): readonly string[] {
   const statements: string[] = [];

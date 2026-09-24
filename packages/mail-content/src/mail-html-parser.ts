@@ -1,5 +1,6 @@
 import {
   defaultTreeAdapter,
+  html,
   Parser,
   Tokenizer,
   type DefaultTreeAdapterMap,
@@ -144,17 +145,18 @@ function createBoundedTreeAdapter(): TreeAdapter<DefaultTreeAdapterMap> {
   const budget = new MailHtmlParseBudget();
   return {
     ...defaultTreeAdapter,
-    createDocument() {
-      budget.admitNode();
-      return defaultTreeAdapter.createDocument();
-    },
     createDocumentFragment() {
       budget.admitNode();
       return defaultTreeAdapter.createDocumentFragment();
     },
     createElement(tagName, namespaceURI, attrs) {
       budget.admitElement(attrs.length);
-      return defaultTreeAdapter.createElement(tagName, namespaceURI, attrs);
+      const element = defaultTreeAdapter.createElement(tagName, namespaceURI, attrs);
+      // hast-util-from-parse5 reads `content` from every `template`, including SVG/MathML ones.
+      if (tagName === "template" && namespaceURI !== html.NS.HTML) {
+        Object.assign(element, { content: defaultTreeAdapter.createDocumentFragment() });
+      }
+      return element;
     },
     createCommentNode(data) {
       budget.admitNode();
@@ -163,15 +165,6 @@ function createBoundedTreeAdapter(): TreeAdapter<DefaultTreeAdapterMap> {
     createTextNode(value) {
       budget.admitNode();
       return defaultTreeAdapter.createTextNode(value);
-    },
-    setDocumentType(document, name, publicId, systemId) {
-      const hasDocumentType = defaultTreeAdapter
-        .getChildNodes(document)
-        .some((node) => defaultTreeAdapter.isDocumentTypeNode(node));
-      if (!hasDocumentType) {
-        budget.admitNode();
-      }
-      defaultTreeAdapter.setDocumentType(document, name, publicId, systemId);
     },
     insertText(parentNode, text) {
       const previous = defaultTreeAdapter.getChildNodes(parentNode).at(-1);

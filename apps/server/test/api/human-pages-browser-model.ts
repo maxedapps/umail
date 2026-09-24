@@ -52,6 +52,7 @@ export const HumanPageBrowserObservation = Schema.Struct({
   scriptNonce: Schema.NullOr(Schema.String),
   clientId: Schema.NullOr(Schema.String),
   scope: Schema.NullOr(Schema.String),
+  redirectHost: Schema.NullOr(Schema.String),
   statusText: Schema.NullOr(Schema.String),
   authRequestPath: Schema.NullOr(Schema.String),
   authRequestMethod: Schema.NullOr(Schema.String),

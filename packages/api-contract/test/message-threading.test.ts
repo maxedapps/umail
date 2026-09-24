@@ -13,25 +13,14 @@ import {
 import { MailboxAddress, parseMailDomain, parseMailboxAddress } from "../src/mailbox-address.ts";
 import {
   buildOutboundReferences,
-  deriveThreadRoot,
-  internalThreadId,
   joinRfcMessageIds,
   normalizeRfcMessageId,
   normalizeRfcMessageIdList,
-  parseThreadId,
   pruneReferences,
   REFERENCES_BYTE_LIMIT,
-  resolveDirectParentRfcId,
-  rfcThreadId,
   type NormalizedRfcMessageId,
-  type RfcIdIndex,
 } from "../src/message-threading.ts";
-import {
-  ComposeMessagePayload,
-  MailThreadPage,
-  ReplyMessagePayload,
-  SendMessagePayload,
-} from "../src/api-spec.ts";
+import { MailThreadPage, SubmitMessagePayload } from "../src/api-spec.ts";
 
 const MANAGED = requireMailDomain("umail.example.com");
 const INBOX = requireMailbox("inbox@umail.example.com");
@@ -96,92 +85,6 @@ describe("RFC message-id normalization", () => {
   });
 });
 
-describe("thread ids", () => {
-  it("round-trips RFC ids that contain reserved URL characters", () => {
-    const messageId = requireRfcId("<a/b?c%d[e]f@example.com>");
-    const threadId = rfcThreadId(messageId);
-    expect(threadId.startsWith("rfc:")).toBe(true);
-    expect(threadId).not.toContain("/");
-    expect(threadId).not.toContain("?");
-    expect(threadId).not.toContain("%");
-    expect(threadId).not.toContain("[");
-    expect(threadId).not.toContain("]");
-    expect(parseThreadId(threadId)).toEqual({
-      kind: "rfc",
-      threadId,
-      messageId,
-    });
-  });
-
-  it("round-trips an internal UUID thread id", () => {
-    const threadId = internalThreadId("550e8400-e29b-41d4-a716-446655440000");
-    expect(threadId).toBe("internal:550e8400-e29b-41d4-a716-446655440000");
-    expect(parseThreadId(threadId ?? "")).toEqual({
-      kind: "internal",
-      threadId,
-      uuid: "550e8400-e29b-41d4-a716-446655440000",
-    });
-  });
-
-  it("round-trips an opaque node thread handle and rejects RFC-derived ids", () => {
-    const handle = Contract.nodeThreadHandle("550e8400-e29b-41d4-a716-446655440000");
-    expect(handle).toBe("node:550e8400-e29b-41d4-a716-446655440000");
-    expect(Contract.parseThreadHandle(handle ?? "")).toEqual({
-      kind: "node",
-      handle,
-      nodeId: "550e8400-e29b-41d4-a716-446655440000",
-    });
-    expect(Contract.parseThreadHandle("rfc:abc")).toEqual({ kind: "invalid" });
-    expect(Contract.parseThreadHandle("internal:550e8400-e29b-41d4-a716-446655440000")).toEqual({
-      kind: "invalid",
-    });
-  });
-});
-
-describe("parent and root selection", () => {
-  const parent = requireRfcId("<parent@example.com>");
-  const older = requireRfcId("<older@example.com>");
-  const newer = requireRfcId("<newer@example.com>");
-  const own = requireRfcId("<own@example.com>");
-  const index: RfcIdIndex = {
-    unique: new Set([parent, older, newer]),
-    ambiguous: new Set([own]),
-  };
-
-  it("prefers a unique In-Reply-To over newer references", () => {
-    expect(resolveDirectParentRfcId(parent, [newer, older], index)).toBe(parent);
-  });
-
-  it("walks References newest-first when In-Reply-To is missing or ambiguous", () => {
-    expect(resolveDirectParentRfcId(null, [newer, older], index)).toBe(newer);
-    expect(resolveDirectParentRfcId(own, [newer, older], index)).toBe(newer);
-  });
-
-  it("never selects an ambiguous own identifier as a parent", () => {
-    expect(
-      resolveDirectParentRfcId(own, [own], {
-        unique: new Set(),
-        ambiguous: new Set([own]),
-      }),
-    ).toBeNull();
-  });
-
-  it("derives a root from the oldest reference, then parent, then own id, then internal UUID", () => {
-    expect(
-      deriveThreadRoot([older, newer], parent, own, "550e8400-e29b-41d4-a716-446655440000"),
-    ).toBe(rfcThreadId(older));
-    expect(deriveThreadRoot([], parent, own, "550e8400-e29b-41d4-a716-446655440000")).toBe(
-      rfcThreadId(parent),
-    );
-    expect(deriveThreadRoot([], null, own, "550e8400-e29b-41d4-a716-446655440000")).toBe(
-      rfcThreadId(own),
-    );
-    expect(deriveThreadRoot([], null, null, "550e8400-e29b-41d4-a716-446655440000")).toBe(
-      "internal:550e8400-e29b-41d4-a716-446655440000",
-    );
-  });
-});
-
 describe("outbound References construction", () => {
   it("appends the parent id and prunes oldest tokens to stay within 2048 UTF-8 bytes", () => {
     const parent = requireRfcId(`<${"p".repeat(20)}@example.com>`);
@@ -208,21 +111,21 @@ describe("compose and reply contract", () => {
   const contact = { address: "user+tag@example.com", displayName: "Ada" };
 
   it("accepts compose with To and optional CC and at least one body", () => {
-    const decoded = Schema.decodeResult(SendMessagePayload)({
+    const decoded = Schema.decodeResult(SubmitMessagePayload)({
       intent: "compose",
       fromAddressId: "addr-1",
       to: [contact],
-      cc: [{ address: "cc@example.com", displayName: null }],
+      cc: [{ address: "cc@example.com" }],
       subject: "Hello",
       text: "body",
     });
     expect(Result.isSuccess(decoded)).toBe(true);
     if (Result.isFailure(decoded)) return;
-    expect(decoded.success.intent).toBe("compose");
+    expect(decoded.success).toMatchObject({ intent: "compose", cc: [{ displayName: null }] });
   });
 
   it("accepts reply with a mode and no client recipients", () => {
-    const decoded = Schema.decodeResult(SendMessagePayload)({
+    const decoded = Schema.decodeResult(SubmitMessagePayload)({
       intent: "reply",
       fromAddressId: "addr-1",
       replyToMessageId: "in_1",
@@ -239,7 +142,7 @@ describe("compose and reply contract", () => {
   it("rejects compose without To, reply without a mode, and payloads with no body", () => {
     expect(
       Result.isFailure(
-        Schema.decodeUnknownResult(SendMessagePayload)({
+        Schema.decodeUnknownResult(SubmitMessagePayload)({
           intent: "compose",
           fromAddressId: "addr-1",
           to: [],
@@ -250,7 +153,7 @@ describe("compose and reply contract", () => {
     ).toBe(true);
     expect(
       Result.isFailure(
-        Schema.decodeUnknownResult(SendMessagePayload)({
+        Schema.decodeUnknownResult(SubmitMessagePayload)({
           intent: "reply",
           fromAddressId: "addr-1",
           replyToMessageId: "in_1",
@@ -261,7 +164,7 @@ describe("compose and reply contract", () => {
     ).toBe(true);
     expect(
       Result.isFailure(
-        Schema.decodeResult(SendMessagePayload)({
+        Schema.decodeResult(SubmitMessagePayload)({
           intent: "compose",
           fromAddressId: "addr-1",
           to: [contact],
@@ -274,7 +177,7 @@ describe("compose and reply contract", () => {
   it("rejects the deleted flat send and page shapes", () => {
     expect(
       Result.isFailure(
-        Schema.decodeUnknownResult(SendMessagePayload)({
+        Schema.decodeUnknownResult(SubmitMessagePayload)({
           fromAddressId: "addr-1",
           to: ["user@example.com"],
           subject: "Hello",
@@ -292,8 +195,7 @@ describe("compose and reply contract", () => {
       ),
     ).toBe(true);
     expect("InboundMessageSummary" in Contract).toBe(false);
-    expect(ComposeMessagePayload).toBeDefined();
-    expect(ReplyMessagePayload).toBeDefined();
+    expect("ComposeMessagePayload" in Contract).toBe(false);
   });
 });
 

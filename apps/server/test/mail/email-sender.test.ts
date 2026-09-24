@@ -87,7 +87,6 @@ describe("provider mail mapping", () => {
   });
 });
 
-const APPLICATION_URL = new URL("https://umail.example.com");
 const MAIL = {
   from: { email: "inbox@umail.example.com", name: "Inbox" },
   replyTo: { email: "inbox@umail.example.com", name: "Inbox" },
@@ -98,7 +97,7 @@ const MAIL = {
   html: null,
   inReplyTo: null,
   references: null,
-} satisfies OutboundMail;
+} satisfies ProviderOutboundMail;
 
 describe("Cloudflare email sender", () => {
   it("captures each event's native binding and preserves its method receiver", async () => {
@@ -136,7 +135,7 @@ describe("Cloudflare email sender", () => {
     expect(secondBinding.messages).toHaveLength(1);
   });
 
-  it("preserves rejected, pre-dispatch, and unknown provider outcomes", async () => {
+  it("rejects known provider codes, including rate limits, and leaves the rest unknown", async () => {
     const binding = new RecordingSendEmail({
       kind: "failed",
       error: { code: "E_RECIPIENT_SUPPRESSED", message: "suppressed" },
@@ -146,7 +145,7 @@ describe("Cloudflare email sender", () => {
 
     expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
       kind: "rejected",
-      detail: "suppressed",
+      failureDetail: "E_RECIPIENT_SUPPRESSED",
     });
 
     binding.next = {
@@ -154,15 +153,21 @@ describe("Cloudflare email sender", () => {
       error: { code: "E_VALIDATION_ERROR", message: "bad sender" },
     };
     expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
-      kind: "pre_dispatch",
-      detail: "bad sender",
+      kind: "rejected",
+      failureDetail: "E_VALIDATION_ERROR",
+    });
+
+    binding.next = {
+      kind: "failed",
+      error: { code: "E_RATE_LIMIT_EXCEEDED", message: "too many sends" },
+    };
+    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
+      kind: "rejected",
+      failureDetail: "E_RATE_LIMIT_EXCEEDED",
     });
 
     binding.next = { kind: "failed", error: new Error("connection lost") };
-    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
-      kind: "unknown",
-      detail: "connection lost",
-    });
+    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({ kind: "unknown" });
   });
 });
 
@@ -235,8 +240,6 @@ function testRuntimeContext(id: string) {
 
 function constructSender(client: Cloudflare.Email.SendClient, context: Alchemy.BaseRuntimeContext) {
   return Effect.runPromise(
-    cloudflareEmailSender(client, new FakeMailHtmlPolicy(), APPLICATION_URL).pipe(
-      Effect.provideService(Alchemy.RuntimeContext, context),
-    ),
+    cloudflareEmailSender(client).pipe(Effect.provideService(Alchemy.RuntimeContext, context)),
   );
 }

@@ -1,5 +1,3 @@
-import * as Schema from "effect/Schema";
-
 export type AccountSqlValue = ArrayBuffer | string | number | null;
 
 export type AccountSqlRow = {
@@ -19,8 +17,6 @@ export interface AccountSqliteStorage {
   readonly sql: AccountSql;
 }
 
-const JsonStringArray = Schema.Array(Schema.String);
-
 export function firstDecoded<A>(
   decode: (row: unknown) => A,
   rows: ReadonlyArray<AccountSqlRow>,
@@ -31,5 +27,5 @@ export function firstDecoded<A>(
 }
 
 export function bindJsonStringArray(values: ReadonlyArray<string>): string {
-  return JSON.stringify(Schema.decodeSync(JsonStringArray)(values));
+  return JSON.stringify(values);
 }

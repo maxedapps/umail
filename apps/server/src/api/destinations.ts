@@ -23,20 +23,6 @@ export interface DestinationsClient {
   delete(cloudflareId: string): Effect.Effect<void, DestinationsError>;
 }
 
-export type StoredForwardingDestination = {
-  readonly id: string;
-  readonly cloudflareId: string;
-};
-
-export interface DestinationAccountCommands {
-  readonly getDestination: (id: string) => Effect.Effect<StoredForwardingDestination | null>;
-  readonly insertDestination: (
-    created: CloudflareDestination,
-    nowIso: string,
-  ) => Effect.Effect<StoredForwardingDestination>;
-  readonly deleteDestination: (id: string, nowIso: string) => Effect.Effect<void>;
-}
-
 const CloudflareAddress = Schema.Struct({
   id: Schema.String,
   email: Schema.String,
@@ -81,31 +67,6 @@ export function cloudflareDestinationsClient(
       ),
     delete: (cloudflareId) => requestJson(config, "DELETE", `/${cloudflareId}`).pipe(Effect.asVoid),
   };
-}
-
-export function createStoredDestination(
-  client: DestinationsClient,
-  account: DestinationAccountCommands,
-  email: string,
-  nowIso: string,
-): Effect.Effect<StoredForwardingDestination, DestinationsError> {
-  return client
-    .create(email)
-    .pipe(Effect.flatMap((created) => account.insertDestination(created, nowIso)));
-}
-
-export function deleteStoredDestination(
-  client: DestinationsClient,
-  account: DestinationAccountCommands,
-  id: string,
-  nowIso: string,
-): Effect.Effect<void, DestinationsError> {
-  return Effect.gen(function* () {
-    const stored = yield* account.getDestination(id);
-    if (stored === null) return;
-    yield* client.delete(stored.cloudflareId);
-    yield* account.deleteDestination(id, nowIso);
-  });
 }
 
 function requestJson(

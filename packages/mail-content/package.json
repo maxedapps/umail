@@ -18,9 +18,7 @@
     "effect": "4.0.0-rc.112",
     "hast-util-from-parse5": "8.0.3",
     "hast-util-to-html": "9.0.5",
-    "parse5": "7.3.0",
-    "rehype-sanitize": "6.0.0",
-    "unified": "11.0.5"
+    "parse5": "7.3.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.7",

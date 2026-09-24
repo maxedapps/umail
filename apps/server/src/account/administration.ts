@@ -1,37 +1,31 @@
 import {
   constructMailboxAddress,
-  parseMailboxAddress,
   requireApprovalSendMode,
   type ExternalMailAddress,
   type MailDomain,
   type PrincipalPolicy,
 } from "@umail/api-contract";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
-  AccountAddress,
-  AccountDestination,
-  AccountSendingIdentity,
   AddressRow,
   DestinationRow,
-  EnsureMcpOAuthPolicyInput,
-  McpOAuthPolicy,
   McpOAuthPolicyRow,
-  PatchAddressInput,
-  SetMcpOAuthPolicyStateInput,
   StoredMailboxIds,
   StoredPreapprovedRecipients,
   StoredRecipientAllowlist,
-  UpdateMcpOAuthPolicyInput,
+  type AccountAddress,
+  type AccountDestination,
+  type AccountSendingIdentity,
+  type EnsureMcpOAuthPolicyInput,
   type MailboxScope,
+  type McpOAuthPolicy,
+  type PatchAddressInput,
+  type SetMcpOAuthPolicyStateInput,
+  type UpdateMcpOAuthPolicyInput,
 } from "./domain.ts";
-import { AccountConflictError, AccountStoreUnexpectedError } from "./errors.ts";
+import { AccountConflictError } from "./errors.ts";
 import { bindJsonStringArray, firstDecoded, type AccountSqliteStorage } from "./sqlite.ts";
-
-const SqliteErrorMessage = Schema.Struct({
-  message: Schema.String,
-});
 
 const defaultMcpPolicy = {
   mailboxIds: "all",
@@ -106,11 +100,13 @@ export function createAddress(
   const id = crypto.randomUUID();
   const name = displayName === undefined ? null : displayName;
   return storage.transactionSync(() => {
-    try {
-      storage.sql.exec(
+    const inserted = storage.sql
+      .exec(
         `INSERT INTO addresses (
            id, local_part, address, display_name, active, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
         id,
         normalized.localPart,
         normalized.address,
@@ -118,9 +114,10 @@ export function createAddress(
         1,
         nowIso,
         nowIso,
-      );
-    } catch (cause) {
-      throw conflictOrRethrow(cause, "address", id);
+      )
+      .toArray();
+    if (inserted.length === 0) {
+      throw new AccountConflictError({ resource: "address", id });
     }
     return requireAddress(storage, id);
   });
@@ -129,10 +126,9 @@ export function createAddress(
 export function patchAddress(
   storage: AccountSqliteStorage,
   id: string,
-  payload: PatchAddressInput,
+  patch: PatchAddressInput,
   nowIso: string,
 ): AccountAddress | null {
-  const parsed = Schema.decodeSync(PatchAddressInput)(payload);
   return storage.transactionSync(() => {
     const current = getAddress(storage, id);
     if (current === null) {
@@ -140,13 +136,13 @@ export function patchAddress(
     }
     const assignments: Array<string> = [];
     const binds: Array<string | number | null> = [];
-    if (parsed.displayName !== undefined) {
+    if (patch.displayName !== undefined) {
       assignments.push("display_name = ?");
-      binds.push(parsed.displayName);
+      binds.push(patch.displayName);
     }
-    if (parsed.active !== undefined) {
+    if (patch.active !== undefined) {
       assignments.push("active = ?");
-      binds.push(parsed.active ? 1 : 0);
+      binds.push(patch.active ? 1 : 0);
     }
     if (assignments.length === 0) {
       return current;
@@ -161,8 +157,7 @@ export function patchAddress(
 
 export function listSendingIdentities(
   storage: AccountSqliteStorage,
-  mailDomain: MailDomain,
-  mailboxScope: MailboxScope = "all",
+  mailboxScope: MailboxScope,
 ): ReadonlyArray<AccountSendingIdentity> {
   if (mailboxScope !== "all" && mailboxScope.length === 0) {
     return [];
@@ -184,20 +179,12 @@ export function listSendingIdentities(
       )
       .toArray(),
   );
-  const identities: Array<AccountSendingIdentity> = [];
-  for (const row of rows) {
-    const identity = toSendingIdentity(row, mailDomain);
-    if (identity !== null) {
-      identities.push(identity);
-    }
-  }
-  return identities;
+  return rows.map(toSendingIdentity);
 }
 
 export function resolveSendingIdentity(
   storage: AccountSqliteStorage,
   id: string,
-  mailDomain: MailDomain,
 ): AccountSendingIdentity | null {
   const row = firstDecoded(
     Schema.decodeUnknownSync(AddressRow),
@@ -213,7 +200,7 @@ export function resolveSendingIdentity(
   if (row === undefined) {
     return null;
   }
-  return toSendingIdentity(row, mailDomain);
+  return toSendingIdentity(row);
 }
 
 export function listDestinations(storage: AccountSqliteStorage): ReadonlyArray<AccountDestination> {
@@ -258,11 +245,13 @@ export function insertDestination(
   const id = crypto.randomUUID();
   const status = verifiedAt === null ? "pending" : "verified";
   return storage.transactionSync(() => {
-    try {
-      storage.sql.exec(
+    const inserted = storage.sql
+      .exec(
         `INSERT INTO forwarding_destinations (
            id, cloudflare_id, email, verification_status, verified_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
         id,
         cloudflareId,
         email,
@@ -270,9 +259,10 @@ export function insertDestination(
         verifiedAt,
         nowIso,
         nowIso,
-      );
-    } catch (cause) {
-      throw conflictOrRethrow(cause, "destination", id);
+      )
+      .toArray();
+    if (inserted.length === 0) {
+      throw new AccountConflictError({ resource: "destination", id });
     }
     return requireDestination(storage, id);
   });
@@ -392,7 +382,6 @@ export function ensureMcpOAuthPolicy(
   storage: AccountSqliteStorage,
   input: EnsureMcpOAuthPolicyInput,
 ): McpOAuthPolicy {
-  const parsed = Schema.decodeSync(EnsureMcpOAuthPolicyInput)(input);
   const encoded = encodePolicy(defaultMcpPolicy);
   return storage.transactionSync(() => {
     storage.sql.exec(
@@ -402,8 +391,8 @@ export function ensureMcpOAuthPolicy(
          can_admin, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(client_id) DO NOTHING`,
-      parsed.clientId,
-      parsed.label,
+      input.clientId,
+      input.label,
       "active",
       encoded.mailboxIds,
       encoded.canRead,
@@ -412,10 +401,10 @@ export function ensureMcpOAuthPolicy(
       encoded.recipientAllowlist,
       encoded.preapprovedRecipients,
       encoded.canAdmin,
-      parsed.createdAt,
-      parsed.createdAt,
+      input.createdAt,
+      input.createdAt,
     );
-    return requireMcpOAuthPolicy(storage, parsed.clientId);
+    return requireMcpOAuthPolicy(storage, input.clientId);
   });
 }
 
@@ -423,8 +412,7 @@ export function updateMcpOAuthPolicy(
   storage: AccountSqliteStorage,
   input: UpdateMcpOAuthPolicyInput,
 ): McpOAuthPolicy | null {
-  const parsed = Schema.decodeSync(UpdateMcpOAuthPolicyInput)(input);
-  const encoded = encodePolicy(parsed.policy);
+  const encoded = encodePolicy(input.policy);
   return storage.transactionSync(() => {
     storage.sql.exec(
       `UPDATE mcp_oauth_policies
@@ -438,7 +426,7 @@ export function updateMcpOAuthPolicy(
            can_admin = ?,
            updated_at = ?
        WHERE client_id = ? AND state <> 'revoked'`,
-      parsed.label,
+      input.label,
       encoded.mailboxIds,
       encoded.canRead,
       encoded.canDelete,
@@ -446,10 +434,10 @@ export function updateMcpOAuthPolicy(
       encoded.recipientAllowlist,
       encoded.preapprovedRecipients,
       encoded.canAdmin,
-      parsed.updatedAt,
-      parsed.clientId,
+      input.updatedAt,
+      input.clientId,
     );
-    return getMcpOAuthPolicy(storage, parsed.clientId);
+    return getMcpOAuthPolicy(storage, input.clientId);
   });
 }
 
@@ -457,17 +445,16 @@ export function setMcpOAuthPolicyState(
   storage: AccountSqliteStorage,
   input: SetMcpOAuthPolicyStateInput,
 ): McpOAuthPolicy | null {
-  const parsed = Schema.decodeSync(SetMcpOAuthPolicyStateInput)(input);
   return storage.transactionSync(() => {
     storage.sql.exec(
       `UPDATE mcp_oauth_policies
        SET state = ?, updated_at = ?
        WHERE client_id = ? AND state <> 'revoked'`,
-      parsed.state,
-      parsed.updatedAt,
-      parsed.clientId,
+      input.state,
+      input.updatedAt,
+      input.clientId,
     );
-    return getMcpOAuthPolicy(storage, parsed.clientId);
+    return getMcpOAuthPolicy(storage, input.clientId);
   });
 }
 
@@ -492,9 +479,7 @@ export function revokeMcpOAuthPolicy(
 function requireAddress(storage: AccountSqliteStorage, id: string): AccountAddress {
   const address = getAddress(storage, id);
   if (address === null) {
-    throw new AccountStoreUnexpectedError({
-      cause: `Missing address ${id}`,
-    });
+    throw new Error(`Missing address ${id}`);
   }
   return address;
 }
@@ -502,9 +487,7 @@ function requireAddress(storage: AccountSqliteStorage, id: string): AccountAddre
 function requireDestination(storage: AccountSqliteStorage, id: string): AccountDestination {
   const destination = getDestination(storage, id);
   if (destination === null) {
-    throw new AccountStoreUnexpectedError({
-      cause: `Missing destination ${id}`,
-    });
+    throw new Error(`Missing destination ${id}`);
   }
   return destination;
 }
@@ -512,15 +495,13 @@ function requireDestination(storage: AccountSqliteStorage, id: string): AccountD
 function requireMcpOAuthPolicy(storage: AccountSqliteStorage, clientId: string): McpOAuthPolicy {
   const policy = getMcpOAuthPolicy(storage, clientId);
   if (policy === null) {
-    throw new AccountStoreUnexpectedError({
-      cause: `Missing MCP OAuth policy ${clientId}`,
-    });
+    throw new Error(`Missing MCP OAuth policy ${clientId}`);
   }
   return policy;
 }
 
 function toAddress(row: AddressRow): AccountAddress {
-  return Schema.decodeSync(AccountAddress)({
+  return {
     id: row.id,
     localPart: row.local_part,
     address: row.address,
@@ -529,28 +510,15 @@ function toAddress(row: AddressRow): AccountAddress {
     forwardingDestinationId: row.forwarding_destination_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  });
+  };
 }
 
-function toSendingIdentity(row: AddressRow, mailDomain: MailDomain): AccountSendingIdentity | null {
-  const parsed = parseMailboxAddress(row.address);
-  if (
-    parsed.kind === "invalid" ||
-    parsed.domain !== mailDomain ||
-    parsed.localPart !== row.local_part ||
-    parsed.address !== row.address
-  ) {
-    return null;
-  }
-  return Schema.decodeSync(AccountSendingIdentity)({
-    id: row.id,
-    address: parsed.address,
-    displayName: row.display_name,
-  });
+export function toSendingIdentity(row: AddressRow): AccountSendingIdentity {
+  return { id: row.id, address: row.address, displayName: row.display_name };
 }
 
 function toDestination(row: DestinationRow): AccountDestination {
-  return Schema.decodeSync(AccountDestination)({
+  return {
     id: row.id,
     cloudflareId: row.cloudflare_id,
     email: row.email,
@@ -558,7 +526,7 @@ function toDestination(row: DestinationRow): AccountDestination {
     verifiedAt: row.verified_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  });
+  };
 }
 
 function policyFromRow(row: McpOAuthPolicyRow): McpOAuthPolicy {
@@ -569,7 +537,7 @@ function policyFromRow(row: McpOAuthPolicyRow): McpOAuthPolicy {
   const preapprovedRecipients = Schema.decodeSync(StoredPreapprovedRecipients)(
     row.preapproved_recipients_json,
   );
-  return Schema.decodeSync(McpOAuthPolicy)({
+  return {
     clientId: row.client_id,
     label: row.label,
     state: row.state,
@@ -583,7 +551,7 @@ function policyFromRow(row: McpOAuthPolicyRow): McpOAuthPolicy {
     },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  });
+  };
 }
 
 type EncodedMcpOAuthPolicy = {
@@ -615,20 +583,4 @@ function encodePolicy(policy: PrincipalPolicy): EncodedMcpOAuthPolicy {
     preapprovedRecipients: Schema.encodeSync(StoredPreapprovedRecipients)(preapproved),
     canAdmin: policy.canAdmin ? 1 : 0,
   };
-}
-
-function conflictOrRethrow(
-  cause: unknown,
-  resource: "address" | "destination",
-  id: string,
-): AccountConflictError {
-  if (cause instanceof AccountConflictError) return cause;
-  const decoded = Schema.decodeUnknownResult(SqliteErrorMessage)(cause);
-  if (Result.isSuccess(decoded) && decoded.success.message.includes("UNIQUE")) {
-    return new AccountConflictError({ resource, id });
-  }
-  if (cause instanceof Error) {
-    throw cause;
-  }
-  throw new AccountStoreUnexpectedError({ cause });
 }

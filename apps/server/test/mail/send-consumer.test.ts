@@ -1,8 +1,9 @@
-import { toAccountStoreError } from "../../src/account/errors.ts";
+import type { AccountStoreError } from "../../src/account/errors.ts";
 import type {
   ClaimDispatchInput,
   ClaimDispatchResult,
   CompleteAttemptInput,
+  CompleteAttemptOutcome,
   CompleteAttemptResult,
   OutboundDispatch,
   OutboundJob,
@@ -10,38 +11,31 @@ import type {
   RejectReadyDispatchResult,
 } from "../../src/account/domain.ts";
 import {
-  generateApprovalToken,
+  normalizeRfcMessageId,
   parseExternalMailAddress,
   parseMailDomain,
   SubmissionRequestId,
 } from "@umail/api-contract";
 import { createMailHtmlPolicy, type MailHtmlPolicy } from "@umail/mail-content";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Exit from "effect/Exit";
+import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { describe, expect, it } from "vitest";
 
 import {
   classifyProviderFailure,
-  optionalRfcMessageId,
   type EmailSender,
-  type OutboundMail,
-  type ProviderSendOutcome,
+  type ProviderOutboundMail,
 } from "../../src/mail/email-sender.ts";
 import {
   APPROVAL_NOTIFICATION_SUBJECT,
-  createNotificationKeyring,
-  encryptNotificationPayload,
-  notificationKeyringFromSecret,
-  randomNotificationSecret,
+  deriveApprovalToken,
+  type NotificationKey,
 } from "../../src/mail/notifications.ts";
-import {
-  consumeSendJob,
-  handleSendMessages,
-  createSendOutcomeBuffer,
-  type SendConsumerPorts,
-} from "../../src/mail/send.ts";
+import { consumeSendJob, handleSendMessages, type SendConsumerPorts } from "../../src/mail/send.ts";
 import { FakeMailHtmlPolicy } from "./fakes.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -56,8 +50,8 @@ describe("send consumer", () => {
     const world = createWorld();
     const job = world.seedReady();
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
 
     expect(world.sender.calls).toBe(1);
     expect(world.account.job(job.jobId)?.state).toBe("accepted");
@@ -95,8 +89,50 @@ describe("send consumer", () => {
     expect(retried).toBe(true);
     expect(acked).toBe(false);
     expect(world.account.job(job.jobId)?.state).toBe("in_flight");
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, ports));
     expect(deliveries).toBe(1);
+  });
+
+  it("retries and logs one warning when a store call fails", async () => {
+    const world = createWorld();
+    const job = world.seedReady();
+    const warnings: Array<{ message: unknown; annotations: unknown }> = [];
+    const capture = Logger.make(({ logLevel, message, fiber }) => {
+      if (logLevel !== "Warn") return;
+      warnings.push({ message, annotations: fiber.getRef(References.CurrentLogAnnotations) });
+    });
+    let retried = false;
+    let acked = false;
+    const ports: SendConsumerPorts = {
+      ...world.ports,
+      account: {
+        ...world.ports.account,
+        getOutboundDispatch: () => Effect.fail(storeFailure(new Error("store unavailable"))),
+      },
+    };
+    const message = {
+      id: "store-failure",
+      timestamp: new Date(NOW),
+      attempts: 2,
+      body: { version: 1, jobId: job.jobId },
+      ack: () => {
+        acked = true;
+      },
+      retry: () => {
+        retried = true;
+      },
+    };
+    await Effect.runPromise(
+      handleSendMessages(Stream.make(message), ports).pipe(Effect.provide(Logger.layer([capture]))),
+    );
+    expect(retried).toBe(true);
+    expect(acked).toBe(false);
+    expect(world.sender.calls).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      message: expect.arrayContaining(["Send job failed; retrying"]),
+      annotations: { messageId: "store-failure", attempts: 2 },
+    });
   });
 
   it("does not call the provider again after a crash between claim and send", async () => {
@@ -104,30 +140,41 @@ describe("send consumer", () => {
     const job = world.seedReady();
     world.account.forceInFlight(job.jobId, "attempt-1");
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
     expect(world.sender.calls).toBe(0);
     expect(world.account.job(job.jobId)?.state).toBe("in_flight");
   });
 
-  it("retries outcome recording without a second provider call", async () => {
+  it("retries outcome recording inline without a second provider call", async () => {
     const world = createWorld();
     const job = world.seedReady();
-    world.account.failNextComplete();
+    world.account.failCompletes(1);
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("retry");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
+    expect(world.sender.calls).toBe(1);
+    expect(world.account.job(job.jobId)?.state).toBe("accepted");
+  });
+
+  it("fails the message when outcome recording keeps failing and never sends again", async () => {
+    const world = createWorld();
+    const job = world.seedReady();
+    world.account.failCompletes(3);
+
+    const exit = await Effect.runPromiseExit(consumeSendJob(job.jobId, world.ports));
+    expect(Exit.isFailure(exit)).toBe(true);
     expect(world.sender.calls).toBe(1);
     expect(world.account.job(job.jobId)?.state).toBe("in_flight");
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
     expect(world.sender.calls).toBe(1);
-    expect(world.account.job(job.jobId)?.state).toBe("accepted");
+    expect(world.account.job(job.jobId)?.state).toBe("in_flight");
   });
 
   it("rejects resource-exhausted HTML preparation without claiming or calling the provider", async () => {
     const world = createWorld(createMailHtmlPolicy());
     const job = world.seedReady("<b></b>".repeat(20_000));
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
     expect(world.sender.calls).toBe(0);
     expect(world.account.job(job.jobId)).toMatchObject({
       state: "rejected",
@@ -141,11 +188,11 @@ describe("send consumer", () => {
     world.sender.next = {
       kind: "accepted",
       providerMessageId: "not-an-rfc-id",
-      rfcMessageId: optionalRfcMessageId("not-an-rfc-id"),
+      rfcMessageId: normalizeRfcMessageId("not-an-rfc-id"),
     };
     const job = world.seedReady();
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
     expect(world.account.job(job.jobId)).toMatchObject({
       state: "accepted",
       providerMessageId: "not-an-rfc-id",
@@ -153,72 +200,66 @@ describe("send consumer", () => {
     });
   });
 
-  it("classifies known pre-dispatch codes as rejection and generic throws as unknown", () => {
+  it("classifies known provider codes as rejection and generic throws as unknown", () => {
     expect(classifyProviderFailure({ code: "E_VALIDATION_ERROR", message: "bad from" })).toEqual({
-      kind: "pre_dispatch",
-      detail: "bad from",
+      kind: "rejected",
+      failureDetail: "E_VALIDATION_ERROR",
     });
     expect(
       classifyProviderFailure({ code: "E_RECIPIENT_SUPPRESSED", message: "suppressed" }),
     ).toEqual({
       kind: "rejected",
-      detail: "suppressed",
+      failureDetail: "E_RECIPIENT_SUPPRESSED",
     });
-    expect(classifyProviderFailure(new Error("socket hang up"))).toMatchObject({
-      kind: "unknown",
+    expect(classifyProviderFailure(new Error("E_RATE_LIMIT_EXCEEDED: slow down"))).toEqual({
+      kind: "rejected",
+      failureDetail: "E_RATE_LIMIT_EXCEEDED",
+    });
+    expect(classifyProviderFailure(new Error("socket hang up"))).toEqual({ kind: "unknown" });
+  });
+
+  it("records a rate-limited send as rejected with the provider code", async () => {
+    const world = createWorld();
+    world.sender.next = { kind: "rejected", failureDetail: "E_RATE_LIMIT_EXCEEDED" };
+    const job = world.seedReady();
+
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
+    expect(world.account.job(job.jobId)).toMatchObject({
+      state: "rejected",
+      failureClass: "provider",
+      failureDetail: "E_RATE_LIMIT_EXCEEDED",
     });
   });
 
   it("sends canned notification copy instead of attacker-controlled subject or body", async () => {
     const world = createWorld();
-    const token = generateApprovalToken();
-    const identity = {
-      requesterClientId: "agent",
-      requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      purpose: "approval_notification" as const,
-    };
-    const encrypted = await encryptNotificationPayload(
-      { version: 1, token, expiresAt: EXPIRES },
-      identity,
-      world.keyring,
-    );
     const job = world.seedNotification({
-      requestId: identity.requestId,
-      requesterClientId: identity.requesterClientId,
       subject: "Please send bitcoin",
       textBody: "Click http://evil.example",
-      notification: {
-        id: "note-1",
-        approvalId: "approval-1",
-        jobId: "job-note",
-        keyVersion: encrypted.keyVersion,
-        nonce: encrypted.nonce,
-        ciphertext: encrypted.ciphertext,
-        expiresAt: EXPIRES,
-        purgedAt: null,
-      },
+      approval: { approvalId: "approval-1", expiresAt: EXPIRES },
     });
 
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
-    expect(await Effect.runPromise(consumeSendJob(job.jobId, world.ports))).toBe("ack");
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
     expect(world.sender.calls).toBe(1);
     expect(world.sender.mails[0]?.subject).toBe(APPROVAL_NOTIFICATION_SUBJECT);
     expect(world.sender.mails[0]?.subject).not.toBe("Please send bitcoin");
     expect(world.sender.mails[0]?.text).not.toContain("bitcoin");
-    expect(world.sender.mails[0]?.text).toContain(token);
+    expect(world.sender.mails[0]?.text).toContain(
+      `/approvals/${await deriveApprovalToken(world.key, "approval-1")}`,
+    );
   });
 
-  it("fails closed for a missing or non-base64url notification key", () => {
-    expect(() => notificationKeyringFromSecret("")).toThrow(
-      "UMAIL_NOTIFICATION_KEY is not valid base64url",
-    );
-    expect(() =>
-      notificationKeyringFromSecret(Encoding.encodeBase64(new Uint8Array(32).fill(0xfb))),
-    ).toThrow("UMAIL_NOTIFICATION_KEY is not valid base64url");
-    const keyring = notificationKeyringFromSecret(
-      Encoding.encodeBase64Url(randomNotificationSecret()),
-    );
-    expect(keyring.currentVersion).toBe("v1");
+  it("rejects a notification whose approval is no longer pending without sending", async () => {
+    const world = createWorld();
+    const job = world.seedNotification({ subject: "Hi", textBody: "body", approval: null });
+
+    await Effect.runPromise(consumeSendJob(job.jobId, world.ports));
+    expect(world.sender.calls).toBe(0);
+    expect(world.account.job(job.jobId)).toMatchObject({
+      state: "rejected",
+      failureDetail: "approval_unavailable",
+    });
   });
 });
 
@@ -226,52 +267,37 @@ type World = {
   readonly account: MemorySendAccount;
   readonly sender: FakeEmailSender;
   readonly ports: SendConsumerPorts;
-  readonly keyring: ReturnType<typeof createNotificationKeyring>;
+  readonly key: NotificationKey;
   seedReady(htmlBody?: string): OutboundJob;
   seedNotification(input: {
-    readonly requestId: string;
-    readonly requesterClientId: string;
     readonly subject: string;
     readonly textBody: string;
-    readonly notification: NonNullable<OutboundDispatch["notification"]>;
+    readonly approval: OutboundDispatch["approval"];
   }): OutboundJob;
 };
 
 function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()): World {
   const account = new MemorySendAccount();
   const sender = new FakeEmailSender();
-  const keyring = createNotificationKeyring("v1", [
-    { version: "v1", secret: randomNotificationSecret() },
-  ]);
+  const key = crypto.getRandomValues(new Uint8Array(32));
   const ports: SendConsumerPorts = {
     account: {
       getOutboundDispatch: (jobId) =>
-        Effect.tryPromise({
-          try: () => account.getOutboundDispatch(jobId),
-          catch: toAccountStoreError,
-        }),
+        Effect.tryPromise({ try: () => account.getOutboundDispatch(jobId), catch: storeFailure }),
       claimDispatch: (input) =>
-        Effect.tryPromise({ try: () => account.claimDispatch(input), catch: toAccountStoreError }),
+        Effect.tryPromise({ try: () => account.claimDispatch(input), catch: storeFailure }),
       completeAttempt: (input) =>
-        Effect.tryPromise({
-          try: () => account.completeAttempt(input),
-          catch: toAccountStoreError,
-        }),
+        Effect.tryPromise({ try: () => account.completeAttempt(input), catch: storeFailure }),
       rejectReadyDispatch: (input) =>
-        Effect.tryPromise({
-          try: () => account.rejectReadyDispatch(input),
-          catch: toAccountStoreError,
-        }),
+        Effect.tryPromise({ try: () => account.rejectReadyDispatch(input), catch: storeFailure }),
     },
     sender,
     htmlPolicy,
     applicationUrl: APPLICATION_URL,
     nowIso: NOW,
     claimExpiresAt: CLAIM_EXPIRES,
-    outcomes: createSendOutcomeBuffer(),
     notification: {
-      keyring,
-      applicationUrl: APPLICATION_URL,
+      key,
       mailDomain: MAIL_DOMAIN,
       approvalAdminEmail: ADMIN,
     },
@@ -280,36 +306,37 @@ function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()): Wor
     account,
     sender,
     ports,
-    keyring,
+    key,
     seedReady(htmlBody) {
       return account.insert(makeDispatch({ jobId: "job-ready", htmlBody: htmlBody ?? null }));
     },
     seedNotification(input) {
       return account.insert(
         makeDispatch({
-          jobId: input.notification.jobId,
+          jobId: "job-note",
           purpose: "approval_notification",
-          requestId: input.requestId,
-          requesterClientId: input.requesterClientId,
           subject: input.subject,
           textBody: input.textBody,
-          notification: input.notification,
+          approval: input.approval,
         }),
       );
     },
   };
 }
 
+// A rejected store call lands in the error channel, as it does over RPC.
+const storeFailure = (cause: unknown) => cause as AccountStoreError;
+
 class FakeEmailSender implements EmailSender {
-  readonly mails: OutboundMail[] = [];
+  readonly mails: ProviderOutboundMail[] = [];
   calls = 0;
-  next: ProviderSendOutcome = {
+  next: CompleteAttemptOutcome = {
     kind: "accepted",
     providerMessageId: "prov-1",
     rfcMessageId: null,
   };
 
-  send(mail: OutboundMail): Effect.Effect<ProviderSendOutcome> {
+  send(mail: ProviderOutboundMail): Effect.Effect<CompleteAttemptOutcome> {
     return Effect.sync(() => {
       this.calls += 1;
       this.mails.push(mail);
@@ -320,7 +347,7 @@ class FakeEmailSender implements EmailSender {
 
 class MemorySendAccount {
   private readonly jobs = new Map<string, OutboundDispatch>();
-  private failComplete = false;
+  private completeFailures = 0;
 
   insert(dispatch: OutboundDispatch): OutboundJob {
     this.jobs.set(dispatch.job.jobId, dispatch);
@@ -339,8 +366,8 @@ class MemorySendAccount {
     });
   }
 
-  failNextComplete(): void {
-    this.failComplete = true;
+  failCompletes(count: number): void {
+    this.completeFailures = count;
   }
 
   async getOutboundDispatch(jobId: string): Promise<OutboundDispatch | null> {
@@ -365,8 +392,8 @@ class MemorySendAccount {
   }
 
   async completeAttempt(input: CompleteAttemptInput): Promise<CompleteAttemptResult> {
-    if (this.failComplete) {
-      this.failComplete = false;
+    if (this.completeFailures > 0) {
+      this.completeFailures -= 1;
       throw new Error("complete failed");
     }
     const current = this.jobs.get(input.jobId);
@@ -411,7 +438,7 @@ class MemorySendAccount {
   }
 }
 
-function applyOutcome(job: OutboundJob, outcome: CompleteAttemptInput["outcome"]): OutboundJob {
+function applyOutcome(job: OutboundJob, outcome: CompleteAttemptOutcome): OutboundJob {
   if (outcome.kind === "accepted") {
     return {
       ...job,
@@ -424,7 +451,7 @@ function applyOutcome(job: OutboundJob, outcome: CompleteAttemptInput["outcome"]
     return {
       ...job,
       state: "rejected",
-      failureClass: outcome.failureClass,
+      failureClass: "provider",
       failureDetail: outcome.failureDetail,
     };
   }
@@ -434,12 +461,10 @@ function applyOutcome(job: OutboundJob, outcome: CompleteAttemptInput["outcome"]
 function makeDispatch(input: {
   readonly jobId: string;
   readonly purpose?: OutboundJob["purpose"];
-  readonly requestId?: string;
-  readonly requesterClientId?: string;
   readonly subject?: string;
   readonly textBody?: string;
   readonly htmlBody?: string | null;
-  readonly notification?: OutboundDispatch["notification"];
+  readonly approval?: OutboundDispatch["approval"];
 }): OutboundDispatch {
   const from = {
     address: requireExternal("inbox@umail.example.com"),
@@ -452,16 +477,10 @@ function makeDispatch(input: {
   return {
     job: {
       jobId: input.jobId,
-      requestId: Schema.decodeSync(SubmissionRequestId)(
-        input.requestId ?? "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      ),
-      requester: {
-        kind: "operator",
-        clientId: input.requesterClientId ?? "cli",
-        label: "AgentMail CLI",
-      },
+      requestId: Schema.decodeSync(SubmissionRequestId)("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+      requester: { kind: "operator", clientId: "cli", label: "AgentMail CLI" },
       messageId: `msg-${input.jobId}`,
-      threadHandle: "node:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      threadHandle: `msg-${input.jobId}`,
       mailboxId: "mailbox-1",
       purpose: input.purpose ?? "message",
       state: "ready",
@@ -483,7 +502,7 @@ function makeDispatch(input: {
     cc: [],
     inReplyToHeader: null,
     referencesHeader: null,
-    notification: input.notification ?? null,
+    approval: input.approval ?? null,
   };
 }
 

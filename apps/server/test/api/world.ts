@@ -1,17 +1,14 @@
 import { betterAuth } from "better-auth";
+import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 
-import {
-  ExternalMailAddress,
-  MailDomain,
-  MailboxAddress,
-  generateApprovalToken,
-} from "@umail/api-contract";
+import { ExternalMailAddress, MailDomain, MailboxAddress } from "@umail/api-contract";
 import type { MailHtmlPolicy } from "@umail/mail-content";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
-import { makeApiWebHandler, type ApiDeps, type MailArchiveReader } from "../../src/api/app.ts";
+import { makeApiHttpEffect, type ApiDeps, type MailArchiveReader } from "../../src/api/app.ts";
 import type { AuthControlDatabase } from "../../src/auth/auth-control.ts";
 import {
   asUmailBetterAuth,
@@ -21,10 +18,7 @@ import {
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
 import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
-import {
-  createNotificationKeyring,
-  randomNotificationSecret,
-} from "../../src/mail/notifications.ts";
+import type { NotificationKey } from "../../src/mail/notifications.ts";
 import {
   FaithfulMailHtmlPolicy,
   MemoryArchive,
@@ -53,7 +47,7 @@ export type World = {
   readonly destinations: MemoryDestinations;
   readonly htmlPolicy: FaithfulMailHtmlPolicy;
   readonly approvalClock: MemoryApprovalClock;
-  readonly approvalTokens: Array<string>;
+  readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
   readonly auth: UmailBetterAuth;
   readonly operatorId: string;
@@ -71,6 +65,10 @@ export async function createWorld(
     readonly operatorEmail?: ExternalMailAddress;
     readonly archive?: MailArchiveReader;
     readonly htmlPolicy?: MailHtmlPolicy;
+    // Replaces store methods seen by the API only; `world.account` stays the real store for seeding.
+    readonly account?: Partial<AccountStoreRpc>;
+    // Merged into every request fiber, e.g. a test Logger.
+    readonly requestContext?: Context.Context<never>;
   } = {},
 ): Promise<World> {
   const db = new MemoryD1();
@@ -98,11 +96,11 @@ export async function createWorld(
   const destinations = new MemoryDestinations();
   const htmlPolicy = new FaithfulMailHtmlPolicy();
   const approvalClock = new MemoryApprovalClock();
-  const approvalTokens: Array<string> = [];
+  const notificationKey = crypto.getRandomValues(new Uint8Array(32));
   const runtime = await Effect.runPromise(
     Effect.gen(function* () {
       const deps = {
-        account: memoryAccount.account,
+        account: { ...memoryAccount.account, ...settings.account },
         archive: settings.archive ?? archive,
         destinations,
         htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
@@ -113,23 +111,14 @@ export async function createWorld(
         operatorId: provision.operatorId,
         approvalAdminEmail: operatorEmail,
         approvalClock,
-        notification: {
-          keyring: createNotificationKeyring("test", [
-            { version: "test", secret: randomNotificationSecret() },
-          ]),
-          nextToken: () => {
-            const token = generateApprovalToken();
-            approvalTokens.push(token);
-            return token;
-          },
-        },
+        notificationKey,
       } satisfies ApiDeps;
-      const handler = yield* makeApiWebHandler(deps);
+      const handler = HttpEffect.toWebHandler(yield* makeApiHttpEffect(deps));
       return { deps, handler };
     }).pipe(Effect.provide(Reactivity.layer), Effect.scoped),
   );
 
-  const dispatch = (request: Request) => runtime.handler(request);
+  const dispatch = (request: Request) => runtime.handler(request, settings.requestContext);
   const fetchWorld = (input: string, init?: RequestInit) => dispatch(new Request(input, init));
 
   const operator = await bootstrapOperator(fetchWorld, operatorEmail);
@@ -142,7 +131,7 @@ export async function createWorld(
     destinations,
     htmlPolicy,
     approvalClock,
-    approvalTokens,
+    notificationKey,
     deps: runtime.deps,
     auth,
     operatorId: provision.operatorId,
@@ -302,7 +291,7 @@ type InboundMessageSeed = {
   readonly occurredAt?: string;
   readonly parsedDate?: string | null;
   readonly subject?: string;
-  readonly textBody?: string;
+  readonly textBody?: string | null;
   readonly from?: string;
   readonly to?: ReadonlyArray<string>;
   readonly cc?: ReadonlyArray<string>;
@@ -340,7 +329,7 @@ export async function seedInboundMessage(
     nowIso: now,
     parsedDate: seed.parsedDate ?? null,
     subject: seed.subject ?? `Subject ${id}`,
-    textBody: seed.textBody ?? "text",
+    textBody: seed.textBody === undefined ? "text" : seed.textBody,
     htmlBody: seed.htmlBody === undefined ? null : seed.htmlBody,
     hasRemoteImages: false,
     from: [{ address: fromAddress, displayName: null }],
@@ -351,13 +340,9 @@ export async function seedInboundMessage(
   await Effect.runPromise(
     world.account.registerInboundReceipt({
       receiptId: id,
-      digest: `digest-${id}`,
       envelopeFrom: seed.envelopeFrom ?? seed.from ?? "sender@example.com",
       envelopeTo: seed.envelopeTo ?? FROM_ADDRESS,
       rawKey: `raw/${id}`,
-      manifestKey: `receipts/${id}.json`,
-      advertisedRawSize: 1,
-      consumedBytes: 1,
       receivedAt: now,
     }),
   );
@@ -366,15 +351,15 @@ export async function seedInboundMessage(
       world.account.observeInboundForward({ receiptId: id, observation: seed.forward }),
     );
   }
-  if (seed.attachments === undefined) {
-    return Effect.runPromise(world.account.acceptInbound(input));
-  }
-  return Effect.runPromise(
-    world.account.acceptInbound({
-      ...input,
-      attachments: seed.attachments,
-    }),
+  const accepted = await Effect.runPromise(
+    world.account.acceptInbound(
+      seed.attachments === undefined ? input : { ...input, attachments: seed.attachments },
+    ),
   );
+  if (accepted === null) {
+    throw new Error(`Seeded receipt ${id} was already settled`);
+  }
+  return accepted;
 }
 
 function responseCookie(response: Response): string | null {

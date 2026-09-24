@@ -76,10 +76,6 @@ export function configFromEnvironment(env: UmailClientEnvironment) {
   );
 }
 
-export function publicApprovalConfigFromEnvironment(env: PublicApprovalClientEnvironment) {
-  return configFromEnvironment(env);
-}
-
 export function withUmailRequestHeaders(client: HttpClient.HttpClient, config: UmailClientConfig) {
   return HttpClient.mapRequest(client, (request) =>
     request.pipe(

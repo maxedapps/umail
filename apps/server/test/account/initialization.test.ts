@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { AccountConflictError } from "../../src/account/errors.ts";
 import type { AccountAddress } from "../../src/account/domain.ts";
-import { MailDomain } from "@umail/api-contract";
+import { MailDomain, MailboxAddress } from "@umail/api-contract";
 import { seedDevelopmentAddresses } from "../../src/account/worker.ts";
 import { layoutForStage } from "../../src/site.ts";
 const ROOT = Schema.decodeSync(MailDomain)("umail.example.com");
@@ -58,7 +58,7 @@ class MemoryAddressProvisioning {
     nowIso: string,
   ) {
     return Effect.suspend(() => {
-      const address = `${localPart}@${mailDomain}`;
+      const address = MailboxAddress.make(`${localPart}@${mailDomain}`);
       if (this.created.some((existing) => existing.address === address)) {
         return Effect.fail(new AccountConflictError({ resource: "address", id: address }));
       }

@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -12,7 +13,9 @@ export type ExternalMailAddress = typeof ExternalMailAddress.Type;
 
 export class MailContact extends Schema.Class<MailContact>("MailContact")({
   address: ExternalMailAddress,
-  displayName: Schema.NullOr(Schema.String),
+  displayName: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 }) {}
 
 export type ExternalMailAddressParseResult =

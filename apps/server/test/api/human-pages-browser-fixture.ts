@@ -15,6 +15,7 @@ import type { Frame, Locator, Page } from "playwright";
 import type { Plugin } from "vitest/config";
 
 import { submitMessage } from "../../src/api/operations.ts";
+import { deriveApprovalToken } from "../../src/mail/notifications.ts";
 import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "./fakes.ts";
 import { registerMcpClient } from "./oauth-flow.ts";
 import {
@@ -100,6 +101,7 @@ export const humanPageBrowserCommands = {
         const decisionBox = await optionalBoundingBox(page.locator(".decision-panel"));
         const clientId = await optionalText(page.locator("#client-id"));
         const scope = await optionalText(page.locator("#scope"));
+        const redirectHost = await optionalText(page.locator("#redirect-host"));
         const scriptNonce = await page.evaluate(pageOwnedScriptNonce);
         const heading = (await page.locator("h1").textContent()) ?? "";
         const title = await page.title();
@@ -158,6 +160,7 @@ export const humanPageBrowserCommands = {
           scriptNonce,
           clientId,
           scope,
+          redirectHost,
           statusText: consentAuth?.statusText ?? focus.statusText,
           authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
           authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
@@ -710,14 +713,28 @@ async function submitApproval(
   const job = await Effect.runPromise(
     submitMessage(world.deps, principal, Schema.decodeSync(SubmitMessagePayload)(draft)),
   );
-  const token = world.approvalTokens[world.approvalTokens.length - 1];
-  if (token === undefined) {
-    throw new Error("expected an approval token");
-  }
   if (job.state !== "waiting_approval") {
     throw new Error("expected a parked approval job");
   }
-  return { job, token };
+  return { job, token: await notifiedApprovalToken(world, job.messageId) };
+}
+
+// Re-derives the review token the way SendConsumer does for the message's notification job.
+async function notifiedApprovalToken(world: World, messageId: string): Promise<string> {
+  const jobs = await Effect.runPromise(
+    world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
+  );
+  const notification = jobs.items.find(
+    (job) => job.purpose === "approval_notification" && job.messageId === messageId,
+  );
+  if (notification === undefined) {
+    throw new Error("expected an approval notification job");
+  }
+  const dispatch = await Effect.runPromise(world.account.getOutboundDispatch(notification.jobId));
+  if (dispatch === null || dispatch.approval === null) {
+    throw new Error("expected a pending approval notification");
+  }
+  return deriveApprovalToken(world.notificationKey, dispatch.approval.approvalId);
 }
 
 async function decide(world: World, token: string, decision: "approved" | "denied") {
@@ -779,28 +796,18 @@ async function approveAndFail(
       jobId: submitted.job.jobId,
       attemptId: claimed.attemptId,
       nowIso: NOW,
-      outcome: {
-        kind: "rejected",
-        failureClass: "provider",
-        failureDetail: "provider-private-detail",
-      },
+      outcome: { kind: "rejected", failureDetail: "provider-private-detail" },
     }),
   );
 }
 
 async function expire(world: World, token: string) {
   const tokenHash = await hashApprovalToken(Schema.decodeSync(ApprovalToken)(token));
-  const lookup = await Effect.runPromise(world.account.lookupApprovalByTokenHash(tokenHash));
-  if (lookup.kind !== "found") {
-    throw new Error("expected the expired approval to exist");
-  }
+  // A due approval expires on decide, whatever the decision.
   const expired = await Effect.runPromise(
-    world.account.expirePendingApproval({
-      approvalId: lookup.approval.id,
-      nowIso: EXPIRE_AT,
-    }),
+    world.account.decideApproval({ tokenHash, decision: "denied", nowIso: EXPIRE_AT }),
   );
-  if (expired.kind !== "transitioned") {
+  if (expired.kind !== "resolved" || expired.state !== "expired") {
     throw new Error("expected the approval to expire");
   }
 }

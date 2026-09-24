@@ -7,4 +7,3 @@ export * from "./approval-domain.ts";
 export * from "./submission-domain.ts";
 export * from "./principal-authorization.ts";
 export * from "./api-spec.ts";
-export * from "./client.ts";

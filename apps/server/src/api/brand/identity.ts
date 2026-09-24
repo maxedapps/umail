@@ -9,7 +9,6 @@ export const PRODUCT_DESCRIPTION =
   "Self-hosted mailbox for AI agents. Read mail, manage threads, and send with approval.";
 export const PRODUCT_WEBSITE_URL = "https://github.com/maxedapps/umail";
 export const AGENTMAIL_ICON_PATH = "/icon.png";
-export const CLI_CLIENT_NAME = "AgentMail CLI";
 
 export function productPageTitle(label: string): string {
   return `${label} · ${PRODUCT_NAME}`;

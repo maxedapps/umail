@@ -10,8 +10,6 @@ export class ProvisionedOperator extends Context.Service<
   ProvisionedOperator,
   {
     readonly operatorId: Alchemy.Input<string>;
-    readonly generation: Alchemy.Input<number>;
-    readonly schemaRevision: Alchemy.Input<string>;
   }
 >()("uMail/ProvisionedOperator") {}
 

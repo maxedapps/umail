@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 
 import {
-  MailContact,
   operatorOAuthPrincipal,
   parseExternalMailAddress,
   type Principal,
@@ -12,7 +11,6 @@ import {
 import {
   mailboxAllowed,
   mailboxScopeOf,
-  recipientsAllowed,
   requireAdmin,
   requireDelete,
   requireRead,
@@ -58,12 +56,10 @@ describe("OAuth principal authorization", () => {
     });
   });
 
-  it("enforces live MCP mailbox, recipient, delete, and admin policy", async () => {
+  it("enforces live MCP mailbox, delete, and admin policy", async () => {
     expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-1")).toBe(true);
     expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-2")).toBe(false);
     expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
-    expect(recipientsAllowed(MCP_PRINCIPAL, [mailContact("recipient@example.com")])).toBe(true);
-    expect(recipientsAllowed(MCP_PRINCIPAL, [mailContact("other@example.com")])).toBe(false);
     await expect(Effect.runPromise(requireRead(MCP_PRINCIPAL))).resolves.toBeUndefined();
     await expect(Effect.runPromise(requireSend(MCP_PRINCIPAL))).resolves.toBeUndefined();
     await expect(Effect.runPromise(requireDelete(MCP_PRINCIPAL))).rejects.toMatchObject({
@@ -81,8 +77,4 @@ function mailAddress(raw: string): ExternalMailAddress {
     throw new Error(`Invalid test address: ${raw}`);
   }
   return parsed.address;
-}
-
-function mailContact(raw: string): MailContact {
-  return new MailContact({ address: mailAddress(raw), displayName: null });
 }

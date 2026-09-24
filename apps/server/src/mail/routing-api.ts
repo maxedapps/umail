@@ -34,15 +34,13 @@ export interface EmailRoutingDomainRegistration extends EmailRoutingDomainIdenti
 export interface EmailRoutingDomainInspection {
   readonly zoneName: string;
   readonly apexEnabled: boolean;
-  readonly enabledNames: ReadonlyArray<string>;
   readonly exact: EmailRoutingDomainRegistration | undefined;
 }
 
 export type EmailRoutingDomainApiOperation =
   | "read-routing-settings"
   | "read-dns-requirements"
-  | "enable-routing-domain"
-  | "disable-routing-domain";
+  | "enable-routing-domain";
 
 export const emailRoutingDomainApiFailureReasons = [
   "invalid-base-url",
@@ -71,9 +69,6 @@ export interface EmailRoutingDomainsApiService {
   ): Effect.Effect<EmailRoutingDomainInspection, EmailRoutingDomainApiError>;
   enableApex(identity: EmailRoutingDomainIdentity): Effect.Effect<void, EmailRoutingDomainApiError>;
   enable(identity: EmailRoutingDomainIdentity): Effect.Effect<void, EmailRoutingDomainApiError>;
-  disableExact(
-    identity: EmailRoutingDomainIdentity,
-  ): Effect.Effect<void, EmailRoutingDomainApiError>;
 }
 
 export class EmailRoutingDomainsApi extends Context.Service<
@@ -103,23 +98,6 @@ const RoutingSettingsSuccess = Schema.Struct({
 
 const DnsRequirementError = Schema.Struct({
   code: Schema.optionalKey(Schema.String),
-});
-
-// The default endpoint lists required records. It does not report whether
-// those records are present; apex readiness comes from routing settings.
-const ApexDnsRequirementsSuccess = Schema.Struct({
-  success: Schema.Literal(true),
-  result: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        content: Schema.optionalKey(Schema.String),
-        name: Schema.optionalKey(Schema.String),
-        priority: Schema.optionalKey(Schema.Finite),
-        ttl: Schema.optionalKey(Schema.Finite),
-        type: Schema.optionalKey(Schema.String),
-      }),
-    ),
-  ),
 });
 
 // Compatibility response for Cloudflare's deprecated subdomain query.
@@ -163,22 +141,6 @@ function apiError(
   reason: EmailRoutingDomainApiFailureReason,
 ) {
   return new EmailRoutingDomainApiError({ operation, status, message, reason });
-}
-
-function routingUrl(
-  credentials: DeploymentCredentials,
-  identity: EmailRoutingDomainIdentity,
-  operation: EmailRoutingDomainApiOperation,
-) {
-  return Effect.try({
-    try: () => {
-      const baseUrl = credentials.apiBaseUrl.endsWith("/")
-        ? credentials.apiBaseUrl
-        : `${credentials.apiBaseUrl}/`;
-      return new URL(`zones/${encodeURIComponent(identity.zoneId)}/email/routing`, baseUrl);
-    },
-    catch: () => apiError(operation, 0, "Cloudflare API base URL is invalid.", "invalid-base-url"),
-  });
 }
 
 function authorize(
@@ -276,176 +238,64 @@ function exactSubdomain(
   return Effect.succeed(matches[0]);
 }
 
-function readRoutingSettings(
-  context: LiveEmailRoutingDomainApiContext,
-  identity: EmailRoutingDomainIdentity,
-) {
-  return Effect.gen(function* () {
-    const credentials = yield* context.resolveCredentials.pipe(
-      Effect.mapError(() =>
-        apiError(
-          "read-routing-settings",
-          0,
-          "Could not resolve Cloudflare deployment credentials.",
-          "credential-resolution-failed",
-        ),
-      ),
-    );
-    const url = yield* routingUrl(credentials, identity, "read-routing-settings");
-    const request = authorize(
-      HttpClientRequest.get(url).pipe(HttpClientRequest.acceptJson),
-      credentials,
-    );
-    return yield* executeSuccess(
-      context.http,
-      request,
-      RoutingSettingsSuccess,
-      "read-routing-settings",
-    );
-  });
+interface CallOptions {
+  readonly method: "GET" | "POST";
+  readonly path?: string;
+  readonly subdomain?: string;
+  readonly body?: typeof RoutingDomainMutation.Type;
 }
 
-function readDnsReadiness(
+function call<S extends Schema.Constraint>(
   context: LiveEmailRoutingDomainApiContext,
+  operation: EmailRoutingDomainApiOperation,
   identity: EmailRoutingDomainIdentity,
-  subdomain: string | undefined,
+  schema: S,
+  options: CallOptions,
 ) {
   return Effect.gen(function* () {
     const credentials = yield* context.resolveCredentials.pipe(
       Effect.mapError(() =>
         apiError(
-          "read-dns-requirements",
+          operation,
           0,
           "Could not resolve Cloudflare deployment credentials.",
           "credential-resolution-failed",
         ),
       ),
     );
-    const url = yield* routingUrl(credentials, identity, "read-dns-requirements");
-    url.pathname = `${url.pathname}/dns`;
-    if (subdomain !== undefined) {
-      url.searchParams.set("subdomain", subdomain);
+    const url = yield* Effect.try({
+      try: () => {
+        const baseUrl = credentials.apiBaseUrl.endsWith("/")
+          ? credentials.apiBaseUrl
+          : `${credentials.apiBaseUrl}/`;
+        const path = `zones/${encodeURIComponent(identity.zoneId)}/email/routing${options.path ?? ""}`;
+        return new URL(path, baseUrl);
+      },
+      catch: () =>
+        apiError(operation, 0, "Cloudflare API base URL is invalid.", "invalid-base-url"),
+    });
+    if (options.subdomain !== undefined) {
+      url.searchParams.set("subdomain", options.subdomain);
     }
-    const request = authorize(
-      HttpClientRequest.get(url).pipe(HttpClientRequest.acceptJson),
-      credentials,
-    );
-    if (subdomain === undefined) {
-      yield* executeSuccess(
-        context.http,
-        request,
-        ApexDnsRequirementsSuccess,
-        "read-dns-requirements",
-      );
-      return undefined;
-    }
-    const response = yield* executeSuccess(
-      context.http,
-      request,
-      DnsRequirementsSuccess,
-      "read-dns-requirements",
-    );
-    return response.result.errors === null || response.result.errors.length === 0;
+    const request = HttpClientRequest.make(options.method)(url).pipe(HttpClientRequest.acceptJson);
+    const withBody =
+      options.body === undefined
+        ? request
+        : yield* HttpClientRequest.schemaBodyJson(RoutingDomainMutation)(
+            request,
+            options.body,
+          ).pipe(
+            Effect.mapError(() =>
+              apiError(
+                operation,
+                0,
+                "Could not encode the Email Routing domain request.",
+                "request-encoding-failed",
+              ),
+            ),
+          );
+    return yield* executeSuccess(context.http, authorize(withBody, credentials), schema, operation);
   });
-}
-
-function enableApexRouting(
-  context: LiveEmailRoutingDomainApiContext,
-  identity: EmailRoutingDomainIdentity,
-) {
-  return Effect.gen(function* () {
-    const credentials = yield* context.resolveCredentials.pipe(
-      Effect.mapError(() =>
-        apiError(
-          "enable-routing-domain",
-          0,
-          "Could not resolve Cloudflare deployment credentials.",
-          "credential-resolution-failed",
-        ),
-      ),
-    );
-    const url = yield* routingUrl(credentials, identity, "enable-routing-domain");
-    url.pathname = `${url.pathname}/dns`;
-    const request = authorize(
-      HttpClientRequest.post(url).pipe(HttpClientRequest.acceptJson),
-      credentials,
-    );
-    yield* executeSuccess(context.http, request, MutationSuccess, "enable-routing-domain");
-  });
-}
-
-function enableRoutingDomain(
-  context: LiveEmailRoutingDomainApiContext,
-  identity: EmailRoutingDomainIdentity,
-) {
-  return Effect.gen(function* () {
-    const credentials = yield* context.resolveCredentials.pipe(
-      Effect.mapError(() =>
-        apiError(
-          "enable-routing-domain",
-          0,
-          "Could not resolve Cloudflare deployment credentials.",
-          "credential-resolution-failed",
-        ),
-      ),
-    );
-    const url = yield* routingUrl(credentials, identity, "enable-routing-domain");
-    url.pathname = `${url.pathname}/dns`;
-    const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.acceptJson,
-      HttpClientRequest.schemaBodyJson(RoutingDomainMutation)({ name: identity.name }),
-      Effect.map((request) => authorize(request, credentials)),
-      Effect.mapError(() =>
-        apiError(
-          "enable-routing-domain",
-          0,
-          "Could not encode the Email Routing domain request.",
-          "request-encoding-failed",
-        ),
-      ),
-    );
-    yield* executeSuccess(context.http, request, MutationSuccess, "enable-routing-domain");
-  });
-}
-
-function disableExactRoutingDomain(
-  context: LiveEmailRoutingDomainApiContext,
-  identity: EmailRoutingDomainIdentity,
-) {
-  return Effect.gen(function* () {
-    const credentials = yield* context.resolveCredentials.pipe(
-      Effect.mapError(() =>
-        apiError(
-          "disable-routing-domain",
-          0,
-          "Could not resolve Cloudflare deployment credentials.",
-          "credential-resolution-failed",
-        ),
-      ),
-    );
-    const url = yield* routingUrl(credentials, identity, "disable-routing-domain");
-    url.pathname = `${url.pathname}/disable`;
-    const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.acceptJson,
-      HttpClientRequest.schemaBodyJson(RoutingDomainMutation)({ name: identity.name }),
-      Effect.map((request) => authorize(request, credentials)),
-      Effect.mapError(() =>
-        apiError(
-          "disable-routing-domain",
-          0,
-          "Could not encode the Email Routing domain request.",
-          "request-encoding-failed",
-        ),
-      ),
-    );
-    yield* executeSuccess(context.http, request, MutationSuccess, "disable-routing-domain");
-  });
-}
-
-function enabledChildNames(settings: typeof RoutingSettingsSuccess.Type) {
-  return (settings.result.subdomains ?? [])
-    .filter((entry) => entry.enabled)
-    .map((entry) => entry.name);
 }
 
 function makeLiveEmailRoutingDomainsApi(
@@ -454,17 +304,20 @@ function makeLiveEmailRoutingDomainsApi(
   return {
     inspect: (identity) =>
       Effect.gen(function* () {
-        const settings = yield* readRoutingSettings(context, identity);
+        const settings = yield* call(
+          context,
+          "read-routing-settings",
+          identity,
+          RoutingSettingsSuccess,
+          { method: "GET" },
+        );
         const zoneName = settings.result.name;
+        // Apex readiness comes from the routing settings alone.
         if (identity.name === zoneName) {
           const dnsReady = settings.result.enabled && settings.result.status === "ready";
-          if (dnsReady) {
-            yield* readDnsReadiness(context, identity, undefined);
-          }
           return {
             zoneName,
             apexEnabled: settings.result.enabled,
-            enabledNames: enabledChildNames(settings),
             exact: {
               subdomainId: settings.result.id,
               zoneId: identity.zoneId,
@@ -478,7 +331,13 @@ function makeLiveEmailRoutingDomainsApi(
         const subdomain = yield* exactSubdomain(settings, identity);
         const dnsReady =
           settings.result.enabled && subdomain?.enabled === true && subdomain.status === "ready"
-            ? (yield* readDnsReadiness(context, identity, identity.name)) === true
+            ? yield* call(context, "read-dns-requirements", identity, DnsRequirementsSuccess, {
+                method: "GET",
+                path: "/dns",
+                subdomain: identity.name,
+              }).pipe(
+                Effect.map(({ result }) => result.errors === null || result.errors.length === 0),
+              )
             : false;
         const exact =
           subdomain === undefined
@@ -494,13 +353,20 @@ function makeLiveEmailRoutingDomainsApi(
         return {
           zoneName,
           apexEnabled: settings.result.enabled,
-          enabledNames: enabledChildNames(settings),
           exact,
         } satisfies EmailRoutingDomainInspection;
       }),
-    enableApex: (identity) => enableApexRouting(context, identity),
-    enable: (identity) => enableRoutingDomain(context, identity),
-    disableExact: (identity) => disableExactRoutingDomain(context, identity),
+    enableApex: (identity) =>
+      call(context, "enable-routing-domain", identity, MutationSuccess, {
+        method: "POST",
+        path: "/dns",
+      }),
+    enable: (identity) =>
+      call(context, "enable-routing-domain", identity, MutationSuccess, {
+        method: "POST",
+        path: "/dns",
+        body: { name: identity.name },
+      }),
   };
 }
 

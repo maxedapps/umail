@@ -6,7 +6,6 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { HttpServerError } from "effect/unstable/http/HttpServerError";
@@ -18,25 +17,23 @@ import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import type { MailHtmlPolicy } from "@umail/mail-content";
 import {
+  Address,
   ApprovalPageGone,
   ApprovalPageNotFound,
   ApprovalToken,
   ApiProblem,
   CurrentPrincipal,
+  ForwardingDestination,
   PublicApprovalApi,
   UmailApi,
-  generateApprovalToken,
-  type ApprovalToken as ApprovalTokenValue,
   type CreateDestinationPayload,
   type ExternalMailAddress,
-  type ForwardingDestination,
   type MailDomain,
   type Principal,
 } from "@umail/api-contract";
 
-import type { ApiAccountStore } from "../account/worker.ts";
+import type { AccountStoreRpc } from "../account/worker.ts";
 import { decideApproval, reviewApproval } from "./approval-http.ts";
-import { approvalReviewUrl } from "./approvals.ts";
 import { attachmentResponseHeaders, rfc6266ContentDisposition } from "./attachments.ts";
 import type { AuthControlDatabase } from "../auth/auth-control.ts";
 import { gatedAuthHandler } from "../auth/deployment-gate.ts";
@@ -58,8 +55,9 @@ import {
   humanPageHttpApiResponse,
 } from "./human-pages/response.ts";
 import { serveMcpRequest } from "./mcp/route.ts";
-import type { NotificationKeyring } from "../mail/notifications.ts";
+import { approvalReviewUrl, type NotificationKey } from "../mail/notifications.ts";
 import {
+  currentIso,
   getJob,
   getMessage,
   getReplyPlan,
@@ -74,13 +72,13 @@ import {
   listThreads,
   readAttachment,
   readMessageSource,
-  sendMessage,
   setThreadReadState,
   softDeleteVisibleThread,
+  storeCall,
   submitMessage,
+  type StoreHttpError,
 } from "./operations.ts";
-import { projectAddress, projectDestination } from "./projection.ts";
-import { requireAdmin, requireDelete, requireRead } from "./principal.ts";
+import { requireAdmin, requireDelete } from "./principal.ts";
 
 export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportError>()(
   "ArchiveTransportError",
@@ -95,13 +93,8 @@ export type InstantClock = {
   readonly now: Effect.Effect<DateTime.Utc>;
 };
 
-export type NotificationDeps = {
-  readonly keyring: NotificationKeyring;
-  readonly nextToken: () => ApprovalTokenValue;
-};
-
 export type ApiDeps = {
-  readonly account: ApiAccountStore;
+  readonly account: AccountStoreRpc;
   readonly archive: MailArchiveReader;
   readonly destinations: DestinationsClient;
   readonly htmlPolicy: MailHtmlPolicy;
@@ -112,7 +105,7 @@ export type ApiDeps = {
   readonly operatorId: string;
   readonly approvalAdminEmail: ExternalMailAddress;
   readonly approvalClock: InstantClock;
-  readonly notification: NotificationDeps;
+  readonly notificationKey: NotificationKey;
 };
 
 const HttpPlatformStub = Layer.succeed(HttpPlatform.HttpPlatform, {
@@ -226,12 +219,6 @@ function serveOAuthManagement(deps: ApiDeps) {
   });
 }
 
-export function makeApiWebHandler(deps: ApiDeps) {
-  return Effect.gen(function* () {
-    return HttpEffect.toWebHandler(yield* makeApiHttpEffect(deps));
-  });
-}
-
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>
     handlers
@@ -241,43 +228,39 @@ function addressesGroup(deps: ApiDeps) {
           const now = yield* currentIso(deps);
           const address = yield* deps.account
             .createAddress(payload.localPart, deps.mailDomain, payload.displayName, now)
-            .pipe(Effect.mapError(toBadRequest));
+            .pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.BadRequest();
           }
-          return projectAddress(address);
+          return new Address(address);
         }),
       )
       .handle("listAddresses", () =>
         Effect.gen(function* () {
           yield* requireAdmin(yield* CurrentPrincipal);
-          const addresses = yield* deps.account.listAddresses().pipe(Effect.mapError(toBadRequest));
-          return addresses.map(projectAddress);
+          const addresses = yield* deps.account.listAddresses().pipe(storeCall);
+          return addresses.map((address) => new Address(address));
         }),
       )
       .handle("getAddress", ({ params }) =>
         Effect.gen(function* () {
           yield* requireAdmin(yield* CurrentPrincipal);
-          const address = yield* deps.account
-            .getAddress(params.id)
-            .pipe(Effect.mapError(toBadRequest));
+          const address = yield* deps.account.getAddress(params.id).pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.NotFound();
           }
-          return projectAddress(address);
+          return new Address(address);
         }),
       )
       .handle("patchAddress", ({ params, payload }) =>
         Effect.gen(function* () {
           yield* requireAdmin(yield* CurrentPrincipal);
           const now = yield* currentIso(deps);
-          const address = yield* deps.account
-            .patchAddress(params.id, payload, now)
-            .pipe(Effect.mapError(toBadRequest));
+          const address = yield* deps.account.patchAddress(params.id, payload, now).pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.NotFound();
           }
-          return projectAddress(address);
+          return new Address(address);
         }),
       )
       .handle("associateForwarding", ({ params, payload }) =>
@@ -286,11 +269,11 @@ function addressesGroup(deps: ApiDeps) {
           const now = yield* currentIso(deps);
           const address = yield* deps.account
             .setAddressForwarding(params.id, payload.destinationId, now)
-            .pipe(Effect.mapError(toBadRequest));
+            .pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.BadRequest();
           }
-          return projectAddress(address);
+          return new Address(address);
         }),
       )
       .handle("removeForwarding", ({ params }) =>
@@ -299,11 +282,11 @@ function addressesGroup(deps: ApiDeps) {
           const now = yield* currentIso(deps);
           const address = yield* deps.account
             .setAddressForwarding(params.id, null, now)
-            .pipe(Effect.mapError(toBadRequest));
+            .pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.NotFound();
           }
-          return projectAddress(address);
+          return new Address(address);
         }),
       ),
   );
@@ -356,10 +339,8 @@ function destinationsGroup(deps: ApiDeps) {
       .handle("listDestinations", () =>
         Effect.gen(function* () {
           yield* requireAdmin(yield* CurrentPrincipal);
-          const destinations = yield* deps.account
-            .listDestinations()
-            .pipe(Effect.mapError(toBadRequest));
-          return destinations.map(projectDestination);
+          const destinations = yield* deps.account.listDestinations().pipe(storeCall);
+          return destinations.map((destination) => new ForwardingDestination(destination));
         }),
       )
       .handle("getDestination", ({ params }) =>
@@ -429,12 +410,6 @@ function messagesGroup(deps: ApiDeps) {
           return yield* listMessages(deps, principal, query);
         }),
       )
-      .handle("sendMessage", ({ payload }) =>
-        Effect.gen(function* () {
-          const principal = yield* CurrentPrincipal;
-          return yield* sendMessage(deps, principal, payload);
-        }),
-      )
       .handle("getMessage", ({ params }) =>
         Effect.gen(function* () {
           const principal = yield* CurrentPrincipal;
@@ -444,7 +419,6 @@ function messagesGroup(deps: ApiDeps) {
       .handle("getReplyPlan", ({ params, query }) =>
         Effect.gen(function* () {
           const principal = yield* CurrentPrincipal;
-          yield* requireRead(principal);
           return yield* getReplyPlan(deps, principal, params.id, query.mode);
         }),
       )
@@ -499,8 +473,10 @@ function publicApprovalsGroup(deps: ApiDeps) {
       .handle("previewApprovalMessage", ({ params }) =>
         showApprovalMessagePreview(deps, params.token),
       )
-      .handle("approveApproval", ({ params }) => approveApproval(deps, params.token))
-      .handle("denyApproval", ({ params }) => denyApproval(deps, params.token)),
+      .handle("approveApproval", ({ params }) =>
+        decideApprovalRoute(deps, params.token, "approved"),
+      )
+      .handle("denyApproval", ({ params }) => decideApprovalRoute(deps, params.token, "denied")),
   );
 }
 
@@ -531,22 +507,9 @@ function showApprovalMessagePreview(deps: ApiDeps, rawToken: string) {
       return yield* approvalGoneError();
     }
     return approvalMessagePreviewHttpApiResponse(
-      renderApprovalMessagePreview({
-        storedHtml: {
-          body: outcome.message.htmlBody,
-          hasRemoteImages: outcome.message.hasRemoteImages,
-        },
-      }),
+      renderApprovalMessagePreview(outcome.message.htmlBody),
     );
   });
-}
-
-function approveApproval(deps: ApiDeps, rawToken: string) {
-  return decideApprovalRoute(deps, rawToken, "approved");
-}
-
-function denyApproval(deps: ApiDeps, rawToken: string) {
-  return decideApprovalRoute(deps, rawToken, "denied");
 }
 
 function decideApprovalRoute(deps: ApiDeps, rawToken: string, decision: "approved" | "denied") {
@@ -597,7 +560,7 @@ function approvalGoneError(): ApprovalPageGone {
 function createDestination(
   deps: ApiDeps,
   payload: CreateDestinationPayload,
-): Effect.Effect<ForwardingDestination, ApiProblem> {
+): Effect.Effect<ForwardingDestination, ApiProblem | StoreHttpError> {
   return Effect.gen(function* () {
     const now = yield* currentIso(deps);
     const created = yield* deps.destinations
@@ -605,45 +568,38 @@ function createDestination(
       .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
     const stored = yield* deps.account
       .insertDestination(created.cloudflareId, created.email, created.verifiedAt, now)
-      .pipe(
-        Effect.mapError(
-          () => new ApiProblem({ message: "Could not store the forwarding destination." }),
-        ),
-      );
-    return projectDestination(stored);
+      .pipe(storeCall);
+    return new ForwardingDestination(stored);
   });
 }
 
 function refreshDestination(
   deps: ApiDeps,
   id: string,
-): Effect.Effect<ForwardingDestination, HttpApiError.NotFound | HttpApiError.BadRequest> {
+): Effect.Effect<ForwardingDestination, StoreHttpError> {
   return Effect.gen(function* () {
-    const stored = yield* deps.account.getDestination(id).pipe(Effect.mapError(toBadRequest));
+    const stored = yield* deps.account.getDestination(id).pipe(storeCall);
     if (stored === null) {
       return yield* new HttpApiError.NotFound();
     }
     const remote = yield* deps.destinations.get(stored.cloudflareId).pipe(Effect.option);
     if (remote._tag === "None") {
-      return projectDestination(stored);
+      return new ForwardingDestination(stored);
     }
     const now = yield* currentIso(deps);
     const updated = yield* deps.account
       .updateDestinationStatus(id, remote.value.verifiedAt, now)
-      .pipe(Effect.mapError(toBadRequest));
+      .pipe(storeCall);
     if (updated === null) {
       return yield* new HttpApiError.NotFound();
     }
-    return projectDestination(updated);
+    return new ForwardingDestination(updated);
   });
 }
 
-function removeDestination(
-  deps: ApiDeps,
-  id: string,
-): Effect.Effect<void, HttpApiError.NotFound | HttpApiError.BadRequest> {
+function removeDestination(deps: ApiDeps, id: string): Effect.Effect<void, StoreHttpError> {
   return Effect.gen(function* () {
-    const stored = yield* deps.account.getDestination(id).pipe(Effect.mapError(toBadRequest));
+    const stored = yield* deps.account.getDestination(id).pipe(storeCall);
     if (stored === null) {
       return yield* new HttpApiError.NotFound();
     }
@@ -651,7 +607,7 @@ function removeDestination(
       .delete(stored.cloudflareId)
       .pipe(Effect.mapError(() => new HttpApiError.BadRequest()));
     const now = yield* currentIso(deps);
-    yield* deps.account.deleteDestination(id, now).pipe(Effect.mapError(toBadRequest));
+    yield* deps.account.deleteDestination(id, now).pipe(storeCall);
   });
 }
 
@@ -680,16 +636,4 @@ function serveMessageSource(deps: ApiDeps, principal: Principal, messageId: stri
       },
     }),
   );
-}
-
-function currentIso(deps: ApiDeps) {
-  return Effect.map(deps.approvalClock.now, DateTime.formatIso);
-}
-
-function toBadRequest(_error: { readonly _tag: string }): HttpApiError.BadRequest {
-  return new HttpApiError.BadRequest();
-}
-
-export function defaultApprovalTokenSource(): NotificationDeps["nextToken"] {
-  return generateApprovalToken;
 }

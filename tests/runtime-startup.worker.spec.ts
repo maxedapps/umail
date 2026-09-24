@@ -22,7 +22,8 @@ describe("generated application runtime", () => {
   });
 
   it("initializes the real AccountStore schema and seeds preview mailboxes once across eviction", async () => {
-    const stub = testEnv.AccountStore.getByName("operator-test");
+    // OPERATOR_ACCOUNT; importing account/worker.ts here would pull deployment code into workerd.
+    const stub = testEnv.AccountStore.getByName("operator");
     // Enter the real object after its constructor completes; the pool cannot proxy dynamic RPC methods.
     const addresses = () =>
       runInDurableObject(stub, (_instance, state) =>
@@ -40,10 +41,10 @@ describe("generated application runtime", () => {
         )
         .toArray(),
     }));
-    expect(before.migrations).toEqual([{ version: 9, name: "0009_account" }]);
+    expect(before.migrations).toEqual([{ version: 10, name: "0010_account" }]);
     expect(before.tables).toContainEqual({ name: "inbound_receipts" });
     expect(before.tables).toContainEqual({ name: "outbound_jobs" });
-    expect(before.tables).toContainEqual({ name: "approval_notifications" });
+    expect(before.tables).toContainEqual({ name: "approval_requests" });
     await evictDurableObject(stub);
     expect(await addresses()).toEqual([
       { address: "inbox@dev-mail.umail.example.com" },

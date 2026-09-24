@@ -5,12 +5,11 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.e2e.json && pnpm --filter @umail/server typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && pnpm -r typecheck",
     "lint": "oxlint --type-aware",
     "fmt": "oxfmt .",
     "test": "vitest run && pnpm test:worker && pnpm -r --if-present test:worker && pnpm -r --if-present test:browser",
     "test:worker": "vitest run --config vitest.worker.config.ts",
-    "test:e2e:local": "vitest run --config vitest.e2e.config.ts",
     "build:clients": "tsdown",
     "alchemy": "alchemy",
     "umail": "node apps/cli/src/bin.ts",

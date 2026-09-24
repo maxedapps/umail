@@ -74,6 +74,11 @@ describe("auth HTML pages", () => {
     expect(html).toContain('<dl class="consent-details">');
     expect(html).toContain('<bdi id="client-id" dir="auto"></bdi>');
     expect(html).toContain('<bdi id="scope" dir="auto"></bdi>');
+    expect(html).toContain("<dt>Redirects to</dt>");
+    expect(html).toContain('<bdi id="redirect-host" dir="auto"></bdi>');
+    expect(html).toContain('const params = new URLSearchParams(oauthQuery ?? "");');
+    expect(html).toContain('redirectHost(params.get("redirect_uri"))');
+    expect(html).not.toContain("new URLSearchParams(location.search)");
     expect(html).toContain('<button id="accept" type="button">Allow access</button>');
     expect(html).toContain('id="deny" type="button">Deny request</button>');
     expect(html).toContain('fetch("/api/auth/oauth2/consent"');

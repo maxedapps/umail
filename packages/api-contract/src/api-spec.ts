@@ -7,7 +7,7 @@ import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import { MailContact } from "./mail-contact.ts";
 import { MailboxAddress } from "./mailbox-address.ts";
-import { NormalizedRfcMessageId, ThreadHandle } from "./message-threading.ts";
+import { NormalizedRfcMessageId } from "./message-threading.ts";
 import { PrincipalAuthorization, PrincipalPolicy } from "./principal-authorization.ts";
 import { UtcInstant } from "./query-instant.ts";
 import {
@@ -63,7 +63,7 @@ export class ThreadParty extends Schema.Class<ThreadParty>("ThreadParty")({
 
 const mailMessageSummaryFields = {
   id: Schema.String,
-  threadId: ThreadHandle,
+  threadId: Schema.String,
   parentMessageId: Schema.NullOr(Schema.String),
   addressId: Schema.String,
   subject: Schema.NullOr(Schema.String),
@@ -153,7 +153,7 @@ export class MessageHeaders extends Schema.Class<MessageHeaders>("MessageHeaders
 }) {}
 
 export class MailThreadSummary extends Schema.Class<MailThreadSummary>("MailThreadSummary")({
-  threadId: ThreadHandle,
+  threadId: Schema.String,
   subject: Schema.NullOr(Schema.String),
   latestSender: ThreadParty,
   latestRecipients: Schema.Array(ThreadParty),
@@ -169,7 +169,7 @@ export class MailThreadPage extends Schema.Class<MailThreadPage>("MailThreadPage
 }) {}
 
 export class MailThreadDetail extends Schema.Class<MailThreadDetail>("MailThreadDetail")({
-  threadId: ThreadHandle,
+  threadId: Schema.String,
   messages: Schema.Array(MailMessageSummary),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
@@ -203,7 +203,7 @@ export class ListThreadMessagesQuery extends Schema.Class<ListThreadMessagesQuer
 export class MailThreadMessagePage extends Schema.Class<MailThreadMessagePage>(
   "MailThreadMessagePage",
 )({
-  threadHandle: ThreadHandle,
+  threadHandle: Schema.String,
   items: Schema.Array(MailMessageSummary),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
@@ -221,72 +221,55 @@ export class ReplyPlan extends Schema.Class<ReplyPlan>("ReplyPlan")({
   subject: Schema.NullOr(Schema.String),
 }) {}
 
-const sendMessageFields = {
+const messageFields = {
+  requestId: Schema.optionalKey(
+    SubmissionRequestId.annotate({
+      description:
+        "Optional UUID. Retrying with the same requestId and identical content returns the original job instead of sending twice.",
+    }),
+  ),
   fromAddressId: Schema.String,
   subject: Schema.String,
   text: Schema.optionalKey(Schema.String),
   html: Schema.optionalKey(Schema.String),
 };
 
-export class ComposeMessagePayload extends Schema.Class<ComposeMessagePayload>(
-  "ComposeMessagePayload",
-)({
-  intent: Schema.Literal("compose"),
-  ...sendMessageFields,
+export const composeFields = {
+  ...messageFields,
   to: Schema.NonEmptyArray(MailContact),
   cc: Schema.optionalKey(Schema.Array(MailContact)),
-}) {}
+};
 
-export class ReplyMessagePayload extends Schema.Class<ReplyMessagePayload>("ReplyMessagePayload")({
-  intent: Schema.Literal("reply"),
-  ...sendMessageFields,
-  replyToMessageId: Schema.String,
+export const replyFields = {
+  ...messageFields,
+  replyToMessageId: Schema.String.annotate({ description: "Id of the message being answered." }),
   replyMode: Schema.Literals(["reply", "reply-all"]),
-}) {}
+};
 
-const hasMessageBody = Schema.makeFilter((payload: ComposeMessagePayload | ReplyMessagePayload) => {
-  const hasText = payload.text !== undefined && payload.text.length > 0;
-  const hasHtml = payload.html !== undefined && payload.html.length > 0;
-  return hasText || hasHtml ? undefined : "A message body is required.";
-});
-
-export const SendMessagePayload = Schema.Union([
-  ComposeMessagePayload.check(hasMessageBody),
-  ReplyMessagePayload.check(hasMessageBody),
-]);
-export type SendMessagePayload = typeof SendMessagePayload.Type;
+export const hasMessageBody = Schema.makeFilter(
+  (payload: { readonly text?: string; readonly html?: string }) =>
+    (payload.text ?? "").length > 0 || (payload.html ?? "").length > 0
+      ? undefined
+      : "A message body is required.",
+);
 
 export class ComposeSubmissionPayload extends Schema.Class<ComposeSubmissionPayload>(
   "ComposeSubmissionPayload",
 )({
   intent: Schema.Literal("compose"),
-  requestId: SubmissionRequestId,
-  ...sendMessageFields,
-  to: Schema.NonEmptyArray(MailContact),
-  cc: Schema.optionalKey(Schema.Array(MailContact)),
+  ...composeFields,
 }) {}
 
 export class ReplySubmissionPayload extends Schema.Class<ReplySubmissionPayload>(
   "ReplySubmissionPayload",
 )({
   intent: Schema.Literal("reply"),
-  requestId: SubmissionRequestId,
-  ...sendMessageFields,
-  replyToMessageId: Schema.String,
-  replyMode: Schema.Literals(["reply", "reply-all"]),
+  ...replyFields,
 }) {}
 
-const hasSubmissionBody = Schema.makeFilter(
-  (payload: ComposeSubmissionPayload | ReplySubmissionPayload) => {
-    const hasText = payload.text !== undefined && payload.text.length > 0;
-    const hasHtml = payload.html !== undefined && payload.html.length > 0;
-    return hasText || hasHtml ? undefined : "A message body is required.";
-  },
-);
-
 export const SubmitMessagePayload = Schema.Union([
-  ComposeSubmissionPayload.check(hasSubmissionBody),
-  ReplySubmissionPayload.check(hasSubmissionBody),
+  ComposeSubmissionPayload.check(hasMessageBody),
+  ReplySubmissionPayload.check(hasMessageBody),
 ]);
 export type SubmitMessagePayload = typeof SubmitMessagePayload.Type;
 
@@ -294,7 +277,7 @@ export class OutboundJobStatus extends Schema.Class<OutboundJobStatus>("Outbound
   jobId: Schema.String,
   requestId: Schema.String.check(Schema.isMinLength(1)),
   messageId: Schema.String,
-  threadHandle: ThreadHandle,
+  threadHandle: Schema.String,
   state: OutboundJobState,
   purpose: OutboundJobPurpose,
   attemptId: Schema.NullOr(Schema.String),
@@ -369,7 +352,11 @@ export class OutboundMessageHasNoSource extends Schema.TaggedError<OutboundMessa
   { httpApiStatus: 409 },
 ) {}
 
-const businessErrors = [HttpApiError.NotFound, HttpApiError.BadRequest] as const;
+const businessErrors = [
+  HttpApiError.NotFound,
+  HttpApiError.BadRequest,
+  HttpApiError.Conflict,
+] as const;
 const scopedErrors = [...businessErrors, HttpApiError.Forbidden] as const;
 
 export class AddressesGroup extends HttpApiGroup.make("Addresses")
@@ -507,13 +494,6 @@ export class MessagesGroup extends HttpApiGroup.make("Messages")
     }),
   )
   .add(
-    HttpApiEndpoint.post("sendMessage", "/messages", {
-      payload: SendMessagePayload,
-      success: OutboundJobStatus,
-      error: [...scopedErrors, HttpApiError.Conflict, ApiProblem],
-    }),
-  )
-  .add(
     HttpApiEndpoint.get("getMessage", "/messages/:id", {
       params: IdParams,
       success: ThreadMessage,
@@ -556,7 +536,7 @@ export class SubmissionsGroup extends HttpApiGroup.make("Submissions").add(
   HttpApiEndpoint.post("submitMessage", "/submissions", {
     payload: SubmitMessagePayload,
     success: OutboundJobStatus,
-    error: [...scopedErrors, HttpApiError.Conflict, ApiProblem],
+    error: [...scopedErrors, ApiProblem],
   }),
 ) {}
 

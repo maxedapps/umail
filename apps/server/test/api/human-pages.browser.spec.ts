@@ -40,6 +40,7 @@ describe("human pages in Chromium", () => {
     expect(consent.clientId).not.toBeNull();
     expect(consent.clientId).not.toContain("<");
     expect(consent.scope).toContain("offline_access");
+    expect(consent.redirectHost).toBe("http://127.0.0.1");
     expect(consent.keyboardFocusId).toBe("deny");
     expect(consent.buttons).toEqual([
       { name: "Allow access", type: "button", formAction: "" },
@@ -88,6 +89,7 @@ describe("human pages in Chromium", () => {
   it("keeps the stored HTML preview inside an empty sandbox with its exact response policy", async () => {
     const pending = await observe("pending");
 
+    expect(pending.bodyText).toContain("This message contains remote images.");
     expect(pending.iframeSandbox).toBe("");
     expect(pending.previewContentSecurityPolicy).toBe(PREVIEW_CSP);
     expect(pending.previewFrameOptions).toBeNull();

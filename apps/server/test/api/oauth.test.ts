@@ -1,8 +1,20 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
+import { verifyOAuthBearerToken } from "../../src/auth/oauth-resource.ts";
+import {
+  UMAIL_OAUTH_SCOPE,
+  asUmailBetterAuth,
+  type UmailBetterAuth,
+} from "../../src/auth/options.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
-import { authorized, createWorld, listMcpPolicyRows, operatorCookieHeaders } from "./world.ts";
+import {
+  APPLICATION_ORIGIN,
+  authorized,
+  createWorld,
+  listMcpPolicyRows,
+  operatorCookieHeaders,
+} from "./world.ts";
 
 const DynamicClient = Schema.Struct({
   client_id: Schema.String,
@@ -136,6 +148,33 @@ describe("OAuth-only operator and client lifecycle", () => {
         })
       ).status,
     ).toBe(401);
+  });
+
+  it("reuses the fetched JWKS across per-request auth instances", async () => {
+    const world = await createWorld();
+    const first = countingJwks(world.auth);
+    const second = countingJwks(world.auth);
+    const requirements = {
+      issuer: `${APPLICATION_ORIGIN}/api/auth`,
+      audience: APPLICATION_ORIGIN,
+      scopes: [UMAIL_OAUTH_SCOPE],
+    };
+
+    const firstAccess = await verifyOAuthBearerToken(
+      first.auth,
+      world.operatorAccessToken,
+      requirements,
+    );
+    const secondAccess = await verifyOAuthBearerToken(
+      second.auth,
+      world.operatorAccessToken,
+      requirements,
+    );
+
+    expect(firstAccess.subject).toBe(world.operatorId);
+    expect(secondAccess.subject).toBe(world.operatorId);
+    expect(first.calls()).toBe(1);
+    expect(second.calls()).toBe(0);
   });
 
   it("registers Cursor's MCP profile and honors its private-use callback", async () => {
@@ -410,6 +449,22 @@ describe("OAuth-only operator and client lifecycle", () => {
     expect(otherClient.status, await otherClient.clone().text()).toBe(201);
   });
 });
+
+// Mirrors alchemy building a fresh auth instance per request, and counts its JWKS fetches.
+function countingJwks(auth: UmailBetterAuth) {
+  let calls = 0;
+  const counted = asUmailBetterAuth({
+    ...auth,
+    api: {
+      ...auth.api,
+      getJwks: () => {
+        calls += 1;
+        return auth.api.getJwks({});
+      },
+    },
+  });
+  return { auth: counted, calls: () => calls };
+}
 
 function authorizeWith(
   world: Awaited<ReturnType<typeof createWorld>>,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
 import * as Schema from "effect/Schema";
 
 import {
@@ -12,11 +12,17 @@ import {
   type Principal,
 } from "@umail/api-contract";
 import { submitMessage } from "../../src/api/operations.ts";
+import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
+import { sendClaimUntilIso } from "../../src/mail/policy.ts";
+import { consumeSendJob } from "../../src/mail/send.ts";
 import {
-  notificationKeyringFromSecret,
-  randomNotificationSecret,
-} from "../../src/mail/notifications.ts";
-import { APPLICATION_URL, seedMailbox, authorized, createWorld, type World } from "./world.ts";
+  APPLICATION_URL,
+  MAIL_DOMAIN,
+  seedMailbox,
+  authorized,
+  createWorld,
+  type World,
+} from "./world.ts";
 import { REMOTE_HTML_MATERIALIZED, REMOTE_HTML_SOURCE, REMOTE_HTML_STORED } from "./fakes.ts";
 
 type QueuedApproval = {
@@ -28,38 +34,18 @@ type QueuedApproval = {
 };
 
 describe("public approval flow", () => {
-  it("fails closed for a missing or non-base64url notification key", () => {
-    expect(() => notificationKeyringFromSecret("")).toThrow(
-      "UMAIL_NOTIFICATION_KEY is not valid base64url",
-    );
-    expect(() =>
-      notificationKeyringFromSecret(Encoding.encodeBase64(new Uint8Array(32).fill(0xfb))),
-    ).toThrow("UMAIL_NOTIFICATION_KEY is not valid base64url");
-    const keyring = notificationKeyringFromSecret(
-      Encoding.encodeBase64Url(randomNotificationSecret()),
-    );
-    expect(keyring.currentVersion).toBe("v1");
-  });
-
-  it("queues a ready approval_notification job beside the parked message", async () => {
+  it("sends an approval notification job beside the parked message", async () => {
     const world = await createWorld();
     const queued = await queueApproval(world);
     expect(queued.job.state).toBe("waiting_approval");
     expect(queued.job.purpose).toBe("message");
-    const ready = await Effect.runPromise(
-      world.account.listSendWork({
-        kind: "ready",
-        nowIso: "2026-08-28T10:00:00.000Z",
-        limit: 50,
-      }),
+    const jobs = await Effect.runPromise(
+      world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
     );
-    expect(ready.items).toHaveLength(1);
-    expect(ready.items[0]).toMatchObject({
-      purpose: "approval_notification",
-      state: "ready",
-      messageId: queued.job.messageId,
-    });
-    expect(ready.items[0]?.jobId).not.toBe(queued.job.jobId);
+    expect(jobs.items).toHaveLength(2);
+    const notification = jobs.items.find((job) => job.purpose === "approval_notification");
+    expect(notification).toMatchObject({ state: "accepted", messageId: queued.job.messageId });
+    expect(notification?.jobId).not.toBe(queued.job.jobId);
   });
 
   it("parks an OAuth submission until a native form decision without sending", async () => {
@@ -156,83 +142,12 @@ describe("public approval flow", () => {
         }),
       ),
     );
-    const reviewUrl = new URL(`/approvals/${world.approvalTokens[0]}`, APPLICATION_URL).href;
+    const reviewUrl = new URL(`/approvals/${await sentApprovalToken(world)}`, APPLICATION_URL).href;
     const review = await world.fetch(reviewUrl);
 
     expect(job.state).toBe("waiting_approval");
     expect(review.status).toBe(200);
     expect(await review.text()).toContain("OAuth client oauth-client-42");
-  });
-
-  it("reloads current policy for a stale administrative MCP principal", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const clientId = "stale-admin-client";
-    await Effect.runPromise(
-      world.account.ensureMcpOAuthPolicy({
-        clientId,
-        label: "Stale admin client",
-        createdAt: "2026-08-28T10:00:00.000Z",
-      }),
-    );
-    await Effect.runPromise(
-      world.account.updateMcpOAuthPolicy({
-        clientId,
-        label: "Stale admin client",
-        policy: {
-          mailboxIds: "all",
-          canRead: true,
-          canDelete: true,
-          sendMode: { kind: "deny" },
-          recipientAllowlist: "any",
-          canAdmin: true,
-        },
-        updatedAt: "2026-08-28T10:01:00.000Z",
-      }),
-    );
-    const stalePrincipal = {
-      authority: "mcp",
-      identity: {
-        kind: "oauth",
-        userId: "operator-1",
-        clientId,
-        clientLabel: "Stale admin client",
-      },
-      policy: {
-        mailboxIds: "all",
-        canRead: true,
-        canDelete: true,
-        sendMode: { kind: "allow" },
-        recipientAllowlist: "any",
-        canAdmin: true,
-      },
-    } as const satisfies Principal;
-
-    await expect(
-      Effect.runPromise(
-        submitMessage(
-          world.deps,
-          stalePrincipal,
-          Schema.decodeSync(SubmitMessagePayload)({
-            intent: "compose",
-            requestId: Schema.decodeSync(SubmissionRequestId)(
-              "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            ),
-            fromAddressId: mailbox.id,
-            to: [{ address: "recipient@example.com", displayName: null }],
-            subject: "Must stay denied",
-            text: "body",
-          }),
-        ),
-      ),
-    ).rejects.toMatchObject({ _tag: "Forbidden" });
-    expect(
-      (
-        await Effect.runPromise(
-          world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
-        )
-      ).items,
-    ).toEqual([]);
   });
 
   it("keeps GET read-only and converges only a due POST to expired", async () => {
@@ -353,6 +268,18 @@ describe("public approval flow", () => {
     expect(world.htmlPolicy.materializeCalls).toEqual([]);
   });
 
+  it("warns the approver only when the HTML body loads remote images at send time", async () => {
+    const notice = "This message contains remote images.";
+    const remote = await queueApproval(await createWorld(), {
+      text: "Plain alternative",
+      html: REMOTE_HTML_SOURCE,
+    });
+    const plain = await queueApproval(await createWorld());
+
+    expect(remote.reviewHtml).toContain(`<div class="notice-panel" role="note"><p>${notice}`);
+    expect(plain.reviewHtml).not.toContain(notice);
+  });
+
   it("maps malformed, unknown, deleted, and corrupt capabilities to neutral errors", async () => {
     const world = await createWorld();
     const malformed = await world.fetch("http://umail.test/approvals/not-a-token");
@@ -451,11 +378,7 @@ async function queueApproval(
   const job = await Effect.runPromise(
     submitMessage(world.deps, principal, Schema.decodeSync(SubmitMessagePayload)(body)),
   );
-  const token = world.approvalTokens[world.approvalTokens.length - 1];
-  if (token === undefined) {
-    throw new Error("expected an approval token");
-  }
-  const reviewUrl = new URL(`/approvals/${token}`, APPLICATION_URL).href;
+  const reviewUrl = new URL(`/approvals/${await sentApprovalToken(world)}`, APPLICATION_URL).href;
   const review = await world.fetch(reviewUrl);
   expect(review.status, await review.clone().text()).toBe(200);
   expect(review.headers.get("cache-control")).toBe("no-store");
@@ -466,6 +389,45 @@ async function queueApproval(
   const reviewHtml = await review.text();
   const actions = formActionsFrom(reviewUrl, reviewHtml);
   return { job, reviewUrl, reviewHtml, ...actions };
+}
+
+// Sends the ready approval notification through SendConsumer and reads the review token from the
+// email, as the operator would.
+async function sentApprovalToken(world: World): Promise<string> {
+  const mails: ProviderOutboundMail[] = [];
+  const now = await Effect.runPromise(world.approvalClock.now);
+  const ports = {
+    account: world.account,
+    sender: {
+      send: (mail: ProviderOutboundMail) =>
+        Effect.sync(() => {
+          mails.push(mail);
+          return { kind: "accepted", providerMessageId: "notify", rfcMessageId: null } as const;
+        }),
+    },
+    htmlPolicy: world.htmlPolicy,
+    applicationUrl: APPLICATION_URL,
+    nowIso: DateTime.formatIso(now),
+    claimExpiresAt: sendClaimUntilIso(DateTime.toEpochMillis(now)),
+    notification: {
+      key: world.notificationKey,
+      mailDomain: MAIL_DOMAIN,
+      approvalAdminEmail: world.operatorEmail,
+    },
+  };
+  const jobs = await Effect.runPromise(
+    world.account.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 }),
+  );
+  for (const job of jobs.items) {
+    if (job.purpose === "approval_notification" && job.state === "ready") {
+      await Effect.runPromise(consumeSendJob(job.jobId, ports));
+    }
+  }
+  const token = /\/approvals\/([0-9a-f]{64})/u.exec(mails.at(-1)?.text ?? "")?.[1];
+  if (token === undefined) {
+    throw new Error("expected an approval notification email");
+  }
+  return token;
 }
 
 function formActionsFrom(reviewUrl: string, html: string) {

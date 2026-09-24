@@ -20,11 +20,9 @@ const COMMON_IDS = [
   "IndexConsumer/MailIndexConsumer",
   "MailArchive",
   "MailIndex",
-  "MailIndexDlq",
   "MailRouting",
   "MailRoutingDomain",
   "MailSend",
-  "MailSendDlq",
   "Recovery",
   "SendConsumer",
   "SendConsumer/MailSendConsumer",
@@ -106,8 +104,6 @@ describe("application resource graph", () => {
     const apiEnv = await resolveGraphValue(api.Props.env);
     expect(apiEnv).toMatchObject({
       AUTH_OPERATOR_ID: "operator-test",
-      AUTH_SCHEMA_REVISION: "test-schema",
-      AUTH_PROVISION_GENERATION: 1,
       UMAIL_MAIL_DOMAIN: "umail.example.com",
       UMAIL_PREVIEW_MAILBOXES: "",
     });
@@ -119,10 +115,9 @@ describe("application resource graph", () => {
     expect(stack.resources.MailArchive?.RemovalPolicy).toBe("retain");
     expect(stack.resources.MailRouting?.RemovalPolicy).toBe("retain");
     expect(stack.resources.MailRoutingDomain?.Adopt).toBe(true);
+    expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
     for (const id of ["Inbound", "IndexConsumer", "SendConsumer"]) {
-      expect(await resolveGraphValue(requireWorker(stack, id).Props.env)).toMatchObject({
-        AUTH_OPERATOR_ID: "operator-test",
-      });
+      expect(requireWorker(stack, id).Props.env).not.toHaveProperty("AUTH_OPERATOR_ID");
     }
     expect(await resolveGraphValue(stack.resources.MailCatchAll?.Props)).toMatchObject({
       zone: "test-zone",
@@ -130,24 +125,27 @@ describe("application resource graph", () => {
     });
   });
 
-  it("wires real queue consumers, failure queues, and the shared AccountStore host", async () => {
+  it("wires real queue consumers, the Recovery cron, and the shared AccountStore host", async () => {
     const stack = await evaluateApplication("dev");
-    expect(
-      await resolveGraphValue(stack.resources["IndexConsumer/MailIndexConsumer"]?.Props),
-    ).toMatchObject({
+    const indexConsumer = await resolveGraphValue(
+      stack.resources["IndexConsumer/MailIndexConsumer"]?.Props,
+    );
+    expect(indexConsumer).toMatchObject({
       queueId: "index-id",
       scriptName: "index-test",
-      deadLetterQueue: "index-dlq",
-      settings: { batchSize: 1, maxConcurrency: 1, maxRetries: 4 },
+      settings: { batchSize: 1, maxConcurrency: 1 },
     });
-    expect(
-      await resolveGraphValue(stack.resources["SendConsumer/MailSendConsumer"]?.Props),
-    ).toMatchObject({
+    expect(indexConsumer?.deadLetterQueue).toBeUndefined();
+    expect(indexConsumer?.settings?.maxRetries).toBeUndefined();
+    const sendConsumer = await resolveGraphValue(
+      stack.resources["SendConsumer/MailSendConsumer"]?.Props,
+    );
+    expect(sendConsumer).toMatchObject({
       queueId: "send-id",
       scriptName: "send-test",
-      deadLetterQueue: "send-dlq",
       settings: { maxRetries: 4 },
     });
+    expect(sendConsumer?.deadLetterQueue).toBeUndefined();
     for (const id of ["Inbound", "IndexConsumer", "SendConsumer", "Recovery"]) {
       const bindings = await resolveGraphValue(stack.bindings[id]);
       expect(bindings?.flatMap((group) => group.data.bindings)).toContainEqual(
@@ -158,10 +156,9 @@ describe("application resource graph", () => {
         }),
       );
     }
-    const recovery = requireWorker(stack, "Recovery");
-    expect(recovery.Props.isExternal).toBe(true);
-    expect(recovery.Props.crons).toEqual(["* * * * *"]);
-    expect(await resolveGraphValue(recovery.Props.env?.ACCOUNT_ID)).toBe("operator-test");
+    const recoveryBindings = await resolveGraphValue(stack.bindings.Recovery);
+    expect(recoveryBindings?.flatMap((group) => group.data.crons ?? [])).toEqual(["* * * * *"]);
+    expect(requireWorker(stack, "Recovery").Props.env).not.toHaveProperty("ACCOUNT_ID");
     const indexBindings = await resolveGraphValue(stack.bindings.IndexConsumer);
     expect(
       indexBindings
@@ -186,6 +183,7 @@ describe("application resource graph", () => {
         ...(stage === "dev" ? ["MailSending"] : []),
       ].sort(),
     );
+    expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
     for (const part of ["probe", "inbox"]) {
       expect(await resolveGraphValue(stack.resources[`Mail_${part}`]?.Props)).toMatchObject({
         zone: "test-zone",

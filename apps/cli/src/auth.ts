@@ -24,26 +24,6 @@ import {
   registeredCredentialState,
 } from "./credential-store.ts";
 
-export {
-  credentialLockPath,
-  credentialPath,
-  credentialRefreshLockPath,
-  makeCredentialStore,
-  OAuthAuthorizedState,
-  OAuthCredentialLockError,
-  OAuthCredentialState,
-  OAuthCredentialStore,
-  OAuthCredentialStoreError,
-  OAuthCredentialSupersededError,
-  OAuthRegisteredState,
-  registeredCredentialState,
-} from "./credential-store.ts";
-export type {
-  CredentialCommitResult,
-  OAuthCredentialStoreService,
-  OAuthLogoutRevocation,
-} from "./credential-store.ts";
-
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
 const REFRESH_GRANT = "refresh_token" as const;
 const UMAIL_SCOPE = "umail:access" as const;
@@ -99,10 +79,6 @@ const OAuthError = Schema.Literals([
 const OAuthErrorResponse = Schema.Struct({ error: OAuthError });
 
 type OAuthError = typeof OAuthError.Type;
-
-export class LoginCompleted extends Data.TaggedClass("LoginCompleted")<{
-  readonly status: "authenticated";
-}> {}
 
 export class OAuthLoginRequiredError extends Data.TaggedError("OAuthLoginRequiredError") {
   override readonly message = "OAuth login required. Run: umail login";
@@ -231,7 +207,6 @@ function loginWithRegistration(
     } as const satisfies OAuthAuthorizedState;
     const outcome = yield* store.commit(registration.generation, authorized);
     if (outcome === "superseded") return yield* new OAuthCredentialSupersededError();
-    return new LoginCompleted({ status: "authenticated" });
   });
 }
 
@@ -302,7 +277,15 @@ export function accessToken(env: UmailClientEnvironment) {
             }),
           ),
           OAuthTokenResponse,
-        ).pipe(Effect.catchTag("OAuthEndpointError", () => new OAuthProtocolError()));
+        ).pipe(
+          Effect.catchTag("OAuthEndpointError", (error) =>
+            Effect.fail(
+              error.error === "invalid_grant" || error.error === "invalid_client"
+                ? new OAuthLoginRequiredError()
+                : new OAuthProtocolError(),
+            ),
+          ),
+        );
         if (
           refreshed.token_type.toLowerCase() !== "bearer" ||
           refreshed.expires_in <= 0 ||

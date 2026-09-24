@@ -9,7 +9,6 @@ import {
   MailboxLocalPart,
   MailDomain,
   parseMailboxAddress,
-  parseMailboxAddressForRegistration,
 } from "../src/mailbox-address.ts";
 
 describe("mailbox address contract", () => {
@@ -59,7 +58,6 @@ describe("mailbox address contract", () => {
   ])("allows inbound %s but rejects it for registration", (localPart) => {
     const address = `${localPart}@example.com`;
     expect(parseMailboxAddress(address)).toMatchObject({ kind: "ok", address });
-    expect(parseMailboxAddressForRegistration(address)).toEqual({ kind: "reserved" });
     expect(constructMailboxAddress(localPart, "example.com")).toEqual({ kind: "reserved" });
   });
 
@@ -79,7 +77,6 @@ describe("mailbox address contract", () => {
 
   it("rejects Unicode local parts that case-fold into the ASCII alphabet", () => {
     expect(parseMailboxAddress("K@example.com")).toEqual({ kind: "invalid" });
-    expect(parseMailboxAddressForRegistration("K@example.com")).toEqual({ kind: "invalid" });
     expect(constructMailboxAddress(" K ", "example.com")).toEqual({ kind: "invalid" });
   });
 

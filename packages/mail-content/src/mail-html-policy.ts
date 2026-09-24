@@ -1,12 +1,9 @@
-import type { CssNode, Declaration, DeclarationList, Value } from "css-tree";
+import type { CssNode, Declaration, Value } from "css-tree";
 import generate from "css-tree/generator";
 import parse from "css-tree/parser";
 import type { Element, ElementContent, Properties, Root, RootContent } from "hast";
 import { fromParse5 } from "hast-util-from-parse5";
 import { toHtml } from "hast-util-to-html";
-import rehypeSanitize from "rehype-sanitize";
-import type { Options as MailHtmlSanitizeSchema } from "rehype-sanitize";
-import { unified } from "unified";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -51,31 +48,36 @@ export interface MailHtmlPolicy {
   ): Effect.Effect<string, MailHtmlPolicyError>;
 }
 
-const MAIL_HTML_POLICY_VERSION = 1 as const;
-type MailHtmlPolicyVersion = typeof MAIL_HTML_POLICY_VERSION;
 const MAX_INLINE_STYLE_BYTES = 8 * 1024;
 const REMOTE_SOURCE_PROPERTY = "dataUmailRemoteSrc";
 const LINK_REL_TOKENS = ["noopener", "noreferrer", "nofollow"] as const;
-const LINK_REL = "noopener noreferrer nofollow";
 
-type MailHtmlSanitizeMode = "storage" | "activated";
+// `store` sanitizes untrusted input; `activate` re-sanitizes stored HTML and turns its inert
+// remote-image metadata into live cross-origin sources.
+type MailHtmlCleanContext =
+  | {
+      readonly mode: "store";
+      readonly messageId: string;
+      readonly cidResolutions: ReadonlyMap<string, CidResolution>;
+      hasRemoteImages: boolean;
+    }
+  | { readonly mode: "activate"; readonly applicationOrigin: string };
 
-type MailHtmlNormalizeContext = {
-  readonly messageId: string;
-  readonly cidResolutions: ReadonlyMap<string, CidResolution>;
-  hasRemoteImages: boolean;
-};
-
+// Kept, with only the attributes allowed below.
 const ALLOWED_ELEMENTS = new Set([
   "a",
   "abbr",
   "address",
+  "article",
+  "aside",
   "b",
   "bdi",
   "bdo",
+  "big",
   "blockquote",
   "br",
   "caption",
+  "center",
   "cite",
   "code",
   "col",
@@ -89,19 +91,24 @@ const ALLOWED_ELEMENTS = new Set([
   "em",
   "figcaption",
   "figure",
+  "footer",
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
+  "header",
   "hr",
   "i",
   "img",
   "ins",
   "kbd",
   "li",
+  "main",
   "mark",
+  "nav",
+  "nobr",
   "ol",
   "p",
   "pre",
@@ -111,8 +118,10 @@ const ALLOWED_ELEMENTS = new Set([
   "ruby",
   "s",
   "samp",
+  "section",
   "small",
   "span",
+  "strike",
   "strong",
   "sub",
   "sup",
@@ -124,46 +133,31 @@ const ALLOWED_ELEMENTS = new Set([
   "thead",
   "time",
   "tr",
+  "tt",
   "u",
   "ul",
   "var",
   "wbr",
 ]);
 
-const UNWRAPPED_ELEMENTS = new Set(["html", "body"]);
-
-const REMOVED_SUBTREES = new Set([
-  "applet",
-  "audio",
-  "base",
-  "button",
-  "canvas",
-  "embed",
-  "form",
-  "frame",
-  "frameset",
-  "head",
+// Removed with their content: raw-text and RCDATA elements (their text would surface as literal
+// code), foreign SVG/MathML content, and inert template content. Every other element is
+// unwrapped, so its content survives (for example `font`, `form`, or Outlook's `o:p`).
+const DROPPED_ELEMENTS = new Set([
   "iframe",
-  "input",
-  "label",
-  "link",
   "math",
-  "meta",
+  "noembed",
+  "noframes",
   "noscript",
-  "object",
-  "optgroup",
-  "option",
-  "picture",
-  "portal",
+  "plaintext",
   "script",
   "select",
-  "source",
   "style",
   "svg",
   "template",
   "textarea",
-  "track",
-  "video",
+  "title",
+  "xmp",
 ]);
 
 const GLOBAL_PROPERTIES = new Set(["ariaHidden", "ariaLabel", "dir", "lang", "role", "title"]);
@@ -228,6 +222,18 @@ const BORDER_PROPERTIES = new Set([
   "border-bottom",
   "border-left",
 ]);
+const BORDER_STYLES = new Set([
+  "none",
+  "hidden",
+  "dotted",
+  "dashed",
+  "solid",
+  "double",
+  "groove",
+  "ridge",
+  "inset",
+  "outset",
+]);
 const IDENTIFIER_PROPERTIES = new Map<string, ReadonlySet<string>>([
   [
     "display",
@@ -247,81 +253,11 @@ const IDENTIFIER_PROPERTIES = new Map<string, ReadonlySet<string>>([
       "table-caption",
     ]),
   ],
-  [
-    "border-style",
-    new Set([
-      "none",
-      "hidden",
-      "dotted",
-      "dashed",
-      "solid",
-      "double",
-      "groove",
-      "ridge",
-      "inset",
-      "outset",
-    ]),
-  ],
-  [
-    "border-top-style",
-    new Set([
-      "none",
-      "hidden",
-      "dotted",
-      "dashed",
-      "solid",
-      "double",
-      "groove",
-      "ridge",
-      "inset",
-      "outset",
-    ]),
-  ],
-  [
-    "border-right-style",
-    new Set([
-      "none",
-      "hidden",
-      "dotted",
-      "dashed",
-      "solid",
-      "double",
-      "groove",
-      "ridge",
-      "inset",
-      "outset",
-    ]),
-  ],
-  [
-    "border-bottom-style",
-    new Set([
-      "none",
-      "hidden",
-      "dotted",
-      "dashed",
-      "solid",
-      "double",
-      "groove",
-      "ridge",
-      "inset",
-      "outset",
-    ]),
-  ],
-  [
-    "border-left-style",
-    new Set([
-      "none",
-      "hidden",
-      "dotted",
-      "dashed",
-      "solid",
-      "double",
-      "groove",
-      "ridge",
-      "inset",
-      "outset",
-    ]),
-  ],
+  ["border-style", BORDER_STYLES],
+  ["border-top-style", BORDER_STYLES],
+  ["border-right-style", BORDER_STYLES],
+  ["border-bottom-style", BORDER_STYLES],
+  ["border-left-style", BORDER_STYLES],
   ["border-collapse", new Set(["collapse", "separate"])],
   ["table-layout", new Set(["auto", "fixed"])],
   ["font-style", new Set(["normal", "italic", "oblique"])],
@@ -355,22 +291,7 @@ const COLOR_NAMES = new Set([
   "white",
   "yellow",
 ]);
-const BORDER_IDENTIFIERS = new Set([
-  "none",
-  "hidden",
-  "dotted",
-  "dashed",
-  "solid",
-  "double",
-  "groove",
-  "ridge",
-  "inset",
-  "outset",
-  "thin",
-  "medium",
-  "thick",
-  ...COLOR_NAMES,
-]);
+const BORDER_IDENTIFIERS = new Set([...BORDER_STYLES, "thin", "medium", "thick", ...COLOR_NAMES]);
 const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "unset", "revert"]);
 const LENGTH_UNITS = new Set(["px", "em", "rem", "pt", "pc", "in", "cm", "mm", "q", "ch", "ex"]);
 const FONT_WEIGHTS = new Set(["normal", "bold", "bolder", "lighter"]);
@@ -398,9 +319,15 @@ export function createMailHtmlPolicy(): MailHtmlPolicy {
         catch: mailHtmlPolicyErrorFromCause,
       });
     },
-    materializeRemoteImages(materialization) {
+    materializeRemoteImages({ body, applicationUrl }) {
       return Effect.try({
-        try: () => materializeStoredMailHtml(materialization),
+        try: () =>
+          toHtml(
+            cleanMailHtml(parseMailHtmlFragment(body), {
+              mode: "activate",
+              applicationOrigin: applicationUrl.origin,
+            }),
+          ),
         catch: mailHtmlPolicyErrorFromCause,
       });
     },
@@ -408,54 +335,16 @@ export function createMailHtmlPolicy(): MailHtmlPolicy {
 }
 
 function sanitizeHtmlForStorage(html: string, sanitization: MailHtmlSanitization): StoredMailHtml {
-  const stored = canonicalizeMailHtmlForStorage(html, sanitization);
-  parseStoredMailHtml(stored.body);
-  return stored;
-}
-
-function canonicalizeMailHtmlForStorage(
-  html: string,
-  sanitization: MailHtmlSanitization,
-): StoredMailHtml {
-  const tree = parseMailHtmlFragment(html);
-  const stripTagNames = collectStripTagNames(tree);
-  const context: MailHtmlNormalizeContext = {
+  const context: MailHtmlCleanContext = {
+    mode: "store",
     messageId: sanitization.messageId,
     cidResolutions: cidMap(sanitization.attachments),
     hasRemoteImages: false,
   };
-  const normalized = {
-    type: "root",
-    children: normalizeChildren(tree.children, context),
-  } satisfies Root;
-  const sanitized = sanitizeMailHtmlTree(normalized, stripTagNames, "storage");
-  return {
-    body: serializeMailHtml(sanitized),
-    hasRemoteImages: context.hasRemoteImages,
-  };
-}
-
-const STORED_MAIL_HTML_VALIDATORS = {
-  1: isValidStoredMailHtmlForPolicy1,
-} as const satisfies Record<MailHtmlPolicyVersion, (root: Root) => boolean>;
-
-const MAIL_HTML_INLINE_STYLE_VALIDATORS = {
-  1: isPolicyEquivalentInlineStyleForPolicy1,
-} as const satisfies Record<MailHtmlPolicyVersion, (style: string) => boolean>;
-
-function materializeStoredMailHtml(materialization: MailHtmlMaterialization): string {
-  const tree = parseStoredMailHtml(materialization.body);
-  activateRemoteImages(tree, materialization.applicationUrl.origin);
-  const sanitized = sanitizeMailHtmlTree(tree, collectStripTagNames(tree), "activated");
-  return serializeMailHtml(sanitized);
-}
-
-function parseStoredMailHtml(body: string): Root {
-  const tree = parseMailHtmlFragment(body);
-  if (!STORED_MAIL_HTML_VALIDATORS[MAIL_HTML_POLICY_VERSION](tree)) {
-    throw new Error(`invalid stored mail HTML for policy ${String(MAIL_HTML_POLICY_VERSION)}`);
-  }
-  return tree;
+  const body = toHtml(cleanMailHtml(parseMailHtmlFragment(html), context));
+  // Stored HTML is parsed again when it is materialized, so it must fit the same parse budgets.
+  parseBoundedMailHtmlFragment(body);
+  return { body, hasRemoteImages: context.hasRemoteImages };
 }
 
 function parseMailHtmlFragment(html: string): Root {
@@ -472,96 +361,31 @@ function mailHtmlPolicyErrorFromCause(cause: unknown): MailHtmlPolicyError {
   });
 }
 
-function serializeMailHtml(tree: Root): string {
-  return toHtml(tree);
+function cleanMailHtml(tree: Root, context: MailHtmlCleanContext): Root {
+  return { type: "root", children: cleanChildren(tree.children, context) };
 }
 
-function sanitizeMailHtmlTree(
-  tree: Root,
-  stripTagNames: ReadonlySet<string>,
-  mode: MailHtmlSanitizeMode,
-): Root {
-  return unified().use(rehypeSanitize, mailHtmlSanitizeSchema(stripTagNames, mode)).runSync(tree);
-}
-
-function mailHtmlSanitizeSchema(
-  stripTagNames: ReadonlySet<string>,
-  mode: MailHtmlSanitizeMode,
-): MailHtmlSanitizeSchema {
-  const img =
-    mode === "activated"
-      ? ["alt", "height", "width", "src", REMOTE_SOURCE_PROPERTY, "referrerPolicy"]
-      : ["alt", "height", "width", "src", REMOTE_SOURCE_PROPERTY];
-  return {
-    allowComments: false,
-    allowDoctypes: false,
-    ancestors: {},
-    attributes: {
-      "*": ["ariaHidden", "ariaLabel", "dir", "lang", "role", "title", "style"],
-      a: ["href", "target", "rel", "referrerPolicy"],
-      img,
-      li: ["value"],
-      ol: ["reversed", "start", "type"],
-      td: ["colSpan", "headers", "rowSpan"],
-      th: ["colSpan", "headers", "rowSpan", "scope"],
-      time: ["dateTime"],
-    },
-    clobber: [],
-    clobberPrefix: "",
-    protocols: {
-      href: ["https"],
-      src: ["https"],
-      [REMOTE_SOURCE_PROPERTY]: ["https"],
-    },
-    required: {},
-    strip: [...stripTagNames],
-    tagNames: [...ALLOWED_ELEMENTS],
-  };
-}
-
-function collectStripTagNames(root: Root): Set<string> {
-  const strip = new Set(REMOVED_SUBTREES);
-  visit(root.children);
-  return strip;
-
-  function visit(nodes: ReadonlyArray<RootContent>): void {
-    for (const node of nodes) {
-      if (node.type !== "element") continue;
-      if (!ALLOWED_ELEMENTS.has(node.tagName) && !UNWRAPPED_ELEMENTS.has(node.tagName)) {
-        strip.add(node.tagName);
-      }
-      visit(node.children);
-      if (node.content !== undefined) visit(node.content.children);
-    }
-  }
-}
-
-function normalizeChildren(
+function cleanChildren(
   children: ReadonlyArray<RootContent>,
-  context: MailHtmlNormalizeContext,
+  context: MailHtmlCleanContext,
 ): ElementContent[] {
   const result: ElementContent[] = [];
   for (const child of children) {
     if (child.type === "text") {
-      result.push(child);
+      result.push({ type: "text", value: child.value });
+    } else if (child.type !== "element" || DROPPED_ELEMENTS.has(child.tagName)) {
       continue;
+    } else if (ALLOWED_ELEMENTS.has(child.tagName)) {
+      result.push(cleanElement(child, context));
+    } else {
+      for (const unwrapped of cleanChildren(child.children, context)) result.push(unwrapped);
     }
-    if (child.type !== "element") continue;
-    if (UNWRAPPED_ELEMENTS.has(child.tagName)) {
-      for (const unwrapped of normalizeChildren(child.children, context)) result.push(unwrapped);
-      continue;
-    }
-    if (!ALLOWED_ELEMENTS.has(child.tagName)) continue;
-    result.push(normalizeAllowedElement(child, context));
   }
   return result;
 }
 
-function normalizeAllowedElement(element: Element, context: MailHtmlNormalizeContext): Element {
+function cleanElement(element: Element, context: MailHtmlCleanContext): Element {
   const tagName = element.tagName;
-  const source = tagName === "img" ? propertyText(element.properties.src) : null;
-  const href = tagName === "a" ? propertyText(element.properties.href) : null;
-  const style = propertyText(element.properties.style);
   const properties: Properties = {};
   const elementProperties = ELEMENT_PROPERTIES.get(tagName);
   for (const name of Object.keys(element.properties)) {
@@ -569,22 +393,20 @@ function normalizeAllowedElement(element: Element, context: MailHtmlNormalizeCon
     const copied = copyAllowedProperty(name, element.properties[name]);
     if (copied !== undefined) properties[name] = copied;
   }
-  if (style !== null) {
-    const sanitizedStyle = sanitizeInlineStyle(style);
-    if (sanitizedStyle !== null) properties.style = sanitizedStyle;
-  }
-  if (href !== null) rewriteAnchor(properties, href);
-  if (source !== null) rewriteImageSource(properties, source, context);
+  const style = sanitizeInlineStyle(propertyText(element.properties.style));
+  if (style !== null) properties.style = style;
+  if (tagName === "a") cleanAnchor(properties, propertyText(element.properties.href));
+  if (tagName === "img") cleanImage(properties, element.properties, context);
   return {
     type: "element",
     tagName,
     properties,
-    children: normalizeChildren(element.children, context),
+    children: cleanChildren(element.children, context),
   };
 }
 
-function rewriteAnchor(properties: Properties, source: string): void {
-  const url = canonicalHttpsUrl(source);
+function cleanAnchor(properties: Properties, href: string | null): void {
+  const url = canonicalHttpsUrl(href);
   if (url === null) return;
   properties.href = url.href;
   properties.target = "_blank";
@@ -592,116 +414,32 @@ function rewriteAnchor(properties: Properties, source: string): void {
   properties.referrerPolicy = "no-referrer";
 }
 
-function rewriteImageSource(
+function cleanImage(
   properties: Properties,
-  source: string,
-  context: MailHtmlNormalizeContext,
+  source: Properties,
+  context: MailHtmlCleanContext,
 ): void {
-  const trimmed = source.trim();
-  if (trimmed.toLowerCase().startsWith("cid:")) {
-    const resolution = context.cidResolutions.get(normalizeCid(trimmed.slice(4)));
+  if (context.mode === "activate") {
+    const remote = canonicalHttpsUrl(propertyText(source[REMOTE_SOURCE_PROPERTY]));
+    if (remote === null) return;
+    properties[REMOTE_SOURCE_PROPERTY] = remote.href;
+    if (remote.origin === context.applicationOrigin) return;
+    properties.src = remote.href;
+    properties.referrerPolicy = "no-referrer";
+    return;
+  }
+  const src = propertyText(source.src)?.trim();
+  if (src === undefined) return;
+  if (src.toLowerCase().startsWith("cid:")) {
+    const resolution = context.cidResolutions.get(normalizeCid(src.slice(4)));
     if (resolution?.kind !== "valid") return;
     properties.src = `/messages/${encodeURIComponent(context.messageId)}/attachments/${encodeURIComponent(resolution.attachmentId)}`;
     return;
   }
-  const url = canonicalHttpsUrl(trimmed);
-  if (url === null) return;
-  properties[REMOTE_SOURCE_PROPERTY] = url.href;
+  const remote = canonicalHttpsUrl(src);
+  if (remote === null) return;
+  properties[REMOTE_SOURCE_PROPERTY] = remote.href;
   context.hasRemoteImages = true;
-}
-
-function activateRemoteImages(root: Root, applicationOrigin: string): void {
-  visitElements(root.children, (element) => {
-    if (element.tagName !== "img") return;
-    const remote = propertyText(element.properties[REMOTE_SOURCE_PROPERTY]);
-    if (remote === null) return;
-    const url = canonicalHttpsUrl(remote);
-    if (url === null || url.href !== remote || url.origin === applicationOrigin) return;
-    element.properties.src = url.href;
-    element.properties.referrerPolicy = "no-referrer";
-  });
-}
-
-function visitElements(nodes: ReadonlyArray<RootContent>, visit: (element: Element) => void): void {
-  for (const node of nodes) {
-    if (node.type !== "element") continue;
-    visit(node);
-    visitElements(node.children, visit);
-  }
-}
-
-function isValidStoredMailHtmlForPolicy1(root: Root): boolean {
-  return root.children.every(isValidStoredChild);
-}
-
-function isValidStoredChild(node: RootContent): boolean {
-  if (node.type === "text") return true;
-  if (node.type !== "element") return false;
-  return isValidStoredElement(node);
-}
-
-function isValidStoredElement(element: Element): boolean {
-  if (!ALLOWED_ELEMENTS.has(element.tagName)) return false;
-  const elementProperties = ELEMENT_PROPERTIES.get(element.tagName);
-  for (const name of Object.keys(element.properties)) {
-    if (name === "style" || GLOBAL_PROPERTIES.has(name) || elementProperties?.has(name) === true) {
-      continue;
-    }
-    if (isStorageSpecialProperty(element.tagName, name)) continue;
-    const value = element.properties[name];
-    if (value === null || value === undefined || value === false) continue;
-    return false;
-  }
-  const style = propertyText(element.properties.style);
-  if (style !== null && !isValidStoredInlineStyle(style)) return false;
-  if (element.tagName === "a" && !isValidStoredAnchor(element)) return false;
-  if (element.tagName === "img" && !isValidStoredImage(element)) return false;
-  return element.children.every(isValidStoredChild);
-}
-
-function isStorageSpecialProperty(tagName: string, name: string): boolean {
-  if (tagName === "a") {
-    return name === "href" || name === "target" || name === "rel" || name === "referrerPolicy";
-  }
-  if (tagName === "img") {
-    return name === "src" || name === REMOTE_SOURCE_PROPERTY;
-  }
-  return false;
-}
-
-function isValidStoredAnchor(element: Element): boolean {
-  const href = propertyText(element.properties.href);
-  const target = propertyText(element.properties.target);
-  const rel = propertyText(element.properties.rel);
-  const referrerPolicy = propertyText(element.properties.referrerPolicy);
-  if (href === null) {
-    return target === null && rel === null && referrerPolicy === null;
-  }
-  const url = canonicalHttpsUrl(href);
-  return (
-    url !== null &&
-    url.href === href &&
-    target === "_blank" &&
-    rel === LINK_REL &&
-    referrerPolicy === "no-referrer"
-  );
-}
-
-function isValidStoredImage(element: Element): boolean {
-  const source = propertyText(element.properties.src);
-  const remoteSource = propertyText(element.properties[REMOTE_SOURCE_PROPERTY]);
-  if (
-    propertyText(element.properties.referrerPolicy) !== null ||
-    (source !== null && remoteSource !== null)
-  ) {
-    return false;
-  }
-  if (remoteSource !== null) {
-    const url = canonicalHttpsUrl(remoteSource);
-    return url !== null && url.href === remoteSource;
-  }
-  if (source !== null) return isCanonicalCidAttachmentPath(source);
-  return true;
 }
 
 function copyAllowedProperty(name: string, value: Properties[string]): Properties[string] {
@@ -718,46 +456,8 @@ function propertyText(value: Properties[string]): string | null {
   return String(value);
 }
 
-function isCanonicalCidAttachmentPath(source: string): boolean {
-  if (!source.startsWith("/messages/")) return false;
-  let url: URL;
-  try {
-    url = new URL(source, "https://canonical-mail-html.invalid");
-  } catch {
-    return false;
-  }
-  if (
-    url.search !== "" ||
-    url.hash !== "" ||
-    url.origin !== "https://canonical-mail-html.invalid"
-  ) {
-    return false;
-  }
-  const segments = url.pathname.split("/");
-  const messageId = segments[2];
-  const attachmentId = segments[4];
-  if (
-    segments.length !== 5 ||
-    segments[1] !== "messages" ||
-    segments[3] !== "attachments" ||
-    messageId === undefined ||
-    messageId === "" ||
-    attachmentId === undefined ||
-    attachmentId === ""
-  ) {
-    return false;
-  }
-  try {
-    return (
-      encodeURIComponent(decodeURIComponent(messageId)) === messageId &&
-      encodeURIComponent(decodeURIComponent(attachmentId)) === attachmentId
-    );
-  } catch {
-    return false;
-  }
-}
-
-function canonicalHttpsUrl(source: string): URL | null {
+function canonicalHttpsUrl(source: string | null): URL | null {
+  if (source === null) return null;
   try {
     const url = new URL(source);
     if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
@@ -795,112 +495,24 @@ function normalizeCid(value: string): string {
   return trimmed.toLowerCase();
 }
 
-function isValidStoredInlineStyle(style: string): boolean {
-  return MAIL_HTML_INLINE_STYLE_VALIDATORS[MAIL_HTML_POLICY_VERSION](style);
-}
-
-function isPolicyEquivalentInlineStyleForPolicy1(source: string): boolean {
-  const stored = parseInlineStyle(source);
-  if (stored === null) return false;
-  const policyCss = sanitizeParsedInlineStyleForPolicy1(stored);
-  if (policyCss === null) return false;
-  const policy = parseInlineStyle(policyCss);
-  return policy !== null && semanticallyEqualCssNodes(stored, policy);
-}
-
-function sanitizeInlineStyle(source: string): string | null {
-  const stored = parseInlineStyle(source);
-  if (stored === null) return null;
-  return sanitizeParsedInlineStyleForPolicy1(stored);
-}
-
-function parseInlineStyle(source: string): DeclarationList | null {
-  if (new TextEncoder().encode(source).byteLength > MAX_INLINE_STYLE_BYTES) return null;
+function sanitizeInlineStyle(source: string | null): string | null {
+  if (source === null || new TextEncoder().encode(source).byteLength > MAX_INLINE_STYLE_BYTES) {
+    return null;
+  }
   let ast: CssNode;
   try {
     ast = parse(source, { context: "declarationList" });
   } catch {
     return null;
   }
-  return ast.type === "DeclarationList" ? ast : null;
-}
-
-function sanitizeParsedInlineStyleForPolicy1(stored: DeclarationList): string | null {
+  if (ast.type !== "DeclarationList") return null;
   const accepted: string[] = [];
-  for (const node of stored.children) {
+  for (const node of ast.children) {
     if (node.type === "WhiteSpace" || node.type === "Comment") continue;
     if (node.type !== "Declaration") return null;
     if (isAllowedDeclaration(node)) accepted.push(generate(node));
   }
   return accepted.length === 0 ? null : accepted.join(";");
-}
-
-function semanticallyEqualCssNodes(left: CssNode, right: CssNode): boolean {
-  if (left.type !== right.type) return false;
-  switch (left.type) {
-    case "DeclarationList":
-      return (
-        right.type === "DeclarationList" &&
-        semanticallyEqualCssNodeLists(left.children, right.children)
-      );
-    case "Declaration":
-      return (
-        right.type === "Declaration" &&
-        left.property.toLowerCase() === right.property.toLowerCase() &&
-        left.important === right.important &&
-        semanticallyEqualCssNodes(left.value, right.value)
-      );
-    case "Value":
-      return right.type === "Value" && semanticallyEqualCssNodeLists(left.children, right.children);
-    case "Function":
-      return (
-        right.type === "Function" &&
-        left.name.toLowerCase() === right.name.toLowerCase() &&
-        semanticallyEqualCssNodeLists(left.children, right.children)
-      );
-    case "Identifier":
-      return right.type === "Identifier" && left.name.toLowerCase() === right.name.toLowerCase();
-    case "Hash":
-      return right.type === "Hash" && left.value.toLowerCase() === right.value.toLowerCase();
-    case "Dimension":
-      return (
-        right.type === "Dimension" &&
-        left.value === right.value &&
-        left.unit.toLowerCase() === right.unit.toLowerCase()
-      );
-    case "Number":
-      return right.type === "Number" && left.value === right.value;
-    case "Percentage":
-      return right.type === "Percentage" && left.value === right.value;
-    case "Operator":
-      return right.type === "Operator" && left.value === right.value;
-    case "String":
-      return right.type === "String" && left.value === right.value;
-    default:
-      return false;
-  }
-}
-
-function semanticallyEqualCssNodeLists(left: Iterable<CssNode>, right: Iterable<CssNode>): boolean {
-  const leftNodes = significantCssNodes(left);
-  const rightNodes = significantCssNodes(right);
-  if (leftNodes.length !== rightNodes.length) return false;
-  for (let index = 0; index < leftNodes.length; index += 1) {
-    const leftNode = leftNodes[index];
-    const rightNode = rightNodes[index];
-    if (leftNode === undefined || rightNode === undefined) return false;
-    if (!semanticallyEqualCssNodes(leftNode, rightNode)) return false;
-  }
-  return true;
-}
-
-function significantCssNodes(nodes: Iterable<CssNode>): CssNode[] {
-  const significant: CssNode[] = [];
-  for (const node of nodes) {
-    if (node.type === "WhiteSpace" || node.type === "Comment") continue;
-    significant.push(node);
-  }
-  return significant;
 }
 
 function isAllowedDeclaration(declaration: Declaration): boolean {

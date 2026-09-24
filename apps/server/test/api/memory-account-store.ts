@@ -8,7 +8,6 @@ import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqli
 
 import { makeAccountStoreRpc, type AccountStoreRpc } from "../../src/account/worker.ts";
 
-const TEST_ACCOUNT_ID = "test-account";
 const TEST_NOW = "2026-01-01T00:00:00.000Z";
 
 export class MemoryAccountSqliteStorage implements AccountSqliteStorage {
@@ -27,7 +26,11 @@ export class MemoryAccountSqliteStorage implements AccountSqliteStorage {
   readonly sql = {
     exec: (query: string, ...bindings: ReadonlyArray<AccountSqlValue>) => {
       const params = bindings.map(toSqlValue);
-      if (isSelect(query)) {
+      const read = isRead(query);
+      if (!read) {
+        this.writeCount += 1;
+      }
+      if (read || /\bRETURNING\b/i.test(query)) {
         const rows = this.#sqlite
           .prepare(query)
           .all(...params)
@@ -36,7 +39,6 @@ export class MemoryAccountSqliteStorage implements AccountSqliteStorage {
           toArray: () => rows,
         };
       }
-      this.writeCount += 1;
       if (params.length === 0) {
         this.#sqlite.exec(query);
       } else {
@@ -66,16 +68,16 @@ export type MemoryAccount = {
   readonly account: AccountStoreRpc;
 };
 
-export function createMemoryAccount(accountId = TEST_ACCOUNT_ID): MemoryAccount {
+export function createMemoryAccount(): MemoryAccount {
   const storage = new MemoryAccountSqliteStorage();
-  applyAccountSchema(storage, { accountId, nowIso: TEST_NOW });
+  applyAccountSchema(storage, TEST_NOW);
   return {
     storage,
     account: makeAccountStoreRpc(storage),
   };
 }
 
-function isSelect(query: string): boolean {
+function isRead(query: string): boolean {
   const trimmed = query.trimStart().toUpperCase();
   return trimmed.startsWith("SELECT") || trimmed.startsWith("WITH");
 }

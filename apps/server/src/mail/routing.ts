@@ -44,19 +44,6 @@ export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDo
   readonly message: string;
 }> {}
 
-export class EmailRoutingDomainRemovalUnsafe extends Data.TaggedError(
-  "EmailRoutingDomainRemovalUnsafe",
-)<{
-  readonly zoneId: string;
-  readonly name: string;
-  readonly message: string;
-}> {}
-
-type EmailRoutingDomainLifecycleError =
-  | EmailRoutingDomainApiError
-  | EmailRoutingDomainNotReady
-  | EmailRoutingDomainRemovalUnsafe;
-
 export interface EmailRoutingDomainLifecycle {
   read(
     props: EmailRoutingDomainProps,
@@ -69,10 +56,10 @@ export interface EmailRoutingDomainLifecycle {
   ): Effect.Effect<Diff | void, EmailRoutingDomainApiError>;
   reconcile(
     props: EmailRoutingDomainProps,
-  ): Effect.Effect<EmailRoutingDomainAttributes, EmailRoutingDomainLifecycleError>;
-  delete(
-    output: EmailRoutingDomainAttributes,
-  ): Effect.Effect<void, EmailRoutingDomainLifecycleError>;
+  ): Effect.Effect<
+    EmailRoutingDomainAttributes,
+    EmailRoutingDomainApiError | EmailRoutingDomainNotReady
+  >;
 }
 
 function isApex(inspection: EmailRoutingDomainInspection, identity: EmailRoutingDomainIdentity) {
@@ -86,10 +73,6 @@ function isReady(inspection: EmailRoutingDomainInspection) {
     inspection.exact.status === "ready" &&
     inspection.exact.dnsReady
   );
-}
-
-function isDisabled(inspection: EmailRoutingDomainInspection) {
-  return inspection.exact === undefined || !inspection.exact.enabled;
 }
 
 function toAttributes(
@@ -110,38 +93,6 @@ function notReadyError(identity: EmailRoutingDomainIdentity) {
   });
 }
 
-function unsafeRemovalError(identity: EmailRoutingDomainIdentity, message: string) {
-  return new EmailRoutingDomainRemovalUnsafe({
-    ...identity,
-    message,
-  });
-}
-
-function verifyRemovalSafety(
-  inspection: EmailRoutingDomainInspection,
-  identity: EmailRoutingDomainIdentity,
-  expectedSiblings: ReadonlyArray<string>,
-) {
-  if (!inspection.apexEnabled) {
-    return Effect.fail(
-      unsafeRemovalError(
-        identity,
-        `Cloudflare disabled apex Email Routing while removing ${identity.name}.`,
-      ),
-    );
-  }
-  const missingSibling = expectedSiblings.find((name) => !inspection.enabledNames.includes(name));
-  if (missingSibling !== undefined) {
-    return Effect.fail(
-      unsafeRemovalError(
-        identity,
-        `Cloudflare disabled or removed sibling Email Routing domain ${missingSibling} while removing ${identity.name}.`,
-      ),
-    );
-  }
-  return Effect.succeed(inspection);
-}
-
 function waitUntilReady(
   api: EmailRoutingDomainsApiService,
   identity: EmailRoutingDomainIdentity,
@@ -157,31 +108,6 @@ function waitUntilReady(
     }),
     Effect.flatMap((inspection) =>
       isReady(inspection) ? Effect.succeed(inspection) : Effect.fail(notReadyError(identity)),
-    ),
-  );
-}
-
-function waitUntilDisabled(
-  api: EmailRoutingDomainsApiService,
-  identity: EmailRoutingDomainIdentity,
-  expectedSiblings: ReadonlyArray<string>,
-): Effect.Effect<void, EmailRoutingDomainLifecycleError> {
-  return api.inspect(identity).pipe(
-    Effect.flatMap((inspection) => verifyRemovalSafety(inspection, identity, expectedSiblings)),
-    Effect.repeat({
-      schedule: Schedule.spaced("5 seconds"),
-      until: isDisabled,
-      times: 12,
-    }),
-    Effect.flatMap((inspection) =>
-      Effect.gen(function* () {
-        yield* verifyRemovalSafety(inspection, identity, expectedSiblings);
-        if (isDisabled(inspection)) return;
-        return yield* new EmailRoutingDomainNotReady({
-          ...identity,
-          message: `Email Routing domain ${identity.name} remained enabled after removal.`,
-        });
-      }),
     ),
   );
 }
@@ -228,19 +154,6 @@ export function makeEmailRoutingDomainLifecycle(
         if (attributes === undefined) return yield* notReadyError(props);
         return attributes;
       }),
-    delete: (output) =>
-      Effect.gen(function* () {
-        const identity = {
-          zoneId: output.zoneId,
-          name: output.name,
-        } satisfies EmailRoutingDomainIdentity;
-        const before = yield* api.inspect(identity);
-        if (isApex(before, identity)) return;
-        if (before.exact === undefined || !before.exact.enabled) return;
-        const expectedSiblings = before.enabledNames.filter((name) => name !== identity.name);
-        yield* api.disableExact(identity);
-        yield* waitUntilDisabled(api, identity, expectedSiblings);
-      }),
   };
 }
 
@@ -259,10 +172,8 @@ export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
     const api = yield* EmailRoutingDomainsApi;
     return yield* makeEmailRoutingDomainLifecycle(api).reconcile(news);
   }),
-  delete: Effect.fn(function* ({ output }) {
-    const api = yield* EmailRoutingDomainsApi;
-    yield* makeEmailRoutingDomainLifecycle(api).delete(output);
-  }),
+  // Never runs: MailRoutingDomain is retained. Alchemy still requires a delete handler.
+  delete: () => Effect.void,
 });
 
 export type { EmailRoutingDomainStatus };
@@ -278,13 +189,15 @@ export const configureMailRouting = Effect.fn(function* (
   const routingDomain = yield* EmailRoutingDomain("MailRoutingDomain", {
     zoneId: routing.zoneId,
     name: site.mailDomain,
-  }).pipe(Alchemy.AdoptPolicy.adopt());
+  }).pipe(Alchemy.AdoptPolicy.adopt(), Alchemy.RemovalPolicy.retain());
 
-  if (site.kind === "prod") {
+  if (stageSendsMail(stage)) {
     yield* Cloudflare.Email.SendingSubdomain("MailSending", {
       zoneId: routingDomain.zoneId,
       name: site.mailDomain,
     });
+  }
+  if (site.kind === "prod") {
     yield* Cloudflare.Email.CatchAll("MailCatchAll", {
       zone: routingDomain.zoneId,
       actions: [{ type: "worker", value: [inboundWorkerName] }],
@@ -304,12 +217,6 @@ export const configureMailRouting = Effect.fn(function* (
       });
     for (const localPart of site.testLocalParts) {
       yield* mailRule(localPart);
-    }
-    if (stageSendsMail(stage)) {
-      yield* Cloudflare.Email.SendingSubdomain("MailSending", {
-        zoneId: routingDomain.zoneId,
-        name: site.mailDomain,
-      });
     }
   }
 });

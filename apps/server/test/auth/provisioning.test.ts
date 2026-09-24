@@ -12,12 +12,7 @@ import {
   mcpResourceUrl,
   restResourceUrl,
 } from "../../src/auth/options.ts";
-import {
-  AuthOwnershipConflictError,
-  AuthProvision,
-  provisionAuth,
-  type AuthD1Database,
-} from "../../src/auth/provisioning.ts";
+import { AuthProvision, provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
 import { ExternalMailAddress } from "@umail/api-contract";
 import { OPERATOR_EMAIL, OPERATOR_PASSWORD, TEST_SITE } from "../api/world.ts";
 
@@ -205,6 +200,19 @@ describe("auth provisioning", () => {
         new Date().toISOString(),
       )
       .run();
+    await db
+      .prepare(
+        `INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        "consent-1",
+        CURSOR_GROK_BOT_CLIENT_ID,
+        first.operatorId,
+        "[]",
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-01T00:00:00.000Z",
+      )
+      .run();
     const oldHash = await credentialHash(db);
     const rotated = await provisionAuth(db, {
       ...provisionRequest("rotate-2"),
@@ -216,6 +224,7 @@ describe("auth provisioning", () => {
     expect(await verifyPassword({ hash: oldHash, password: OPERATOR_PASSWORD })).toBe(true);
     expect(await verifyPassword({ hash: newHash, password: "replacement-passphrase" })).toBe(true);
     expect(await db.all("SELECT id FROM session")).toEqual([]);
+    expect(await db.all("SELECT id FROM oauthConsent")).toEqual([]);
   });
 
   it("signs in through Better Auth using the credential issuer mapping", async () => {
@@ -341,8 +350,8 @@ describe("auth provisioning", () => {
       .prepare("UPDATE oauthClient SET clientDiscoveryId = ? WHERE clientId = ?")
       .bind("other-discovery", CURSOR_GROK_BOT_CLIENT_ID)
       .run();
-    await expect(provisionAuth(db, provisionRequest("conflict"))).rejects.toBeInstanceOf(
-      AuthOwnershipConflictError,
+    await expect(provisionAuth(db, provisionRequest("conflict"))).rejects.toThrow(
+      `oauthClient ${CURSOR_GROK_BOT_CLIENT_ID} is owned by other-discovery`,
     );
   });
 

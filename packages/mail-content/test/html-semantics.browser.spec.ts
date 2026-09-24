@@ -71,7 +71,7 @@ describe("mail HTML browser semantics", () => {
       expectForbiddenResources(host);
     }));
 
-  it("removes namespaced and malformed hostile markup instead of leaking nested content", () =>
+  it("drops foreign and hostile markup and unwraps unknown elements", () =>
     sanitize(
       `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><p>svg-secret</p></svg><math><p>math-secret</p></math><custom-element><p>custom-secret</p></custom-element><p title="ok"><b>bold<img src="javascript:alert(1)"><script>bad`,
     ).then((stored) => {
@@ -80,7 +80,7 @@ describe("mail HTML browser semantics", () => {
       expect(host.querySelector("math")).toBeNull();
       expect(host.querySelector("custom-element")).toBeNull();
       expect(host.querySelector("script")).toBeNull();
-      expect(host.textContent).not.toContain("custom-secret");
+      expect(host.textContent).toContain("custom-secret");
       expect(host.textContent).not.toContain("bad");
       expect(host.textContent).toContain("svg-secret");
       expect(host.textContent).toContain("math-secret");

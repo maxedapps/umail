@@ -82,17 +82,6 @@ export function parseMailboxAddress(raw: string): MailboxAddressParseResult {
   return assembleMailboxAddress(localPart.localPart, domain.domain);
 }
 
-export function parseMailboxAddressForRegistration(raw: string): RegistrationMailboxAddressResult {
-  const parsed = parseMailboxAddress(raw);
-  if (parsed.kind === "invalid") {
-    return parsed;
-  }
-  if (RESERVED_LOCAL_PARTS.has(parsed.localPart)) {
-    return { kind: "reserved" };
-  }
-  return parsed;
-}
-
 export function constructMailboxAddress(
   rawLocalPart: string,
   rawDomain: string,

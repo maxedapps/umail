@@ -1,7 +1,5 @@
-import { parseExternalMailAddress } from "./packages/api-contract/src/mail-contact.ts";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -12,28 +10,24 @@ import { mcpResourceUrl, restResourceUrl } from "./apps/server/src/auth/options.
 import InboundLive, { Inbound } from "./apps/server/src/mail/inbound.ts";
 import IndexConsumerLive, { IndexConsumer } from "./apps/server/src/mail/indexing.ts";
 import SendConsumerLive, { SendConsumer } from "./apps/server/src/mail/send.ts";
-import { Recovery } from "./apps/server/src/mail/recovery.ts";
+import RecoveryLive, { Recovery } from "./apps/server/src/mail/recovery.ts";
 import { EmailRoutingDomainsApiLive } from "./apps/server/src/mail/routing-api.ts";
 import {
   configureMailRouting,
   EmailRoutingDomainProvider,
 } from "./apps/server/src/mail/routing.ts";
-import { layoutForStage, rootDomain } from "./apps/server/src/site.ts";
+import { currentSite, operatorEmail } from "./apps/server/src/site.ts";
 
 // Export the real application program so local tests can inspect its resource graph without cloud providers.
 export const application = Effect.gen(function* () {
   const stage = yield* Alchemy.Stage;
-  const site = layoutForStage(yield* rootDomain, stage);
-  const operatorEmail = parseExternalMailAddress(yield* Config.string("UMAIL_OPERATOR_EMAIL"));
-  if (operatorEmail.kind !== "ok") {
-    throw new Error("UMAIL_OPERATOR_EMAIL is not a valid email address.");
-  }
+  const site = yield* currentSite;
 
   const authDb = yield* AuthDb;
   const provision = yield* AuthProvision({
     identity: { databaseId: authDb.databaseId },
     runNonce: crypto.randomUUID(),
-    operatorEmail: operatorEmail.address,
+    operatorEmail: yield* operatorEmail,
     restResource: restResourceUrl(site),
     mcpResource: mcpResourceUrl(site),
   });
@@ -43,7 +37,7 @@ export const application = Effect.gen(function* () {
     yield* IndexConsumer;
     yield* SendConsumer;
     const inbound = yield* Inbound;
-    yield* Recovery(api.workerName, provision.operatorId);
+    yield* Recovery;
     yield* configureMailRouting(site, stage, inbound.workerName);
     return {
       stage,
@@ -54,7 +48,9 @@ export const application = Effect.gen(function* () {
       inboundWorker: inbound.workerName,
     };
   }).pipe(
-    Effect.provide(Layer.mergeAll(ApiLive, InboundLive, IndexConsumerLive, SendConsumerLive)),
+    Effect.provide(
+      Layer.mergeAll(ApiLive, InboundLive, IndexConsumerLive, SendConsumerLive, RecoveryLive),
+    ),
     Effect.provide(Layer.succeed(ProvisionedOperator, provision)),
   );
 });

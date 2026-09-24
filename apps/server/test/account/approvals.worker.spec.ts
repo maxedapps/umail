@@ -1,8 +1,6 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
 
 import {
-  generateApprovalToken,
-  hashApprovalToken,
   NormalizedRfcMessageId,
   parseExternalMailAddress,
   parseMailDomain,
@@ -12,7 +10,8 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { accountStore } from "./harness.ts";
+import type { StoredApproval } from "../../src/account/domain.ts";
+import { accountStore, approvalMaterial } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -69,7 +68,7 @@ describe("account-store approval decisions", () => {
     });
   });
 
-  it("denies, expires, and cancels undispatched work without dispatching", async () => {
+  it("denies and expires undispatched work without dispatching", async () => {
     const deniedStore = accountStore("approval-denied");
     const deniedSeed = await seedPending(deniedStore, REQUEST_A);
     expect(
@@ -94,28 +93,78 @@ describe("account-store approval decisions", () => {
     const expiredStore = accountStore("approval-expired");
     const expiredSeed = await seedPending(expiredStore, REQUEST_A);
     expect(
-      await expiredStore.expirePendingApproval({
-        approvalId: expiredSeed.approvalId,
+      await expiredStore.decideApproval({
+        tokenHash: expiredSeed.tokenHash,
+        decision: "approved",
         nowIso: LATER,
       }),
     ).toMatchObject({
-      kind: "transitioned",
+      kind: "resolved",
       state: "expired",
       job: { state: "rejected", failureClass: "expired" },
     });
+  });
 
-    const cancelledStore = accountStore("approval-cancelled");
-    const cancelledSeed = await seedPending(cancelledStore, REQUEST_A);
+  it("cancels the approval when its notification is rejected", async () => {
+    const store = accountStore("approval-notification-rejected");
+    const seeded = await seedPending(store, REQUEST_A);
+    const notification = await requireNotificationJob(store);
+    const claimed = await store.claimDispatch({
+      jobId: notification.jobId,
+      nowIso: NOW,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    if (claimed.kind !== "claimed") {
+      throw new Error("expected notification claim");
+    }
+    await store.completeAttempt({
+      jobId: notification.jobId,
+      attemptId: claimed.attemptId,
+      nowIso: LATER,
+      outcome: { kind: "rejected", failureDetail: "E_VALIDATION_ERROR" },
+    });
+    await expectNotificationFailed(store, seeded.tokenHash);
+
+    const unsendable = accountStore("approval-notification-unsendable");
+    const unsendableSeed = await seedPending(unsendable, REQUEST_A);
+    await unsendable.rejectReadyDispatch({
+      jobId: (await requireNotificationJob(unsendable)).jobId,
+      nowIso: LATER,
+      failureDetail: "resource_exhausted",
+    });
+    await expectNotificationFailed(unsendable, unsendableSeed.tokenHash);
+  });
+
+  it("keeps the approval waiting when its notification settles unknown", async () => {
+    const store = accountStore("approval-notification-unknown");
+    const seeded = await seedPending(store, REQUEST_A);
+    const notification = await requireNotificationJob(store);
+    const claimed = await store.claimDispatch({
+      jobId: notification.jobId,
+      nowIso: NOW,
+      claimExpiresAt: CLAIM_EXPIRES,
+    });
+    if (claimed.kind !== "claimed") {
+      throw new Error("expected notification claim");
+    }
+    await store.completeAttempt({
+      jobId: notification.jobId,
+      attemptId: claimed.attemptId,
+      nowIso: NOW,
+      outcome: { kind: "unknown" },
+    });
+    expect(await store.lookupApprovalByTokenHash(seeded.tokenHash)).toMatchObject({
+      kind: "found",
+      approval: { state: "pending" },
+      job: { state: "waiting_approval" },
+    });
     expect(
-      await cancelledStore.cancelApprovalAfterNotificationFailure({
-        approvalId: cancelledSeed.approvalId,
+      await store.decideApproval({
+        tokenHash: seeded.tokenHash,
+        decision: "approved",
         nowIso: NOW,
       }),
-    ).toMatchObject({
-      kind: "transitioned",
-      state: "cancelled",
-      job: { state: "rejected", failureClass: "notification_failed" },
-    });
+    ).toMatchObject({ kind: "claimed", state: "approved", job: { state: "ready" } });
   });
 
   it("makes an approved waiting job ready for a later dispatch claim", async () => {
@@ -205,9 +254,7 @@ describe("account-store approval decisions", () => {
         failureDetail: "client_inactive",
       },
     });
-    expect(await store.getOutboundJob(seeded.jobId, { kind: "operator" })).toMatchObject({
-      state: "waiting_approval",
-    });
+    await expectNotificationFailed(store, seeded.tokenHash);
   });
 
   it("rejects an approval notification claim when the originating MCP policy denies sending", async () => {
@@ -238,9 +285,7 @@ describe("account-store approval decisions", () => {
       kind: "rejected",
       job: { state: "rejected", failureClass: "policy", failureDetail: "send_denied" },
     });
-    expect(await store.getOutboundJob(seeded.jobId, { kind: "operator" })).toMatchObject({
-      state: "waiting_approval",
-    });
+    await expectNotificationFailed(store, seeded.tokenHash);
   });
 
   it("keeps the approved message's own Message-ID after the notification was sent first", async () => {
@@ -269,7 +314,6 @@ describe("account-store approval decisions", () => {
       state: "accepted",
       rfcMessageId: NOTIFICATION_ID,
     });
-    expect(await store.inspectRfcLookup(NOTIFICATION_ID)).toBeNull();
 
     await store.decideApproval({
       tokenHash: seeded.tokenHash,
@@ -297,12 +341,6 @@ describe("account-store approval decisions", () => {
     if (job === null) {
       throw new Error("expected job");
     }
-    const nodeId = job.threadHandle.slice("node:".length);
-    expect(await store.inspectRfcLookup(PROVIDER_ID)).toEqual({
-      rfcMessageId: PROVIDER_ID,
-      nodeId,
-      claimantNodeId: nodeId,
-    });
     const page = await store.listThreadMessageSummaries(job.threadHandle, {
       mailboxScope: "all",
     });
@@ -310,9 +348,22 @@ describe("account-store approval decisions", () => {
   });
 });
 
+async function expectNotificationFailed(
+  store: DurableObjectStub<AccountStoreTestHost>,
+  tokenHash: StoredApproval["tokenHash"],
+) {
+  expect(await store.lookupApprovalByTokenHash(tokenHash)).toMatchObject({
+    kind: "found",
+    approval: { state: "cancelled" },
+    job: { state: "rejected", failureClass: "notification_failed" },
+  });
+}
+
 async function requireNotificationJob(store: DurableObjectStub<AccountStoreTestHost>) {
-  const ready = await store.listSendWork({ kind: "ready", nowIso: NOW, limit: 50 });
-  const notification = ready.items.find((job) => job.purpose === "approval_notification");
+  const jobs = await store.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 });
+  const notification = jobs.items.find(
+    (job) => job.purpose === "approval_notification" && job.state === "ready",
+  );
   if (notification === undefined) {
     throw new Error("expected a ready approval_notification job");
   }
@@ -322,13 +373,11 @@ async function requireNotificationJob(store: DurableObjectStub<AccountStoreTestH
 async function seedPending(store: DurableObjectStub<AccountStoreTestHost>, requestId: string) {
   const mailbox = await requireAddress(store, "inbox");
   await seedOauthPolicy(store, "agent");
-  const token = generateApprovalToken();
-  const tokenHash = await hashApprovalToken(token);
+  const approval = approvalMaterial(EXPIRES);
   const submitted = await store.submitOutbound({
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "mcp", clientId: "agent", label: "Client agent" },
     mailboxId: mailbox.id,
-    mailDomain: DOMAIN,
     subject: "Review me",
     textBody: "body",
     htmlBody: null,
@@ -338,23 +387,14 @@ async function seedPending(store: DurableObjectStub<AccountStoreTestHost>, reque
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
-    approval: {
-      tokenHash,
-      expiresAt: EXPIRES,
-      notification: {
-        keyVersion: "v1",
-        nonce: "n1",
-        ciphertext: "secret-capability-ciphertext",
-      },
-    },
+    approval,
   });
   if (submitted.approval === null) {
     throw new Error("expected pending approval");
   }
   return {
     jobId: submitted.job.jobId,
-    approvalId: submitted.approval.id,
-    tokenHash,
+    tokenHash: approval.tokenHash,
   };
 }
 
@@ -363,7 +403,6 @@ function readyInput(mailboxId: string, requestId: string) {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     mailboxId,
-    mailDomain: DOMAIN,
     subject: "Direct",
     textBody: "body",
     htmlBody: null,
@@ -373,6 +412,7 @@ function readyInput(mailboxId: string, requestId: string) {
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
+    approval: approvalMaterial(EXPIRES),
   };
 }
 

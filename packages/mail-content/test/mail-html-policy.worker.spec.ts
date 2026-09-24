@@ -48,42 +48,55 @@ describe("MailHtmlPolicy storage sanitizer", () => {
       expect(attributeOf(result.body, "td", "rowspan")).toBe("2");
     }));
 
-  it("removes active, resource-bearing, foreign, and unknown subtrees instead of unwrapping them", () => {
-    const tagsToRemove = [
+  it("drops raw-text, foreign, and template elements with their content", () => {
+    const dropped = [
       "script",
       "style",
       "iframe",
-      "object",
-      "form",
-      "applet",
+      "noscript",
+      "noembed",
+      "noframes",
       "svg",
       "math",
       "template",
-      "noscript",
-      "canvas",
-      "audio",
-      "video",
-      "picture",
-      "button",
       "select",
       "textarea",
-      "custom-element",
+      "title",
+      "xmp",
     ];
-    const hostile = tagsToRemove
-      .map((tag, index) => `<${tag}><p>secret-${String(index)}</p></${tag}>`)
-      .join("");
-
+    const hostile = dropped.map((tag) => `<${tag}>secret-${tag}</${tag}>`).join("");
     return sanitize(`<p>before</p>${hostile}<p>after</p>`).then((result) => {
-      expect(result.hasRemoteImages).toBe(false);
-      for (const tag of tagsToRemove) {
-        expect(descendantElements(result.body, tag)).toHaveLength(0);
-      }
-      expect(texts(result.body, "p")).toEqual(["before", "secret-6", "secret-7", "after"]);
-      expect(result.body).not.toContain("secret-17");
-      expect(result.body).not.toContain("secret-0");
-      expect(result.body).not.toContain("secret-3");
+      expect(result.body).toBe("<p>before</p><p>after</p>");
     });
   });
+
+  it("unwraps unknown and legacy containers so their text survives", () =>
+    sanitize(
+      '<div dir="ltr"><font face="verdana" color="#888">Please wire the payment</font></div><form action="https://evil.test/"><button formaction="https://evil.test/">Rate</button></form><custom-element onclick="bad()">custom</custom-element><p>Hello<o:p>&nbsp;</o:p><st1:place>Vienna</st1:place></p><object data="https://evil.test/x"><p>fallback</p></object>',
+    ).then((result) => {
+      expect(result.body).toBe(
+        '<div dir="ltr">Please wire the payment</div>Ratecustom<p>Hello\u00a0Vienna</p><p>fallback</p>',
+      );
+    }));
+
+  it("keeps the 12 sectioning/legacy elements without attributes", () => {
+    const kept = ["center", "section", "article", "header", "footer", "main", "nav", "aside"];
+    const inline = ["strike", "big", "tt", "nobr"];
+    return sanitize(
+      [...kept, ...inline]
+        .map((tag) => `<${tag} align="center" onclick="bad()">${tag}-text</${tag}>`)
+        .join(""),
+    ).then((result) => {
+      expect(result.body).toBe(
+        [...kept, ...inline].map((tag) => `<${tag}>${tag}-text</${tag}>`).join(""),
+      );
+    });
+  });
+
+  it("sanitizes templates nested in SVG/MathML", () =>
+    sanitize(
+      "<p>before</p><svg><template><p>x</p></template></svg><math><template></template></math><p>after</p>",
+    ).then((result) => expect(result.body).toBe("<p>before</p><p>x</p><p>after</p>")));
 
   it("removes void resources, event handlers, and alternate resource attributes", () =>
     sanitize(
@@ -504,79 +517,48 @@ describe("MailHtmlPolicy parser resource budgets", () => {
 });
 
 describe("MailHtmlPolicy remote image materializer", () => {
-  it("fails closed instead of passing raw script markup through", () =>
-    expect(
-      materialize('<p>safe</p><script src="https://tracker.test/active.js">run()</script>'),
-    ).rejects.toMatchObject({ _tag: "MailHtmlPolicyError", reason: "rewrite_failed" }));
-
-  it("fails closed instead of passing event attributes through", () =>
-    expect(
-      materialize("<p onclick=\"location.href='https://tracker.test/'\">click</p>"),
-    ).rejects.toMatchObject({ _tag: "MailHtmlPolicyError", reason: "rewrite_failed" }));
-
-  it("fails closed instead of passing a pre-existing cross-origin image source through", () =>
-    expect(materialize('<img src="https://tracker.test/preexisting">')).rejects.toMatchObject({
-      _tag: "MailHtmlPolicyError",
-      reason: "rewrite_failed",
-    }));
-
-  it("fails closed instead of passing a pre-existing same-origin image source through", () =>
-    expect(materialize('<img src="https://mail.umail.test/preexisting">')).rejects.toMatchObject({
-      _tag: "MailHtmlPolicyError",
-      reason: "rewrite_failed",
-    }));
-
-  it("rejects noncanonical stored attributes, comments, links, and remote metadata", () => {
-    const inputs = [
-      "<!--forged--><p>content</p>",
-      '<a href="https://example.test/">missing defenses</a>',
-      '<img data-umail-remote-src="HTTPS://tracker.test:443/pixel">',
-      '<div data-forged="value">attribute</div>',
+  it("re-sanitizes stored HTML before activating remote images", () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['<p>safe</p><script src="https://tracker.test/active.js">run()</script>', "<p>safe</p>"],
+      ["<p onclick=\"location.href='https://tracker.test/'\">click</p>", "<p>click</p>"],
+      ['<img src="https://tracker.test/preexisting">', "<img>"],
+      ['<img src="https://mail.umail.test/preexisting">', "<img>"],
+      ['<img src="/messages/m/attachments/a">', "<img>"],
+      ["<!--forged--><p>content</p>", "<p>content</p>"],
+      ['<div data-forged="value">attribute</div>', "<div>attribute</div>"],
+      [
+        '<a href="https://example.test/">link</a>',
+        '<a href="https://example.test/" target="_blank" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer">link</a>',
+      ],
+      ['<p style="color: red; position: fixed">denied</p>', '<p style="color:red">denied</p>'],
+      ['<p style="color:red!important">important</p>', "<p>important</p>"],
+      ['<p style="color:var(--sender-color)">var</p>', "<p>var</p>"],
+      ['<p style="color:expression(alert(1))">expression</p>', "<p>expression</p>"],
+      [
+        '<p style="background-image:url(https://tracker.test/pixel)">background</p>',
+        "<p>background</p>",
+      ],
+      ['<img data-umail-remote-src="https://user:pass@tracker.test/pixel">', "<img>"],
+      ['<img data-umail-remote-src="http://tracker.test/pixel">', "<img>"],
+      ['<img data-umail-remote-src="javascript:alert(1)">', "<img>"],
     ];
-    return Promise.all(
-      inputs.map((body) =>
-        expect(materialize(body)).rejects.toMatchObject({
-          _tag: "MailHtmlPolicyError",
-          reason: "rewrite_failed",
-        }),
-      ),
+    return Promise.all(cases.map(([body]) => materialize(body))).then((bodies) =>
+      expect(bodies).toEqual(cases.map(([, expected]) => expected)),
     );
   });
 
-  it("accepts policy-equivalent stored inline styles regardless of generator spacing", () =>
+  it("regenerates stored inline styles canonically", () =>
     Promise.all([
       materialize('<p style="color: red">spaced</p>'),
-      materialize('<p style="color:red">compact</p>'),
       materialize('<p style="color: red; padding: 2px">multi</p>'),
-      materialize('<p style="COLOR: Red">case</p>'),
-    ]).then((bodies) => {
-      expect(styleOf(bodies[0], "p").get("color")).toBe("red");
-      expect(styleOf(bodies[1], "p").get("color")).toBe("red");
-      expect(styleOf(bodies[2], "p").get("color")).toBe("red");
-      expect(styleOf(bodies[2], "p").get("padding")).toBe("2px");
-      expect(styleOf(bodies[3], "p").get("COLOR")).toBe("Red");
-    }));
+    ]).then((bodies) =>
+      expect(bodies).toEqual([
+        '<p style="color:red">spaced</p>',
+        '<p style="color:red;padding:2px">multi</p>',
+      ]),
+    ));
 
-  it("rejects stored styles with url, var, expression, important, or denied properties", () => {
-    const inputs = [
-      '<p style="color:red!important">important</p>',
-      '<p style="color:var(--sender-color)">var</p>',
-      '<p style="color:expression(alert(1))">expression</p>',
-      '<p style="color:url(https://tracker.test/x)">url</p>',
-      '<p style="color: red; position: fixed">denied</p>',
-      '<p style="background-image:url(https://tracker.test/pixel)">background</p>',
-    ];
-    return Promise.all(
-      inputs.map((body) =>
-        expect(materialize(body)).rejects.toMatchObject({
-          _tag: "MailHtmlPolicyError",
-          reason: "rewrite_failed",
-        }),
-      ),
-    );
-  });
-
-  it("activates only canonical cross-origin HTTPS metadata and sets no-referrer", () =>
+  it("activates only cross-origin HTTPS metadata and sets no-referrer", () =>
     sanitize(
       '<img alt="cross" src="https://tracker.test/pixel?a=1&amp;b=2"><img alt="same" src="https://mail.umail.test/attacker"><img alt="http" src="http://tracker.test/pixel">',
     ).then((stored) =>
@@ -597,56 +579,18 @@ describe("MailHtmlPolicy remote image materializer", () => {
       }),
     ));
 
-  it("accepts a legitimate rich canonical template before remote activation", () =>
+  it("changes nothing but activated image attributes in a rich stored template", () =>
     sanitize(
-      '<table style="border-collapse: collapse; width: 100%"><tr><td><a href="https://example.test/a/../destination">open</a><img src="cid:logo@umail"><img src="https://tracker.test/pixel"></td></tr></table>',
-      [attachment("att_logo", "logo@umail", "image/png")],
+      '<table style="border-collapse: collapse; width: 100%"><tr><td><a href="https://example.test/a/../destination">open</a><img alt="remote" src="https://tracker.test/pixel"></td></tr></table>',
     ).then((stored) =>
-      materialize(stored.body).then((body) => {
-        expect(styleOf(body, "table").get("border-collapse")).toBe("collapse");
-        expect(styleOf(body, "table").get("width")).toBe("100%");
-        expect(attributeOf(body, "a", "href")).toBe("https://example.test/destination");
-        expect(attributeOf(body, "a", "target")).toBe("_blank");
-        expect(attributeOf(body, "a", "rel")).toBe("noopener noreferrer nofollow");
-        expect(attributeOf(body, "a", "referrerpolicy")).toBe("no-referrer");
-        const images = descendantElements(body, "img");
-        expect(
-          images.some(
-            (element) =>
-              attribute(element, "src") === `/messages/${MESSAGE_ID}/attachments/att_logo`,
+      materialize(stored.body).then((body) =>
+        expect(body).toBe(
+          stored.body.replace(
+            'data-umail-remote-src="https://tracker.test/pixel"',
+            'data-umail-remote-src="https://tracker.test/pixel" src="https://tracker.test/pixel" referrerpolicy="no-referrer"',
           ),
-        ).toBe(true);
-        const remote = images.find(
-          (element) => attribute(element, "src") === "https://tracker.test/pixel",
-        );
-        expect(attribute(remote, "referrerpolicy")).toBe("no-referrer");
-      }),
-    ));
-
-  it("rejects noncanonical, credentialed, forbidden-scheme, and mixed forged metadata", () =>
-    expect(
-      materialize(
-        '<img data-umail-remote-src="HTTPS://tracker.test:443/a/../pixel"><img data-umail-remote-src="https://user:pass@tracker.test/pixel"><img data-umail-remote-src="http://tracker.test/pixel"><img data-umail-remote-src="https://mail.umail.test/pixel"><img data-umail-remote-src="javascript:alert(1)">',
+        ),
       ),
-    ).rejects.toMatchObject({ _tag: "MailHtmlPolicyError", reason: "rewrite_failed" }));
-
-  it("preserves CID sources while materializing remote images", () =>
-    sanitize('<img src="cid:logo@umail"><img src="https://tracker.test/pixel">', [
-      attachment("att_logo", "logo@umail", "image/webp"),
-    ]).then((stored) =>
-      materialize(stored.body).then((body) => {
-        const images = descendantElements(body, "img");
-        expect(
-          images.some(
-            (element) =>
-              attribute(element, "src") === `/messages/${MESSAGE_ID}/attachments/att_logo`,
-          ),
-        ).toBe(true);
-        const remote = images.find(
-          (element) => attribute(element, "src") === "https://tracker.test/pixel",
-        );
-        expect(attribute(remote, "referrerpolicy")).toBe("no-referrer");
-      }),
     ));
 });
 

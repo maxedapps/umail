@@ -12,18 +12,20 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import {
   accessToken,
-  credentialPath,
   login,
   logout,
+  OAuthScheduler,
+  type OAuthSchedulerService,
+} from "../src/auth.ts";
+import {
+  credentialPath,
   makeCredentialStore,
   OAuthCredentialStore,
   OAuthCredentialStoreError,
   type OAuthCredentialState,
   type OAuthCredentialStoreService,
-  OAuthScheduler,
-  type OAuthSchedulerService,
   registeredCredentialState,
-} from "../src/auth.ts";
+} from "../src/credential-store.ts";
 
 const ORIGIN = "https://umail.example.test";
 const METADATA = {
@@ -61,11 +63,6 @@ function memoryStore(initial: OAuthCredentialState | null = null) {
   const writes: Array<OAuthCredentialState> = [];
   const service = {
     read: Effect.sync(() => current),
-    write: (state) =>
-      Effect.sync(() => {
-        current = state;
-        writes.push(state);
-      }),
     commit: (expectedGeneration, state) =>
       Effect.sync(() => {
         const currentGeneration = current?.generation ?? 0;
@@ -167,16 +164,7 @@ describe("OAuth DCR and device login", () => {
       }),
     ];
     const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-    expect(
-      (
-        await runAuth(
-          login({ UMAIL_URL: ORIGIN }),
-          http.httpClient,
-          store.service,
-          scheduler.service,
-        )
-      ).status,
-    ).toBe("authenticated");
+    await runAuth(login({ UMAIL_URL: ORIGIN }), http.httpClient, store.service, scheduler.service);
     expect(scheduler.sleeps).toEqual([2_000, 2_000, 7_000]);
     expect(store.writes.map((state) => state.kind)).toEqual(["registered", "authorized"]);
     expect(store.current()).toMatchObject({
@@ -293,6 +281,25 @@ describe("OAuth refresh and logout", () => {
     );
     expect(Redacted.value(token)).toBe("initial-access-token");
     expect(http.requests).toEqual([]);
+  });
+
+  it.each([
+    ["invalid_grant", "OAuth login required. Run: umail login"],
+    ["invalid_client", "OAuth login required. Run: umail login"],
+    ["invalid_request", "The OAuth server returned an invalid response."],
+  ])("maps a %s refresh rejection to a clear error", async (error, message) => {
+    const store = memoryStore(validState({ expiresAt: 1_001 }));
+    const responses = [json(METADATA), json({ error }, 400)];
+    const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
+    await expect(
+      runAuth(
+        accessToken({ UMAIL_URL: ORIGIN }),
+        http.httpClient,
+        store.service,
+        controlledScheduler(1_000).service,
+      ),
+    ).rejects.toThrow(message);
+    expect(store.writes).toEqual([]);
   });
 
   it("rotates and persists refresh tokens", async () => {
@@ -417,7 +424,6 @@ describe("OAuth refresh and logout", () => {
     const initial = validState({ expiresAt: 1_001 });
     const store = {
       read: Effect.succeed(initial),
-      write: () => Effect.fail(new OAuthCredentialStoreError()),
       commit: () => Effect.fail(new OAuthCredentialStoreError()),
       takeLogoutSnapshot: () => Effect.succeed(null),
       withRefreshLock: (body) => body,
@@ -445,7 +451,7 @@ describe("POSIX OAuth credential store", () => {
     try {
       const store = makeCredentialStore({ XDG_STATE_HOME: directory });
       const state = validState();
-      await Effect.runPromise(store.write(state));
+      await Effect.runPromise(store.commit(state.generation, state));
       expect(await Effect.runPromise(store.read)).toEqual(state);
       expect(statSync(join(directory, "umail")).mode & 0o077).toBe(0);
       expect(statSync(credentialPath({ XDG_STATE_HOME: directory })).mode & 0o077).toBe(0);

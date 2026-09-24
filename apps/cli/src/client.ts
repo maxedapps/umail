@@ -2,7 +2,6 @@ import {
   configFromEnvironment,
   makePublicApprovalClient,
   makeUmailClient,
-  publicApprovalConfigFromEnvironment,
   type PublicApprovalClientEnvironment,
   type UmailClientEnvironment,
 } from "@umail/api-contract/client";
@@ -23,7 +22,7 @@ export function publicApprovalClientFromEnv(
   env: PublicApprovalClientEnvironment,
   httpClient: HttpClient.HttpClient,
 ) {
-  return Effect.flatMap(publicApprovalConfigFromEnvironment(env), (config) =>
+  return Effect.flatMap(configFromEnvironment(env), (config) =>
     makePublicApprovalClient(config, httpClient),
   );
 }

@@ -1,8 +1,6 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
 
 import {
-  generateApprovalToken,
-  hashApprovalToken,
   NormalizedRfcMessageId,
   parseExternalMailAddress,
   parseMailDomain,
@@ -12,7 +10,7 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { accountStore } from "./harness.ts";
+import { accountStore, approvalMaterial } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -35,14 +33,14 @@ describe("account-store job execution", () => {
       preapproved: ["exempt@example.com"],
     });
     const mixed = await store.submitOutbound(
-      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
+      mcpSubmit(mailbox.id, REQUEST_A, "agent", {
         to: ["exempt@example.com"],
         cc: ["allowed@example.com"],
       }),
     );
     expect(mixed.job.state).toBe("waiting_approval");
     const exemptOnly = await store.submitOutbound(
-      await mcpSubmit(store, mailbox.id, REQUEST_B, "agent", {
+      mcpSubmit(mailbox.id, REQUEST_B, "agent", {
         to: ["exempt@example.com"],
       }),
     );
@@ -81,7 +79,7 @@ describe("account-store job execution", () => {
     const mailbox = await requireAddress(store, "inbox");
     await seedOauthPolicy(store, "agent", { kind: "allow" });
     const submitted = await store.submitOutbound(
-      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
+      mcpSubmit(mailbox.id, REQUEST_A, "agent", {
         to: ["recipient@example.com"],
       }),
     );
@@ -163,16 +161,12 @@ describe("account-store job execution", () => {
       claimExpiresAt: CLAIM_EXPIRES,
     });
     expect(claimed.kind).toBe("claimed");
-    if (claimed.kind !== "claimed") {
-      throw new Error("expected claim");
-    }
-    expect(
-      await store.settleExpiredInFlight({
-        jobId: submitted.job.jobId,
-        attemptId: claimed.attemptId,
-        nowIso: LATER,
-      }),
-    ).toMatchObject({ kind: "applied", job: { state: "unknown" } });
+
+    expect(await store.recoverOutbound({ nowIso: NOW, limit: 50 })).toEqual([]);
+    expect(await store.getOutboundJob(submitted.job.jobId, { kind: "operator" })).toMatchObject({
+      state: "in_flight",
+    });
+    expect(await store.recoverOutbound({ nowIso: LATER, limit: 50 })).toEqual([]);
     expect(
       await store.claimDispatch({
         jobId: submitted.job.jobId,
@@ -190,13 +184,12 @@ describe("account-store job execution", () => {
     const mailbox = await requireAddress(store, "inbox");
     await seedOauthPolicy(store, "agent", { kind: "requireApproval" });
     await seedOauthPolicy(store, "other", { kind: "allow" });
-    const pending = await store.submitOutbound(
-      await mcpSubmit(store, mailbox.id, REQUEST_A, "agent", {
-        to: ["recipient@example.com"],
-      }),
-    );
+    const pendingInput = mcpSubmit(mailbox.id, REQUEST_A, "agent", {
+      to: ["recipient@example.com"],
+    });
+    const pending = await store.submitOutbound(pendingInput);
     const other = await store.submitOutbound(
-      await mcpSubmit(store, mailbox.id, REQUEST_C, "other", {
+      mcpSubmit(mailbox.id, REQUEST_C, "other", {
         to: ["recipient@example.com"],
       }),
     );
@@ -206,8 +199,8 @@ describe("account-store job execution", () => {
       clientId: "agent",
     });
     expect(visible?.jobId).toBe(pending.job.jobId);
-    expect(JSON.stringify(visible)).not.toContain("secret-capability-ciphertext");
-    expect(JSON.stringify(visible)).not.toContain("ciphertext");
+    expect(JSON.stringify(visible)).not.toContain(pendingInput.approval.tokenHash);
+    expect(JSON.stringify(visible)).not.toContain(pendingInput.approval.approvalId);
     expect(
       await store.getOutboundJob(pending.job.jobId, { kind: "mcp", clientId: "other" }),
     ).toBeNull();
@@ -219,7 +212,7 @@ describe("account-store job execution", () => {
     expect(listedIds).toContain(pending.job.jobId);
     expect(listedIds).not.toContain(other.job.jobId);
     expect(listed.items.some((item) => item.purpose === "approval_notification")).toBe(true);
-    expect(JSON.stringify(listed)).not.toContain("secret-capability-ciphertext");
+    expect(JSON.stringify(listed)).not.toContain(pendingInput.approval.tokenHash);
     const operatorPage = await store.listOutboundJobs({
       viewer: { kind: "operator" },
       limit: 1,
@@ -237,7 +230,7 @@ describe("account-store job execution", () => {
     expect(operatorAll.items.map((item) => item.jobId)).toContain(other.job.jobId);
   });
 
-  it("claims the accepted Message-ID so a later reply threads onto the sent message", async () => {
+  it("records the accepted Message-ID so a later reply threads onto the sent message", async () => {
     const store = accountStore("jobs-rfc-claim");
     const mailbox = await requireAddress(store, "inbox");
     const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
@@ -257,12 +250,6 @@ describe("account-store job execution", () => {
         outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_ID },
       }),
     ).toMatchObject({ kind: "applied", job: { state: "accepted", rfcMessageId: PROVIDER_ID } });
-    const lookup = await store.inspectRfcLookup(PROVIDER_ID);
-    expect(lookup).toEqual({
-      rfcMessageId: PROVIDER_ID,
-      nodeId: nodeIdOf(submitted.job.threadHandle),
-      claimantNodeId: nodeIdOf(submitted.job.threadHandle),
-    });
 
     await store.acceptInboundWithReceipt({
       messageId: "inbound-reply",
@@ -302,25 +289,22 @@ describe("account-store job execution", () => {
       nowIso: LATER,
       outcome: { kind: "accepted", providerMessageId: "prov-2", rfcMessageId: PROVIDER_ID },
     });
-    expect(await store.inspectRfcLookup(PROVIDER_ID)).toEqual(lookup);
+    // Messages that share a Message-ID share a thread.
     expect(
       (
         await store.listThreadMessageSummaries(repeat.job.threadHandle, { mailboxScope: "all" })
-      ).items.map((item) => item.id),
-    ).toEqual([repeat.job.messageId]);
+      ).items
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["inbound-reply", submitted.job.messageId, repeat.job.messageId].sort());
   });
 });
-
-function nodeIdOf(threadHandle: string) {
-  return threadHandle.slice("node:".length);
-}
 
 function operatorSubmit(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     mailboxId,
-    mailDomain: DOMAIN,
     subject: "Direct",
     textBody: "body",
     htmlBody: null,
@@ -330,11 +314,11 @@ function operatorSubmit(mailboxId: string, requestId: string) {
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
+    approval: approvalMaterial(EXPIRES),
   };
 }
 
-async function mcpSubmit(
-  store: DurableObjectStub<AccountStoreTestHost>,
+function mcpSubmit(
   mailboxId: string,
   requestId: string,
   clientId: string,
@@ -343,44 +327,20 @@ async function mcpSubmit(
     readonly cc?: ReadonlyArray<string>;
   },
 ) {
-  const policy = await store.getMcpOAuthPolicy(clientId);
-  const sendMode = policy?.policy.sendMode;
-  const to = options.to ?? ["recipient@example.com"];
-  const cc = options.cc ?? [];
-  const needsApproval =
-    sendMode?.kind === "requireApproval" &&
-    [...to, ...cc].some(
-      (address) => !sendMode.preapprovedRecipients.includes(requireExternal(address)),
-    );
-  const input = {
+  return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "mcp" as const, clientId, label: `Client ${clientId}` },
     mailboxId,
-    mailDomain: DOMAIN,
     subject: "Hello",
     textBody: "body",
     htmlBody: null,
     hasRemoteImages: false,
-    to: to.map(contact),
-    cc: cc.map(contact),
+    to: (options.to ?? ["recipient@example.com"]).map(contact),
+    cc: (options.cc ?? []).map(contact),
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
-  };
-  if (!needsApproval) {
-    return input;
-  }
-  return {
-    ...input,
-    approval: {
-      tokenHash: await hashApprovalToken(generateApprovalToken()),
-      expiresAt: EXPIRES,
-      notification: {
-        keyVersion: "v1",
-        nonce: "n1",
-        ciphertext: "secret-capability-ciphertext",
-      },
-    },
+    approval: approvalMaterial(EXPIRES),
   };
 }
 

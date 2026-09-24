@@ -4,26 +4,19 @@ import { parseMailboxAddress } from "@umail/api-contract";
 import { createMailHtmlPolicy } from "@umail/mail-content";
 import { env, reset } from "cloudflare:test";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import PostalMime from "postal-mime";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { InboundPorts } from "../../src/mail/inbound.ts";
-import { processInbound } from "../../src/mail/inbound.ts";
+import { receiveInbound } from "../../src/mail/inbound.ts";
+import type { IndexReceiptWork } from "../../src/mail/indexing.ts";
 import { DEFAULT_MAX_RAW_BYTES, INBOUND_MIME_LIMITS, sha256Hex } from "../../src/mail/policy.ts";
-import {
-  ArchiveError,
-  consumeIndexReceipt,
-  IndexFailure,
-  type ArchiveStore,
-} from "../../src/mail/process-index.ts";
-import { ReceiptManifest, receiptManifestKey } from "../../src/mail/archive.ts";
-import { receiptClaimUntilIso } from "../../src/mail/policy.ts";
-import { FakeEmail } from "./fakes.ts";
+import { indexReceipt } from "../../src/mail/process-index.ts";
+import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";
 import {
   MAIL_CAPACITY_INBOX,
   MAIL_CAPACITY_SUPPORTED_FIXTURES,
   MAIL_CAPACITY_REJECTED_FIXTURES,
+  MAIL_CAPACITY_TEXT_ONLY_FIXTURES,
   MAIL_CAPACITY_ENCODED_MAXIMUM_FIXTURES,
   maximumRawAttachmentFixture,
   overLineCountFixture,
@@ -34,13 +27,12 @@ import {
   plainTextEml,
   type MailCapacityFixture,
 } from "./mail-capacity-fixtures.ts";
-import type { AccountStoreTestHost } from "./worker-host.ts";
+import type { AccountStoreTestHost } from "../account/worker-host.ts";
 
 type TestEnv = {
   readonly ARCHIVE: R2Bucket;
   readonly INDEX: Queue;
   readonly ACCOUNT_STORE: DurableObjectNamespace<AccountStoreTestHost>;
-  readonly ACCOUNT_ID: string;
 };
 
 const testEnv = env as TestEnv;
@@ -48,19 +40,16 @@ const testEnv = env as TestEnv;
 const INBOX = MAIL_CAPACITY_INBOX;
 const SENDER = "sender@example.com";
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
-const CLAIM_UNTIL_ISO = receiptClaimUntilIso(Date.parse(TEST_NOW_ISO));
 
 describe("MIME pre-allocation budgets", () => {
   beforeEach(async () => {
     await reset();
   });
 
-  it("rejects newline-heavy MIME before derived writes and records a terminal receipt failure", async () => {
+  it("rejects newline-heavy MIME before derived writes and records a policy failure", async () => {
     const outcome = await rejectPreparation(overLineCountFixture().raw);
     expect(outcome.receipt?.workState).toBe("policy_failed");
     expect(outcome.receipt?.policyError).toBe("mime_budget");
-    expect(outcome.receipt?.lastError).toBe("mime_budget");
-    expect(outcome.manifest?.policyFailure).toBe("mime_budget");
     expect(outcome.messageCount).toBe(0);
     expect(outcome.archiveKeys.filter((key) => key.startsWith("attachments/"))).toEqual([]);
   });
@@ -74,7 +63,6 @@ describe("MIME pre-allocation budgets", () => {
 
     const outcome = await rejectPreparation(overPartCountFixture().raw);
     expect(outcome.receipt?.policyError).toBe("mime_budget");
-    expect(outcome.receipt?.lastError).toBe("mime_budget");
     expect(outcome.messageCount).toBe(0);
     expect(outcome.archiveKeys.filter((key) => key.startsWith("attachments/"))).toEqual([]);
   });
@@ -82,16 +70,13 @@ describe("MIME pre-allocation budgets", () => {
   it("rejects a long References header before derived writes", async () => {
     const outcome = await rejectPreparation(overReferencesFixture().raw);
     expect(outcome.receipt?.policyError).toBe("mime_budget");
-    expect(outcome.receipt?.lastError).toBe("mime_budget");
     expect(outcome.messageCount).toBe(0);
   });
 
   it("indexes a short supported message within the measured budgets", async () => {
     const world = await createWorld("mime-budgets-ok");
     const raw = plainTextEml("hello");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    const accepted = await processInbound(email, world.ports);
-    expect(accepted.kind).toBe("accepted");
+    await receive(world, raw);
     await indexQueued(world);
     const listed = await world.stub.listMessageSummaries({ mailboxScope: "all" });
     expect(listed.items).toHaveLength(1);
@@ -103,11 +88,7 @@ describe("MIME pre-allocation budgets", () => {
   it("indexes separately padded base64 units near the configured line budget", async () => {
     const world = await createWorld("mime-budgets-padded-lines");
     const fixture = paddedBase64LinesFixture();
-    const accepted = await processInbound(
-      new FakeEmail({ to: INBOX, from: SENDER, raw: fixture.raw }),
-      world.ports,
-    );
-    expect(accepted.kind).toBe("accepted");
+    await receive(world, fixture.raw);
 
     await indexQueued(world);
 
@@ -120,11 +101,7 @@ describe("MIME pre-allocation budgets", () => {
     const world = await createWorld("mime-budgets-max-raw");
     const fixture = maximumRawAttachmentFixture();
     expect(fixture.raw.byteLength).toBe(DEFAULT_MAX_RAW_BYTES);
-    const accepted = await processInbound(
-      new FakeEmail({ to: INBOX, from: SENDER, raw: fixture.raw }),
-      world.ports,
-    );
-    expect(accepted.kind).toBe("accepted");
+    await receive(world, fixture.raw);
 
     await indexQueued(world);
 
@@ -141,11 +118,7 @@ describe("MIME pre-allocation budgets", () => {
       const fixture = make();
       const world = await createWorld(`mime-capacity-${fixture.id}`);
 
-      const accepted = await processInbound(
-        new FakeEmail({ to: INBOX, from: SENDER, raw: fixture.raw }),
-        world.ports,
-      );
-      expect(accepted.kind).toBe("accepted");
+      await receive(world, fixture.raw);
       await indexQueued(world);
 
       await expectIndexedFixture(world, fixture);
@@ -160,11 +133,7 @@ describe("MIME pre-allocation budgets", () => {
       expect(fixture.raw.byteLength).toBe(DEFAULT_MAX_RAW_BYTES);
       const world = await createWorld(`mime-capacity-${fixture.id}`);
 
-      const accepted = await processInbound(
-        new FakeEmail({ to: INBOX, from: SENDER, raw: fixture.raw }),
-        world.ports,
-      );
-      expect(accepted.kind).toBe("accepted");
+      await receive(world, fixture.raw);
       await indexQueued(world);
 
       await expectIndexedFixture(world, fixture);
@@ -191,87 +160,71 @@ describe("MIME pre-allocation budgets", () => {
 
       expect(outcome.receipt?.workState).toBe("policy_failed");
       expect(outcome.receipt?.policyError).toBe(fixture.expected.reason);
-      expect(outcome.receipt?.lastError).toBe(fixture.expected.reason);
-      expect(outcome.manifest?.policyFailure).toBe(fixture.expected.reason);
       expect(outcome.messageCount).toBe(0);
       expect(outcome.archiveKeys.filter((key) => key.startsWith("attachments/"))).toEqual([]);
+    },
+    60_000,
+  );
+
+  it.each(MAIL_CAPACITY_TEXT_ONLY_FIXTURES)(
+    "indexes the $id fixture without HTML when the sanitizer gives up",
+    async ({ make }) => {
+      const fixture = make();
+      const world = await createWorld(`mime-text-only-${fixture.id}`);
+
+      await receive(world, fixture.raw);
+      await indexQueued(world);
+
+      const receiptId = world.published[0]?.receiptId ?? "";
+      expect((await world.stub.getInboundReceipt(receiptId))?.workState).toBe("indexed");
+      const messages = await world.stub.listMessageSummaries({ mailboxScope: "all" });
+      expect(messages.items.map((message) => message.id)).toEqual([receiptId]);
+      expect((await world.stub.getMessageBody(receiptId, "all"))?.htmlBody).toBeNull();
     },
     60_000,
   );
 });
 
 type World = {
-  readonly ports: InboundPorts;
-  readonly published: { readonly version: 1; readonly receiptId: string }[];
+  readonly published: IndexReceiptWork[];
   readonly stub: DurableObjectStub<AccountStoreTestHost>;
 };
 
 async function createWorld(accountName: string): Promise<World> {
-  const published: { readonly version: 1; readonly receiptId: string }[] = [];
   const stub = testEnv.ACCOUNT_STORE.getByName(accountName);
   await seedInbox(stub);
-  const ports: InboundPorts = {
-    ARCHIVE: {
-      async get(key) {
-        const object = await testEnv.ARCHIVE.get(key);
-        if (object === null) return null;
-        return new Uint8Array(await object.arrayBuffer());
+  return { published: [], stub };
+}
+
+async function receive(world: World, raw: Uint8Array): Promise<void> {
+  const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+  await Effect.runPromise(
+    receiveInbound(email, {
+      archive: effectBucket(testEnv.ARCHIVE),
+      index: {
+        send: (body) =>
+          Effect.promise(async () => {
+            world.published.push(body);
+            await testEnv.INDEX.send(body);
+          }),
       },
-      async put(key, bytes) {
-        await testEnv.ARCHIVE.put(key, bytes);
-      },
-    },
-    INDEX: {
-      async send(payload) {
-        published.push(payload);
-        await testEnv.INDEX.send(payload);
-      },
-    },
-    ACCOUNT: {
-      registerInboundReceipt(input) {
-        return stub.registerInboundReceipt(input);
-      },
-      observeInboundForward(input) {
-        return stub.observeInboundForward(input);
-      },
-      getInboundReceipt(receiptId) {
-        return stub.getInboundReceipt(receiptId);
-      },
-      getAddressByMailbox(address) {
-        return stub.getAddressByMailbox(address);
-      },
-      getDestination(id) {
-        return stub.getDestination(id);
-      },
-    },
-    nowIso: () => TEST_NOW_ISO,
-  };
-  return { ports, published, stub };
+      account: effectAccount(world.stub),
+      nowIso: TEST_NOW_ISO,
+    }),
+  );
+  expect(email.rejectReason).toBeNull();
 }
 
 async function rejectPreparation(raw: Uint8Array) {
   const world = await createWorld(`mime-budget-${String(raw.byteLength)}`);
-  const accepted = await processInbound(
-    new FakeEmail({ to: INBOX, from: SENDER, raw }),
-    world.ports,
-  );
-  expect(accepted.kind).toBe("accepted");
+  await receive(world, raw);
   await indexQueued(world);
   await indexQueued(world);
-  const receiptId = world.published[0]?.receiptId ?? "";
-  const receipt = await world.stub.getInboundReceipt(receiptId);
-  const manifestStored = await testEnv.ARCHIVE.get(receiptManifestKey(receiptId));
-  const manifest =
-    manifestStored === null
-      ? null
-      : Schema.decodeSync(Schema.fromJsonString(ReceiptManifest))(
-          new TextDecoder().decode(await manifestStored.arrayBuffer()),
-        );
+  const receipt = await world.stub.getInboundReceipt(world.published[0]?.receiptId ?? "");
   const listed = await testEnv.ARCHIVE.list();
   const messages = await world.stub.listMessageSummaries({ mailboxScope: "all" });
   return {
     receipt,
-    manifest,
     messageCount: messages.items.length,
     archiveKeys: listed.objects.map((object) => object.key).sort(),
   };
@@ -283,45 +236,12 @@ async function indexQueued(world: World): Promise<void> {
     throw new Error("expected queued receipt work");
   }
   await Effect.runPromise(
-    consumeIndexReceipt(
-      receiptId,
-      r2ArchiveStore(),
-      createMailHtmlPolicy(),
-      {
-        getInboundReceipt: (id) =>
-          Effect.tryPromise({
-            try: () => world.stub.getInboundReceipt(id),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-        getAddressByMailbox: (address) =>
-          Effect.tryPromise({
-            try: () => world.stub.getAddressByMailbox(address),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-        claimInboundReceipt: (input) =>
-          Effect.tryPromise({
-            try: () => world.stub.claimInboundReceipt(input),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-        acceptInbound: (input) =>
-          Effect.tryPromise({
-            try: () => world.stub.acceptInbound(input),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-        completeInboundReceipt: (id) =>
-          Effect.tryPromise({
-            try: () => world.stub.completeInboundReceipt(id),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-        failInboundReceiptPolicy: (input) =>
-          Effect.tryPromise({
-            try: () => world.stub.failInboundReceiptPolicy(input),
-            catch: () => new IndexFailure({ reason: "sql_failed" }),
-          }),
-      },
-      TEST_NOW_ISO,
-      CLAIM_UNTIL_ISO,
-    ),
+    indexReceipt(receiptId, {
+      archive: effectBucket(testEnv.ARCHIVE),
+      account: effectAccount(world.stub),
+      htmlPolicy: createMailHtmlPolicy(),
+      nowIso: TEST_NOW_ISO,
+    }),
   );
 }
 
@@ -336,7 +256,6 @@ async function expectIndexedFixture(world: World, fixture: MailCapacityFixture):
   const receipt = await world.stub.getInboundReceipt(receiptId);
   expect(receipt?.workState).toBe("indexed");
   expect(receipt?.policyError).toBeNull();
-  expect(receipt?.lastError).toBeNull();
 
   const messages = await world.stub.listMessageSummaries({ mailboxScope: "all" });
   expect(messages.items).toHaveLength(1);
@@ -381,27 +300,6 @@ async function expectIndexedFixture(world: World, fixture: MailCapacityFixture):
     expect(bytes.byteLength).toBe(expected.byteLength);
     expect(await sha256Hex(bytes)).toBe(expected.sha256);
   }
-}
-
-function r2ArchiveStore(): ArchiveStore {
-  return {
-    get: (key) =>
-      Effect.tryPromise({
-        try: async () => {
-          const object = await testEnv.ARCHIVE.get(key);
-          if (object === null) return null;
-          return object.arrayBuffer();
-        },
-        catch: () => new ArchiveError({ reason: "read_failed" }),
-      }),
-    put: (key, bytes) =>
-      Effect.tryPromise({
-        try: async () => {
-          await testEnv.ARCHIVE.put(key, bytes);
-        },
-        catch: () => new ArchiveError({ reason: "write_failed" }),
-      }),
-  };
 }
 
 async function seedInbox(stub: DurableObjectStub<AccountStoreTestHost>): Promise<void> {

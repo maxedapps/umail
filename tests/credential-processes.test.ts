@@ -151,7 +151,7 @@ describe("credential transitions across processes", () => {
     );
     login.child.kill("SIGINT");
     const result = await login.finished;
-    expect(result.status === 130 || result.signal === "SIGINT").toBe(true);
+    expect(result.status).toBe(130);
     expectNoSecrets(result);
     const state = await readState(stateHome);
     expect(state).toMatchObject({ kind: "registered", clientId: CLIENT_ID });
@@ -194,7 +194,7 @@ describe("credential transitions across processes", () => {
     await waitFor(() => server.control.refreshTokenRequests > 0, 5_000, "hung refresh");
     list.child.kill("SIGINT");
     const result = await list.finished;
-    expect(result.status === 130 || result.signal === "SIGINT").toBe(true);
+    expect(result.status).toBe(130);
     expectNoSecrets(result);
     expectLockFilesGone(stateHome);
   }, 15_000);

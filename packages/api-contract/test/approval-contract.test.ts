@@ -15,7 +15,7 @@ import {
   PublicApprovalApi,
   UmailApi,
 } from "../src/api-spec.ts";
-import { makePublicApprovalClient, publicApprovalConfigFromEnvironment } from "../src/client.ts";
+import { configFromEnvironment, makePublicApprovalClient } from "../src/client.ts";
 
 const TOKEN = "a".repeat(64);
 const TRUSTED_HEADERS = {
@@ -92,7 +92,7 @@ describe("public approval API contract", () => {
   it("uses only UMAIL_URL and sends neither bearer nor global JSON headers", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const config = yield* publicApprovalConfigFromEnvironment({
+        const config = yield* configFromEnvironment({
           UMAIL_URL: "https://umail.example.test/",
         });
         const captured: Array<CapturedApprovalRequest> = [];
@@ -181,16 +181,16 @@ describe("public approval API contract", () => {
   it("rejects missing, non-origin, and non-HTTP public client URLs", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const missing = yield* Effect.flip(publicApprovalConfigFromEnvironment({}));
+        const missing = yield* Effect.flip(configFromEnvironment({}));
         expect(missing.message).toBe("UMAIL_URL is required");
         const path = yield* Effect.flip(
-          publicApprovalConfigFromEnvironment({
+          configFromEnvironment({
             UMAIL_URL: "https://umail.example.test/api",
           }),
         );
         expect(path.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
         const protocol = yield* Effect.flip(
-          publicApprovalConfigFromEnvironment({ UMAIL_URL: "file:///tmp/umail" }),
+          configFromEnvironment({ UMAIL_URL: "file:///tmp/umail" }),
         );
         expect(protocol.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
       }),

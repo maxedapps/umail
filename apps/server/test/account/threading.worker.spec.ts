@@ -10,8 +10,7 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { conversationIsEligible } from "../../src/account/threading.ts";
-import { accountStore, taggedName } from "./harness.ts";
+import { accountStore, approvalMaterial, failureOf, taggedName } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -21,213 +20,143 @@ const DOMAIN = requireMailDomain("umail.example.com");
 const REQUEST_A = "ccccccca-cccc-4ccc-8ccc-cccccccccccc";
 const PROVIDER_ID = Schema.decodeSync(NormalizedRfcMessageId)("<provider-1@cf.example>");
 
-describe("account-store threading commands", () => {
-  it("repairs a missing parent onto a stable child handle without rewriting descendants", async () => {
+type Store = DurableObjectStub<AccountStoreTestHost>;
+
+describe("account-store threading", () => {
+  it("joins a late parent into the child's thread and keeps the child's old thread id", async () => {
+    const store = accountStore("threading-late-parent");
+    const child = await store.acceptInboundWithReceipt(
+      mail("child", "<child@example.com>", "<parent@example.com>", { at: second(1) }),
+    );
+    expect(child.threadId).toBe("child");
+    expect(await thread(store, "child")).toEqual({
+      threadId: "child",
+      members: [["child", null]],
+    });
+
+    const parent = await store.acceptInboundWithReceipt(
+      mail("parent", "<parent@example.com>", null, { at: second(0) }),
+    );
+    expect(parent.threadId).toBe("parent");
+    const joined = {
+      threadId: "parent",
+      members: [
+        ["parent", null],
+        ["child", "parent"],
+      ],
+    };
+    expect(await thread(store, child.threadId)).toEqual(joined);
+    expect(await thread(store, "parent")).toEqual(joined);
+  });
+
+  it("puts children of a missing parent into one thread", async () => {
     const store = accountStore("threading-missing-parent");
-    const child = await store.acceptInboundWithReceipt(
-      mail("child", "<child@example.com>", "<parent@example.com>", "2026-01-01T00:00:01.000Z"),
+    const childA = await store.acceptInboundWithReceipt(
+      mail("child-a", "<child-a@example.com>", "<parent@example.com>", { at: second(1) }),
     );
-    expect(child.parentNodeId).not.toBeNull();
-    expect(child.threadHandle.startsWith("node:")).toBe(true);
-    const before = await store.resolveConversation(child.threadHandle);
-    expect(before.messages.map((message) => message.id)).toEqual(["child"]);
+    const childB = await store.acceptInboundWithReceipt(
+      mail("child-b", "<child-b@example.com>", "<parent@example.com>", { at: second(2) }),
+    );
+    expect(childB.threadId).toBe(childA.threadId);
+    expect(await thread(store, "child-b")).toEqual({
+      threadId: "child-a",
+      members: [
+        ["child-a", null],
+        ["child-b", null],
+      ],
+    });
 
-    const parent = await store.acceptInboundWithReceipt(
-      mail("parent", "<parent@example.com>", null, "2026-01-01T00:00:00.000Z"),
+    await store.acceptInboundWithReceipt(
+      mail("parent", "<parent@example.com>", null, { at: second(0) }),
     );
-    expect(parent.nodeId).toBe(child.parentNodeId);
-    expect(parent.claimedRfcMessageId).toBe("<parent@example.com>");
-    const after = await store.resolveConversation(child.threadHandle);
-    expect(after.nodeId).toBe(child.nodeId);
-    expect(after.messages.map((message) => message.id)).toEqual(["parent", "child"]);
-    expect(after.messages.find((message) => message.id === "child")?.parentNodeId).toBe(
-      parent.nodeId,
-    );
-  });
-
-  it("completes the parent when the child is already in the same component", async () => {
-    const store = accountStore("threading-same-component");
-    const child = await store.acceptInboundWithReceipt(
-      mail("child", "<child@example.com>", "<parent@example.com>"),
-    );
-    const parent = await store.acceptInboundWithReceipt(
-      mail("parent", "<parent@example.com>", null),
-    );
-    const conversation = await store.resolveConversation(child.threadHandle);
-    expect(conversation.componentRootId).toBe(
-      (await store.resolveConversation(parent.threadHandle)).componentRootId,
-    );
-    expect(conversation.messages.find((message) => message.id === "child")?.parentNodeId).toBe(
-      parent.nodeId,
-    );
-  });
-
-  it("keeps a later duplicate of the same Message-ID out of the claimed component", async () => {
-    const store = accountStore("threading-duplicate-last");
-    const first = await store.acceptInboundWithReceipt(mail("first", "<dup@example.com>", null));
-    const second = await store.acceptInboundWithReceipt(
-      mail("second", "<dup@example.com>", null, "2026-01-01T00:00:01.000Z"),
-    );
-    expect(second.claimedRfcMessageId).toBeNull();
-    expect(second.nodeId).not.toBe(first.nodeId);
-    expect((await store.resolveConversation(first.threadHandle)).messages.map((m) => m.id)).toEqual(
-      ["first"],
-    );
-    expect(
-      (await store.resolveConversation(second.threadHandle)).messages.map((m) => m.id),
-    ).toEqual(["second"]);
-    const lookup = await store.inspectRfcLookup("<dup@example.com>");
-    expect(lookup).toEqual({
-      rfcMessageId: "<dup@example.com>",
-      nodeId: first.nodeId,
-      claimantNodeId: first.nodeId,
+    expect(await thread(store, "child-b")).toEqual({
+      threadId: "parent",
+      members: [
+        ["parent", null],
+        ["child-a", "parent"],
+        ["child-b", "parent"],
+      ],
     });
   });
 
-  it("does not coalesce an inbound copy onto an outbound Message-ID claim", async () => {
-    const store = accountStore("threading-no-coalesce");
-    const outbound = await store.acceptOutbound(mail("out-1", "<out-1@cf.example>", null));
-    const inbound = await store.acceptInboundWithReceipt(
-      mail("in-copy", "<out-1@cf.example>", null, "2026-01-01T00:00:01.000Z"),
+  it("threads a reply whose direct parent is missing through an older reference (F6)", async () => {
+    const store = accountStore("threading-f6");
+    await store.acceptInboundWithReceipt(mail("a", "<a@example.com>", null, { at: second(0) }));
+    const c = await store.acceptInboundWithReceipt(
+      mail("c", "<c@example.com>", "<b@example.com>", {
+        at: second(2),
+        references: "<a@example.com> <b@example.com>",
+      }),
     );
-    expect(inbound.nodeId).not.toBe(outbound.nodeId);
-    expect(
-      (await store.resolveConversation(outbound.threadHandle)).messages.map(
-        (message) => message.id,
-      ),
-    ).toEqual(["out-1"]);
-    expect(
-      (await store.resolveConversation(inbound.threadHandle)).messages.map((message) => message.id),
-    ).toEqual(["in-copy"]);
+    expect(c.threadId).toBe("a");
+    expect(await thread(store, "c")).toEqual({
+      threadId: "a",
+      members: [
+        ["a", null],
+        ["c", null],
+      ],
+    });
+
+    await store.acceptInboundWithReceipt(
+      mail("b", "<b@example.com>", "<a@example.com>", { at: second(1) }),
+    );
+    expect(await thread(store, "a")).toEqual({
+      threadId: "a",
+      members: [
+        ["a", null],
+        ["b", "a"],
+        ["c", "b"],
+      ],
+    });
   });
 
-  it("ignores a cycling parent edge and retains both messages in the component", async () => {
-    const store = accountStore("threading-cycle");
-    const first = await store.acceptInboundWithReceipt(
-      mail("a", "<a@example.com>", "<b@example.com>"),
+  it("merges two threads bridged by a later message and keeps both old ids resolving", async () => {
+    const store = accountStore("threading-merge");
+    const a = await store.acceptInboundWithReceipt(
+      mail("a", "<a@example.com>", null, { at: second(0) }),
     );
-    const second = await store.acceptInboundWithReceipt(
-      mail("b", "<b@example.com>", "<a@example.com>", "2026-01-01T00:00:01.000Z"),
+    const c = await store.acceptInboundWithReceipt(
+      mail("c", "<c@example.com>", "<b@example.com>", { at: second(2), references: null }),
     );
-    expect(second.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(["parent_cycle"]);
-    expect(second.parentNodeId).toBeNull();
-    const conversation = await store.resolveConversation(first.threadHandle);
-    expect(conversation.messages.map((message) => message.id).sort()).toEqual(["a", "b"]);
+    expect(c.threadId).not.toBe(a.threadId);
+
+    const b = await store.acceptInboundWithReceipt(
+      mail("b", "<b@example.com>", "<a@example.com>", { at: second(1), references: null }),
+    );
+    expect(b.threadId).toBe(a.threadId);
+    const merged = {
+      threadId: "a",
+      members: [
+        ["a", null],
+        ["b", "a"],
+        ["c", "b"],
+      ],
+    };
+    expect(await thread(store, a.threadId)).toEqual(merged);
+    expect(await thread(store, c.threadId)).toEqual(merged);
   });
 
-  it("joins concurrent descendants when the shared parent later arrives", async () => {
-    const store = accountStore("threading-concurrent");
-    const childA = await store.acceptInboundWithReceipt(
-      mail("child-a", "<child-a@example.com>", "<parent@example.com>"),
+  it("puts messages that share a Message-ID into one thread", async () => {
+    const store = accountStore("threading-shared-message-id");
+    const outbound = await store.acceptOutbound(
+      mail("out-1", "<out-1@cf.example>", null, { at: second(0) }),
     );
-    const childB = await store.acceptInboundWithReceipt(
-      mail("child-b", "<child-b@example.com>", "<parent@example.com>", "2026-01-01T00:00:01.000Z"),
+    const copy = await store.acceptInboundWithReceipt(
+      mail("in-copy", "<out-1@cf.example>", null, { at: second(1) }),
     );
-    expect(childA.parentNodeId).toBe(childB.parentNodeId);
-    const parent = await store.acceptInboundWithReceipt(
-      mail("parent", "<parent@example.com>", null),
-    );
-    const conversation = await store.resolveConversation(childA.threadHandle);
-    expect(conversation.messages.map((message) => message.id).sort()).toEqual([
-      "child-a",
-      "child-b",
-      "parent",
+    expect(copy.threadId).toBe(outbound.threadId);
+    expect((await thread(store, "in-copy")).members.map(([id]) => id)).toEqual([
+      "out-1",
+      "in-copy",
     ]);
-    expect(parent.nodeId).toBe(childA.parentNodeId);
   });
 
-  it("rolls back a conflicting persist so no placeholder is left behind", async () => {
-    const store = accountStore("threading-rollback");
-    await store.acceptInboundWithReceipt(mail("same", "<first@example.com>", null));
-    let failure: unknown;
-    try {
-      await store.acceptInboundWithReceipt(
-        mail("same", "<second@example.com>", "<missing@example.com>", "2026-01-01T00:00:01.000Z"),
-      );
-    } catch (cause) {
-      failure = cause;
-    }
-    expect(taggedName(failure)).toBe("MessageConflictError");
-    expect(await store.inspectRfcLookup("<missing@example.com>")).toBeNull();
-    expect(await store.inspectRfcLookup("<second@example.com>")).toBeNull();
-    const first = await store.inspectRfcLookup("<first@example.com>");
-    expect(first?.claimantNodeId).not.toBeNull();
-  });
-
-  it("records threading_limited and leaves a long-chain tail independently addressable", async () => {
-    const store = accountStore("threading-budget");
-    const budget = 3;
-    await store.acceptInboundWithReceipt(mail("m1", "<m1@example.com>", null), budget);
-    await store.acceptInboundWithReceipt(
-      mail("m2", "<m2@example.com>", "<m1@example.com>"),
-      budget,
-    );
-    await store.acceptInboundWithReceipt(
-      mail("m3", "<m3@example.com>", "<m2@example.com>"),
-      budget,
-    );
-    const fourth = await store.acceptInboundWithReceipt(
-      mail("m4", "<m4@example.com>", "<m3@example.com>"),
-      budget,
-    );
-    const limited = await store.acceptInboundWithReceipt(
-      mail("m5", "<m5@example.com>", "<m4@example.com>"),
-      budget,
-    );
-    expect(limited.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(["threading_limited"]);
-    expect(limited.parentNodeId).toBeNull();
-    expect(
-      (await store.resolveConversation(limited.threadHandle)).messages.map((message) => message.id),
-    ).toEqual(["m5"]);
-    expect(
-      (await store.resolveConversation(fourth.threadHandle)).messages.map((message) => message.id),
-    ).toEqual(["m1", "m2", "m3", "m4"]);
-  });
-
-  it("persists mailbox ids so a conversation is eligible from any live member mailbox", async () => {
-    const store = accountStore("threading-visibility");
-    const parent = await store.acceptInboundWithReceipt(
-      mail("parent", "<parent@example.com>", null, "2026-01-01T00:00:00.000Z", "mbox-1"),
-    );
-    await store.acceptInboundWithReceipt(
-      mail(
-        "child",
-        "<child@example.com>",
-        "<parent@example.com>",
-        "2026-01-01T00:00:01.000Z",
-        "mbox-2",
-      ),
-    );
-    const conversation = await store.resolveConversation(parent.threadHandle);
-    expect(conversation.messages.map((message) => message.mailboxId)).toEqual(["mbox-1", "mbox-2"]);
-    expect(conversationIsEligible(conversation.messages, ["mbox-1"])).toBe(true);
-    expect(conversationIsEligible(conversation.messages, ["mbox-2"])).toBe(true);
-    expect(conversationIsEligible(conversation.messages, ["mbox-3"])).toBe(false);
-    expect(conversationIsEligible(conversation.messages, [])).toBe(false);
-  });
-
-  it("rejects an invalid or unknown thread handle", async () => {
-    const store = accountStore("threading-handle-error");
-    let invalid: unknown;
-    try {
-      await store.resolveConversation("rfc:not-a-node");
-    } catch (cause) {
-      invalid = cause;
-    }
-    expect(taggedName(invalid)).toBe("ThreadHandleError");
-    let missing: unknown;
-    try {
-      await store.resolveConversation("node:550e8400-e29b-41d4-a716-446655440000");
-    } catch (cause) {
-      missing = cause;
-    }
-    expect(taggedName(missing)).toBe("ThreadHandleError");
-  });
-
-  it("adopts the placeholder a reply created before the send was accepted", async () => {
-    const store = accountStore("threading-late-claim");
+  it("joins a reply that arrives before the send completes to the sent thread", async () => {
+    const store = accountStore("threading-early-reply");
     const mailbox = await requireAddress(store, "inbox");
     const submitted = await store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A));
+    const sentId = submitted.job.messageId;
+    expect(submitted.job.threadHandle).toBe(sentId);
     const claimed = await store.claimDispatch({
       jobId: submitted.job.jobId,
       nowIso: NOW,
@@ -236,59 +165,84 @@ describe("account-store threading commands", () => {
     if (claimed.kind !== "claimed") {
       throw new Error("expected claim");
     }
-    const reply = await store.acceptInboundWithReceipt(
-      mail(
-        "early-reply",
-        "<early@example.com>",
-        PROVIDER_ID,
-        "2026-01-01T00:00:01.000Z",
-        mailbox.id,
-      ),
-    );
-    const placeholderNodeId = reply.parentNodeId;
-    if (placeholderNodeId === null) {
-      throw new Error("expected a placeholder parent");
-    }
-    expect(
-      (await store.resolveConversation(submitted.job.threadHandle)).messages.map(
-        (message) => message.id,
-      ),
-    ).toEqual([submitted.job.messageId]);
-
-    expect(
-      await store.completeAttempt({
-        jobId: submitted.job.jobId,
-        attemptId: claimed.attemptId,
-        nowIso: LATER,
-        outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_ID },
+    const early = await store.acceptInboundWithReceipt(
+      mail("early-reply", "<early@example.com>", PROVIDER_ID, {
+        at: second(1),
+        mailboxId: mailbox.id,
       }),
-    ).toMatchObject({ kind: "applied", job: { state: "accepted" } });
+    );
+    expect(early.threadId).toBe("early-reply");
+    expect((await thread(store, sentId)).members).toEqual([[sentId, null]]);
 
-    const page = await store.listThreadMessageSummaries(submitted.job.threadHandle, {
-      mailboxScope: "all",
+    const completed = await store.completeAttempt({
+      jobId: submitted.job.jobId,
+      attemptId: claimed.attemptId,
+      nowIso: LATER,
+      outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_ID },
     });
-    expect(page.items.map((item) => item.id).sort()).toEqual(
-      ["early-reply", submitted.job.messageId].sort(),
+    expect(completed).toMatchObject({
+      kind: "applied",
+      job: { state: "accepted", threadHandle: sentId },
+    });
+    const joined = {
+      threadId: sentId,
+      members: [
+        [sentId, null],
+        ["early-reply", sentId],
+      ],
+    };
+    expect(await thread(store, sentId)).toEqual(joined);
+    expect(await thread(store, early.threadId)).toEqual(joined);
+  });
+
+  it("rejects a duplicate message id and leaves the stored message untouched", async () => {
+    const store = accountStore("threading-duplicate-id");
+    await store.acceptInboundWithReceipt(mail("same", "<first@example.com>", null));
+    // An indexed receipt makes a repeated inbound accept a no-op, so the outbound path hits the id.
+    const failure = await failureOf(store, (host) =>
+      host.acceptOutbound(
+        mail("same", "<second@example.com>", "<missing@example.com>", { at: second(1) }),
+      ),
     );
-    expect(page.items.find((item) => item.id === "early-reply")?.parentMessageId).toBe(
-      submitted.job.messageId,
+    expect(taggedName(failure)).toBe("MessageConflictError");
+
+    const page = await store.listThreadMessageSummaries("same", { mailboxScope: "all" });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: "same",
+      rfcMessageId: "<first@example.com>",
+      inReplyToRfcMessageId: null,
+      references: [],
+    });
+    const probe = await store.acceptInboundWithReceipt(
+      mail("probe", "<probe@example.com>", "<missing@example.com>", { at: second(2) }),
     );
-    const claimedConversation = await store.resolveConversation(submitted.job.threadHandle);
-    expect((await store.resolveConversation(reply.threadHandle)).componentRootId).toBe(
-      claimedConversation.componentRootId,
+    expect(probe.threadId).toBe("probe");
+  });
+
+  it("answers an unknown thread id with ThreadHandleError", async () => {
+    const store = accountStore("threading-unknown-id");
+    const failure = await failureOf(store, (host) =>
+      host.listThreadMessageSummaries("no-such-message", { mailboxScope: "all" }),
     );
-    expect((await store.resolveConversation(`node:${placeholderNodeId}`)).componentRootId).toBe(
-      claimedConversation.componentRootId,
-    );
+    expect(taggedName(failure)).toBe("ThreadHandleError");
   });
 });
+
+// The thread a message id resolves to, with each live member's id and parent message id.
+async function thread(store: Store, messageId: string) {
+  const page = await store.listThreadMessageSummaries(messageId, { mailboxScope: "all" });
+  return {
+    threadId: page.threadHandle,
+    members: page.items.map((item) => [item.id, item.parentMessageId]),
+  };
+}
 
 function operatorSubmit(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     mailboxId,
-    mailDomain: DOMAIN,
     subject: "Direct",
     textBody: "body",
     htmlBody: null,
@@ -298,10 +252,11 @@ function operatorSubmit(mailboxId: string, requestId: string) {
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
+    approval: approvalMaterial(NOW),
   };
 }
 
-async function requireAddress(store: DurableObjectStub<AccountStoreTestHost>, localPart: string) {
+async function requireAddress(store: Store, localPart: string) {
   const created = await store.createAddress(localPart, DOMAIN, localPart, NOW);
   if (created === null) {
     throw new Error(`expected address ${localPart}`);
@@ -325,19 +280,24 @@ function requireExternal(raw: string) {
   return parsed.address;
 }
 
+function second(offset: number): string {
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, offset)).toISOString();
+}
+
+// `nowIso` follows `occurredAt`, so the oldest message is also the oldest thread and wins a merge.
 function mail(
   messageId: string,
   rfcMessageId: string | null,
   inReplyToHeader: string | null,
-  occurredAt = "2026-01-01T00:00:00.000Z",
-  mailboxId = "mbox-1",
+  options: { at?: string; references?: string | null; mailboxId?: string } = {},
 ) {
+  const occurredAt = options.at ?? NOW;
   return {
     messageId,
-    mailboxId,
+    mailboxId: options.mailboxId ?? "mbox-1",
     rfcMessageId,
     inReplyToHeader,
-    referencesHeader: inReplyToHeader,
+    referencesHeader: options.references === undefined ? inReplyToHeader : options.references,
     occurredAt,
     nowIso: occurredAt,
     parsedDate: null,

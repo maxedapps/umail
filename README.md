@@ -6,7 +6,7 @@ There is no IMAP/SMTP server or browser mailbox. The browser handles login, clie
 
 Limits include 20 MiB raw inbound mail, 50 inbound attachments, and 50 recipients per outgoing message.
 
-> **Production replaces the entire Cloudflare zone's email catch-all**, even when using a subdomain. Explicit routing rules take precedence; AgentMail rejects recipients without an active mailbox. Deploy only where you intend to control catch-all routing.
+> **Every stage enables Cloudflare Email Routing for its mail domain's entire zone, and it stays enabled after the stage is destroyed. Production also replaces the zone's email catch-all**, even when using a subdomain. Explicit routing rules take precedence; AgentMail rejects recipients without an active mailbox. Deploy only where you intend to control the zone's email routing.
 
 ## Prerequisites
 
@@ -27,16 +27,16 @@ cp .env.example .env
 
 Edit `.env`. Replace example domains with your own; keep credentials private.
 
-| Variable                  | Required for          | Value                                                                 |
-| ------------------------- | --------------------- | --------------------------------------------------------------------- |
-| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path. |
-| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox; the only operator allowed to sign in.                 |
-| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                            |
-| `UMAIL_NOTIFICATION_KEY`  | Deployment            | 32 random bytes encoded as base64url; keep stable across deployments. |
-| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                          |
-| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell.  |
-| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                  |
-| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.            |
+| Variable                  | Required for          | Value                                                                                      |
+| ------------------------- | --------------------- | ------------------------------------------------------------------------------------------ |
+| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                      |
+| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox; the only operator allowed to sign in.                                      |
+| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                 |
+| `UMAIL_NOTIFICATION_KEY`  | Deployment            | 32 random bytes encoded as base64url; keep stable across deployments.                      |
+| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                               |
+| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`. |
+| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                       |
+| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                 |
 
 Generate the notification key and copy the output into `.env`:
 
@@ -89,7 +89,7 @@ pnpm umail messages compose \
 pnpm umail jobs get --id <job-id>
 ```
 
-The operator CLI sends without approval. Sending is asynchronous. `accepted` means provider acceptance, not recipient delivery; investigate `unknown` before resending. For retries, pass `--request-id <uuid>` and reuse the same ID and payload.
+The operator CLI sends without approval. Sending is asynchronous and can take about a minute. `accepted` means provider acceptance, not recipient delivery; `rejected` means the provider refused or failed the message; investigate `unknown` before resending. To retry a submit whose response was lost, pass your own `--request-id <uuid>` and reuse it with the identical payload; this cannot send twice. Any new send, including one after `rejected` or an investigated `unknown`, needs a new ID; omit the flag to generate one.
 
 For forwarding, run `pnpm umail destinations create --email <destination>`, follow the verification email, refresh with `destinations get --id <destination-id>`, then run `forwarding associate --address-id <mailbox-id> --destination-id <destination-id>`.
 
@@ -101,7 +101,7 @@ For another machine, run `pnpm build:clients`, copy `dist/clients/umail.mjs`, an
 
 Add `https://mail.example.com/mcp` as a remote HTTP MCP server in a client supporting OAuth discovery and dynamic registration. The server advertises itself as **AgentMail** with an icon at `https://mail.example.com/icon.png`. Sign in as the operator and approve access; no API key is needed.
 
-Tools: `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messages`, `umail_get_thread`, `umail_list_thread_messages`, `umail_get_message`, `umail_get_message_headers`, `umail_set_thread_read_state`, `umail_send_message`, `umail_submit_message`, `umail_get_job`.
+Tools: `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messages`, `umail_get_thread`, `umail_get_message`, `umail_get_message_headers`, `umail_set_thread_read_state`, `umail_send_message`, `umail_reply_to_message`, `umail_get_job`.
 
 **New clients can initially read all mailboxes.** Sending requires approval at the operator inbox; deletion and administration are disabled. Connect only trusted clients. After the first authenticated request, use `https://mail.example.com/clients` to narrow mailbox/recipient permissions, change sending policy, disable, or revoke access.
 
@@ -118,6 +118,6 @@ pnpm exec alchemy deploy --stage prod --profile default
 
 Password changes require redeployment and invalidate existing sessions/grants. New Recovery cron triggers can take up to 15 minutes to start; verify a mail round trip after deployment. **Deleting a conversation hides it but does not erase its archived raw objects.**
 
-This project uses prerelease Alchemy/Effect dependencies and maintained patches. There are no stable release or support guarantees yet. See [operations and recovery limits](docs/operations.md).
+This project uses prerelease Alchemy/Effect dependencies and [maintained patches](docs/operations.md#dependency-patches). There are no stable release or support guarantees yet. See [operations and recovery limits](docs/operations.md).
 
 Licensed under [MIT](LICENSE.md). The Oxlint plugin in `tools/oxlint/anti-slop` is vendored from [anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy (MIT).

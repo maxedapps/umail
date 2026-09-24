@@ -5,7 +5,13 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import { MailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
-import { layoutForStage, rootDomain, stageHostnameLabel, stageSendsMail } from "../src/site.ts";
+import {
+  layoutForStage,
+  operatorEmail,
+  rootDomain,
+  stageHostnameLabel,
+  stageSendsMail,
+} from "../src/site.ts";
 
 const ROOT = Schema.decodeSync(MailDomain)("umail.example.com");
 
@@ -88,6 +94,17 @@ describe("rootDomain", () => {
   it("rejects an invalid UMAIL_DOMAIN", () => {
     expect(Exit.isFailure(readRoot({ UMAIL_DOMAIN: "" }))).toBe(true);
     expect(Exit.isFailure(readRoot({ UMAIL_DOMAIN: "inbox@umail.example.com" }))).toBe(true);
+  });
+});
+
+describe("operatorEmail", () => {
+  it("parses UMAIL_OPERATOR_EMAIL and rejects an invalid address", () => {
+    const read = (value: string) =>
+      Effect.runSyncExit(
+        operatorEmail.parse(ConfigProvider.fromEnv({ env: { UMAIL_OPERATOR_EMAIL: value } })),
+      );
+    expect(read(" Operator@Example.NET ")).toStrictEqual(Exit.succeed("Operator@example.net"));
+    expect(Exit.isFailure(read("not-an-address"))).toBe(true);
   });
 });
 

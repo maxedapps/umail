@@ -17,7 +17,7 @@ import {
   renderMcpClientsPage,
 } from "../api/human-pages/oauth-management.ts";
 import { humanPageHeaders } from "../api/human-pages/response.ts";
-import type { ApiAccountStore } from "../account/worker.ts";
+import type { AccountStoreRpc } from "../account/worker.ts";
 import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type UmailBetterAuth } from "./options.ts";
 import { cookieMutationAllowed } from "./runtime-surface.ts";
 
@@ -36,7 +36,7 @@ const DeviceDecisionForm = Schema.Struct({ userCode: Schema.String });
 
 export type OAuthRouteDependencies = {
   readonly auth: UmailBetterAuth;
-  readonly account: ApiAccountStore;
+  readonly account: AccountStoreRpc;
   readonly applicationUrl: URL;
   readonly operatorId: string;
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;

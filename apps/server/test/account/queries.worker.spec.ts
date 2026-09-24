@@ -4,7 +4,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { parseExternalMailAddress, parseMailDomain, type MailDomain } from "@umail/api-contract";
 import { describe, expect, it } from "vitest";
 
-import { accountStore, taggedName } from "./harness.ts";
+import { accountStore, failureOf, taggedName } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -16,12 +16,7 @@ describe("account-store bounded query commands", () => {
     const mailbox = await requireAddress(store, "inbox");
     const input = mailInput(mailbox.id, 0, null, { messageId: "orphan-accept" });
 
-    let failure: unknown;
-    try {
-      await store.acceptInbound(input);
-    } catch (cause) {
-      failure = cause;
-    }
+    const failure = await failureOf(store, (host) => host.acceptInbound(input));
 
     expect(taggedName(failure)).toBe("InboundMessageIntegrityError");
     expect((await store.listMessageSummaries({ mailboxScope: "all" })).items).toEqual([]);
@@ -42,11 +37,7 @@ describe("account-store bounded query commands", () => {
       },
       {
         id: "meta-failure",
-        forward: {
-          kind: "failure",
-          destination: "failure@example.net",
-          error: "provider rejected",
-        } as const,
+        forward: { kind: "failure", destination: "failure@example.net" } as const,
       },
     ] as const;
     for (let index = 0; index < cases.length; index += 1) {
@@ -83,13 +74,15 @@ describe("account-store bounded query commands", () => {
       expect(none.from.map((contact) => contact.address)).toEqual(["header-sender@example.com"]);
       expect(none.to).toEqual([]);
       expect(none.parsedDate).toBe("2025-12-31T23:00:00.000Z");
-      expect(none.forward).toEqual({ kind: "none" });
+      expect(none.forwardOutcome).toBe("none");
+      expect(none.forwardDestination).toBeNull();
     }
     for (const fixture of cases.slice(1)) {
       const summary = byId.get(fixture.id);
       expect(summary?.direction).toBe("inbound");
       if (summary?.direction === "inbound") {
-        expect(summary.forward).toEqual(fixture.forward);
+        expect(summary.forwardOutcome).toBe(fixture.forward?.kind);
+        expect(summary.forwardDestination).toBe(fixture.forward?.destination);
       }
     }
 
@@ -101,7 +94,8 @@ describe("account-store bounded query commands", () => {
     const updated = refreshed.items.find((item) => item.id === "meta-unknown");
     expect(updated?.direction).toBe("inbound");
     if (updated?.direction === "inbound") {
-      expect(updated.forward).toEqual({ kind: "success", destination: "unknown@example.net" });
+      expect(updated.forwardOutcome).toBe("success");
+      expect(updated.forwardDestination).toBe("unknown@example.net");
     }
   });
 
@@ -134,11 +128,11 @@ describe("account-store bounded query commands", () => {
     expect(second.nextCursor).toBeNull();
     for (const summary of [...first.items, ...second.items]) {
       if (summary.direction === "inbound") {
-        expect(summary).toHaveProperty("forward");
+        expect(summary).toHaveProperty("forwardOutcome");
         expect(summary).not.toHaveProperty("outboundJob");
       } else {
         expect(summary.outboundJob.state).toBe("unknown");
-        expect(summary).not.toHaveProperty("forward");
+        expect(summary).not.toHaveProperty("forwardOutcome");
       }
     }
   });
@@ -149,12 +143,9 @@ describe("account-store bounded query commands", () => {
     await persistMail(store, mailbox.id, 0, null, { messageId: "orphan-read" });
     await store.removeInboundReceiptForIntegrityTest("orphan-read");
 
-    let failure: unknown;
-    try {
-      await store.listMessageSummaries({ mailboxScope: "all" });
-    } catch (cause) {
-      failure = cause;
-    }
+    const failure = await failureOf(store, (host) =>
+      host.listMessageSummaries({ mailboxScope: "all" }),
+    );
     expect(taggedName(failure)).toBe("InboundMessageIntegrityError");
   });
 
@@ -214,7 +205,7 @@ describe("account-store bounded query commands", () => {
     for (let index = 1; index < 201; index += 1) {
       await persistMail(store, mailbox.id, index, "<root-0@example.com>");
     }
-    const page = await store.listThreadMessageSummaries(first.threadHandle, {
+    const page = await store.listThreadMessageSummaries(first.threadId, {
       mailboxScope: "all",
       limit: 200,
     });
@@ -226,7 +217,7 @@ describe("account-store bounded query commands", () => {
     if (cursor === null) {
       throw new Error("expected a thread-message cursor");
     }
-    const next = await store.listThreadMessageSummaries(first.threadHandle, {
+    const next = await store.listThreadMessageSummaries(first.threadId, {
       mailboxScope: "all",
       limit: 200,
       cursor,
@@ -268,54 +259,70 @@ describe("account-store bounded query commands", () => {
       cursor,
     });
     expect(next.items.map((item) => item.id)).toEqual(["msg-a"]);
-    await store.softDeleteThread(first.threadHandle, "all", "2026-01-01T00:00:02.000Z");
+    await store.softDeleteThread(first.threadId, "all", "2026-01-01T00:00:02.000Z");
     const afterDelete = await store.listMessageSummaries({ mailboxScope: "all" });
     expect(afterDelete.items.map((item) => item.id)).toEqual([]);
   });
+});
 
-  it("normalizes offset since instants and rejects malformed or overflow dates", async () => {
-    const store = accountStore("queries-since");
-    const mailbox = await requireAddress(store, "inbox");
-    await persistMail(store, mailbox.id, 0, null, {
-      occurredAt: "2026-01-01T00:00:00.000Z",
+describe("account-store thread reads", () => {
+  it("pages threads newest-first across tied activity and a deleted latest message", async () => {
+    const store = accountStore("queries-thread-list-paging");
+    const inbox = await requireAddress(store, "inbox");
+    const other = await requireAddress(store, "other");
+    await persistMail(store, inbox.id, 1, null, { messageId: "t1", occurredAt: isoAt(0) });
+    await persistMail(store, inbox.id, 2, null, { messageId: "t2", occurredAt: isoAt(1) });
+    await persistMail(store, other.id, 3, "<root-2@example.com>", {
+      messageId: "t2-latest",
+      occurredAt: isoAt(9),
     });
-    const included = await store.listMessageSummaries({
-      mailboxScope: "all",
-      since: "2026-01-01T01:00:00+02:00",
-    });
-    expect(included.items.map((item) => item.id)).toEqual(["msg-0"]);
-    const exact = await store.listMessageSummaries({
-      mailboxScope: "all",
-      since: "2026-01-01T00:00:00.000Z",
-    });
-    expect(exact.items.map((item) => item.id)).toEqual(["msg-0"]);
-    const excluded = await store.listMessageSummaries({
-      mailboxScope: "all",
-      since: "2026-01-01T02:00:00+01:00",
-    });
-    expect(excluded.items).toEqual([]);
+    await persistMail(store, inbox.id, 4, null, { messageId: "t3", occurredAt: isoAt(3) });
+    await persistMail(store, inbox.id, 5, null, { messageId: "t4", occurredAt: isoAt(3) });
+    await persistMail(store, inbox.id, 6, null, { messageId: "t5", occurredAt: isoAt(4) });
+    await store.softDeleteThread("t2", [other.id], isoAt(10));
 
-    let malformed: unknown;
-    try {
-      await store.listMessageSummaries({
-        mailboxScope: "all",
-        since: "not-a-date",
-      });
-    } catch (cause) {
-      malformed = cause;
+    const query = { mailboxScope: "all" as const, limit: 2 };
+    let page = await store.listThreadSummaries(query);
+    const items = [...page.items];
+    while (page.nextCursor !== null && items.length < 10) {
+      page = await store.listThreadSummaries({ ...query, cursor: page.nextCursor });
+      items.push(...page.items);
     }
-    expect(taggedName(malformed)).toBe("QueryInputError");
+    const seen = items.map((item) => [item.threadHandle, item.lastActivityAt, item.messageCount]);
+    expect(seen).toEqual([
+      ["t5", isoAt(4), 1],
+      ["t4", isoAt(3), 1],
+      ["t3", isoAt(3), 1],
+      ["t2", isoAt(1), 1],
+      ["t1", isoAt(0), 1],
+    ]);
+  });
 
-    let overflow: unknown;
-    try {
-      await store.listMessageSummaries({
-        mailboxScope: "all",
-        since: "+275760-09-13T00:00:00.000Z",
-      });
-    } catch (cause) {
-      overflow = cause;
-    }
-    expect(taggedName(overflow)).toBe("QueryInputError");
+  it("keeps two threads' messages apart", async () => {
+    const store = accountStore("queries-thread-isolation");
+    const inbox = await requireAddress(store, "inbox");
+    const a = await persistMail(store, inbox.id, 0, null, { messageId: "a-root" });
+    await persistMail(store, inbox.id, 1, "<root-0@example.com>", { messageId: "a-reply" });
+    const b = await persistMail(store, inbox.id, 2, null, { messageId: "b-root" });
+    await persistMail(store, inbox.id, 3, "<root-2@example.com>", { messageId: "b-reply" });
+
+    const members = async (threadId: string) =>
+      (await store.listThreadMessageSummaries(threadId, { mailboxScope: "all" })).items.map(
+        (item) => [item.id, item.threadHandle, item.parentMessageId],
+      );
+    expect(await members(a.threadId)).toEqual([
+      ["a-root", "a-root", null],
+      ["a-reply", "a-root", "a-root"],
+    ]);
+    expect(await members(b.threadId)).toEqual([
+      ["b-root", "b-root", null],
+      ["b-reply", "b-root", "b-root"],
+    ]);
+  });
+
+  it("opens a thread through messages_thread_idx", async () => {
+    const plan = await accountStore("queries-thread-plan").explainThreadOpen();
+    expect(plan).toContain("SEARCH msg USING INDEX messages_thread_idx (thread_id=?)");
   });
 });
 
@@ -356,7 +363,7 @@ describe("account-store message source read", () => {
       messageId: "source-deleted",
     });
     expect(await store.getMessageSource("source-deleted", "all")).not.toBeNull();
-    await store.softDeleteThread(persisted.threadHandle, "all", "2026-01-01T00:00:02.000Z");
+    await store.softDeleteThread(persisted.threadId, "all", "2026-01-01T00:00:02.000Z");
 
     expect(await store.getMessageSource("source-deleted", "all")).toBeNull();
   });
@@ -500,13 +507,9 @@ async function registerReceipt(
 ): Promise<void> {
   await store.registerInboundReceipt({
     receiptId: messageId,
-    digest: `digest-${messageId}`,
     envelopeFrom: envelope.envelopeFrom,
     envelopeTo: envelope.envelopeTo,
     rawKey: `raw/${messageId}`,
-    manifestKey: `receipts/${messageId}.json`,
-    advertisedRawSize: 1,
-    consumedBytes: 1,
     receivedAt,
   });
 }

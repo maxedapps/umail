@@ -1,12 +1,12 @@
-import type * as Runtime from "@cloudflare/workers-types";
 import type * as Alchemy from "alchemy";
 import type * as Cloudflare from "alchemy/Cloudflare";
-import type { MailContact } from "@umail/api-contract";
-import { NormalizedRfcMessageId, normalizeRfcMessageId } from "@umail/api-contract";
-import { MailHtmlPolicyError, type MailHtmlPolicy, type StoredMailHtml } from "@umail/mail-content";
+import { normalizeRfcMessageId } from "@umail/api-contract";
+import type { MailHtmlPolicy, MailHtmlPolicyError, StoredMailHtml } from "@umail/mail-content";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+
+import type { CompleteAttemptOutcome } from "../account/domain.ts";
 
 export type NamedMailboxSender = {
   readonly email: string;
@@ -25,53 +25,13 @@ export type OutboundMail = {
   readonly references: string | null;
 };
 
-export type ProviderOutboundMail = {
-  readonly from: NamedMailboxSender;
-  readonly replyTo: NamedMailboxSender;
-  readonly to: ReadonlyArray<string>;
-  readonly cc: ReadonlyArray<string>;
-  readonly subject: string;
-  readonly text: string | null;
+// The mail exactly as the provider receives it: stored HTML already materialized.
+export type ProviderOutboundMail = Omit<OutboundMail, "html"> & {
   readonly html: string | null;
-  readonly inReplyTo: string | null;
-  readonly references: string | null;
 };
 
-export const ProviderSendAccepted = Schema.Struct({
-  kind: Schema.Literal("accepted"),
-  providerMessageId: Schema.String.check(Schema.isMinLength(1)),
-  rfcMessageId: Schema.NullOr(NormalizedRfcMessageId),
-});
-export type ProviderSendAccepted = typeof ProviderSendAccepted.Type;
-
-export const ProviderSendRejected = Schema.Struct({
-  kind: Schema.Literal("rejected"),
-  detail: Schema.String,
-});
-export type ProviderSendRejected = typeof ProviderSendRejected.Type;
-
-export const ProviderSendUnknown = Schema.Struct({
-  kind: Schema.Literal("unknown"),
-  detail: Schema.String,
-});
-export type ProviderSendUnknown = typeof ProviderSendUnknown.Type;
-
-export const ProviderSendPreDispatch = Schema.Struct({
-  kind: Schema.Literal("pre_dispatch"),
-  detail: Schema.String,
-});
-export type ProviderSendPreDispatch = typeof ProviderSendPreDispatch.Type;
-
-export const ProviderSendOutcome = Schema.Union([
-  ProviderSendAccepted,
-  ProviderSendRejected,
-  ProviderSendUnknown,
-  ProviderSendPreDispatch,
-]);
-export type ProviderSendOutcome = typeof ProviderSendOutcome.Type;
-
 export interface EmailSender {
-  send(mail: OutboundMail): Effect.Effect<ProviderSendOutcome>;
+  send(mail: ProviderOutboundMail): Effect.Effect<CompleteAttemptOutcome>;
 }
 
 export type ProviderSendMessage = {
@@ -85,7 +45,9 @@ export type ProviderSendMessage = {
   headers?: Record<string, string>;
 };
 
-const PRE_DISPATCH_CODES = new Set([
+// Codes that prove the provider did not deliver the mail. Anything else may have been sent, so it
+// settles `unknown` and is never retried.
+const REJECTED_CODES = new Set([
   "E_VALIDATION_ERROR",
   "E_FIELD_MISSING",
   "E_TOO_MANY_RECIPIENTS",
@@ -101,9 +63,7 @@ const PRE_DISPATCH_CODES = new Set([
   "E_HEADER_NAME_INVALID",
   "E_HEADERS_TOO_LARGE",
   "E_HEADERS_TOO_MANY",
-]);
-
-const REJECTED_CODES = new Set([
+  "E_RATE_LIMIT_EXCEEDED",
   "E_RECIPIENT_SUPPRESSED",
   "E_DAILY_LIMIT_EXCEEDED",
   "E_DELIVERY_FAILED",
@@ -123,14 +83,11 @@ export function materializeProviderMail(
   mail: OutboundMail,
 ): Effect.Effect<ProviderOutboundMail, MailHtmlPolicyError> {
   if (mail.html === null) {
-    return Effect.succeed({ ...mail, html: null } satisfies ProviderOutboundMail);
+    return Effect.succeed({ ...mail, html: null });
   }
   return htmlPolicy
-    .materializeRemoteImages({
-      body: mail.html.body,
-      applicationUrl,
-    })
-    .pipe(Effect.map((html) => ({ ...mail, html }) satisfies ProviderOutboundMail));
+    .materializeRemoteImages({ body: mail.html.body, applicationUrl })
+    .pipe(Effect.map((html) => ({ ...mail, html })));
 }
 
 export function toSendEmailMessage(mail: ProviderOutboundMail): ProviderSendMessage {
@@ -156,24 +113,12 @@ export function toSendEmailMessage(mail: ProviderOutboundMail): ProviderSendMess
   return message;
 }
 
-export function classifyProviderFailure(cause: unknown): ProviderSendOutcome {
+export function classifyProviderFailure(cause: unknown): CompleteAttemptOutcome {
   const code = providerErrorCode(cause);
-  const detail = providerErrorDetail(cause, code);
-  if (code !== null && PRE_DISPATCH_CODES.has(code)) {
-    return Schema.decodeSync(ProviderSendPreDispatch)({ kind: "pre_dispatch", detail });
-  }
   if (code !== null && REJECTED_CODES.has(code)) {
-    return Schema.decodeSync(ProviderSendRejected)({ kind: "rejected", detail });
+    return { kind: "rejected", failureDetail: code };
   }
-  return Schema.decodeSync(ProviderSendUnknown)({ kind: "unknown", detail });
-}
-
-export function optionalRfcMessageId(raw: string): NormalizedRfcMessageId | null {
-  return normalizeRfcMessageId(raw);
-}
-
-export function recipientAddresses(contacts: ReadonlyArray<MailContact>): ReadonlyArray<string> {
-  return contacts.map((contact) => contact.address);
+  return { kind: "unknown" };
 }
 
 function namedAddress(sender: NamedMailboxSender) {
@@ -202,96 +147,37 @@ function threadingHeaders(
   return { References: references ?? "" };
 }
 
+// The provider reports its code in `code`, or only inside `message` or `name`.
 function providerErrorCode(cause: unknown): string | null {
   const decoded = Schema.decodeUnknownResult(ProviderErrorFields)(cause);
-  if (Result.isSuccess(decoded) && decoded.success.code !== undefined) {
-    const fromCode = matchErrorCode(decoded.success.code);
-    if (fromCode !== null) {
-      return fromCode;
-    }
-  }
-  if (Result.isSuccess(decoded) && decoded.success.message !== undefined) {
-    const fromMessage = matchErrorCode(decoded.success.message);
-    if (fromMessage !== null) {
-      return fromMessage;
-    }
-  }
-  if (Result.isSuccess(decoded) && decoded.success.name !== undefined) {
-    const fromName = matchErrorCode(decoded.success.name);
-    if (fromName !== null) {
-      return fromName;
-    }
-  }
-  if (typeof cause === "string") {
-    return matchErrorCode(cause);
+  const candidates = Result.isSuccess(decoded)
+    ? [decoded.success.code, decoded.success.message, decoded.success.name]
+    : [cause];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const matched = ERROR_CODE_PATTERN.exec(candidate);
+    if (matched !== null) return matched[0];
   }
   return null;
 }
 
-function providerErrorDetail(cause: unknown, code: string | null): string {
-  const decoded = Schema.decodeUnknownResult(ProviderErrorFields)(cause);
-  if (Result.isSuccess(decoded) && decoded.success.message !== undefined) {
-    return decoded.success.message;
-  }
-  if (code !== null) {
-    return code;
-  }
-  return "unclassified_provider_error";
-}
-
-function matchErrorCode(raw: string): string | null {
-  const matched = ERROR_CODE_PATTERN.exec(raw);
-  if (matched === null) {
-    return null;
-  }
-  return matched[0] ?? null;
-}
-
 export function cloudflareEmailSender(
   client: Cloudflare.Email.SendClient,
-  htmlPolicy: MailHtmlPolicy,
-  applicationUrl: URL,
 ): Effect.Effect<EmailSender, never, Alchemy.RuntimeContext> {
   return Effect.gen(function* () {
     const binding = yield* client.raw;
     return {
       send: (mail) =>
-        materializeProviderMail(htmlPolicy, applicationUrl, mail).pipe(
-          Effect.matchEffect({
-            onFailure: (error) =>
-              Effect.succeed(
-                Schema.decodeSync(ProviderSendPreDispatch)({
-                  kind: "pre_dispatch",
-                  detail: error.reason,
-                }),
-              ),
-            onSuccess: (providerMail) => dispatchProviderMail(binding, providerMail),
-          }),
+        Effect.promise(() =>
+          binding.send(toSendEmailMessage(mail)).then(
+            (result): CompleteAttemptOutcome => ({
+              kind: "accepted",
+              providerMessageId: result.messageId,
+              rfcMessageId: normalizeRfcMessageId(result.messageId),
+            }),
+            classifyProviderFailure,
+          ),
         ),
     } satisfies EmailSender;
   });
-}
-
-class ProviderCallFailure extends Schema.TaggedError<ProviderCallFailure>()("ProviderCallFailure", {
-  outcome: ProviderSendOutcome,
-}) {}
-
-function dispatchProviderMail(
-  binding: Runtime.SendEmail,
-  providerMail: ProviderOutboundMail,
-): Effect.Effect<ProviderSendOutcome> {
-  return Effect.tryPromise({
-    try: () => binding.send(toSendEmailMessage(providerMail)),
-    catch: (cause) => new ProviderCallFailure({ outcome: classifyProviderFailure(cause) }),
-  }).pipe(
-    Effect.match({
-      onFailure: (error) => error.outcome,
-      onSuccess: (result) =>
-        Schema.decodeSync(ProviderSendAccepted)({
-          kind: "accepted",
-          providerMessageId: result.messageId,
-          rfcMessageId: optionalRfcMessageId(result.messageId),
-        }),
-    }),
-  );
 }

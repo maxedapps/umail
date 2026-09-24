@@ -43,7 +43,6 @@ export default defineConfig({
         "apps/server/src/mail/inbound.ts",
         "apps/server/src/mail/archive.ts",
         "apps/server/src/mail/policy.ts",
-        "apps/server/src/mail/recovery.ts",
         "apps/server/src/mail/notifications.ts",
         "apps/server/test/mail/**",
         "apps/server/test/api/**",

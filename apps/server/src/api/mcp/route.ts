@@ -1,5 +1,4 @@
 import { type McpPrincipal, type Principal } from "@umail/api-contract";
-import { registerUmailTools } from "@umail/mcp-tools";
 import { createMcpHandler, McpServer, type AuthInfo } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import * as Effect from "effect/Effect";
@@ -16,7 +15,8 @@ import {
   verifyOAuthResourceRequest,
   type OAuthAccess,
 } from "../../auth/oauth-resource.ts";
-import { makeInProcessUmailMcpClient, provideRequestContext } from "./client.ts";
+import { currentIso } from "../operations.ts";
+import { registerTools } from "./tools.ts";
 
 const LEGACY_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18"] as const;
 
@@ -51,7 +51,7 @@ export function serveMcpRequest(deps: ApiDeps) {
 
     const principalResult = yield* Effect.result(mcpPrincipalForAccess(deps, accessResult.access));
     if (Result.isFailure(principalResult)) {
-      return HttpServerResponse.fromWeb(mcpForbiddenResponse());
+      return HttpServerResponse.fromWeb(jsonRpcError(403, "Forbidden"));
     }
     return yield* serveAuthenticatedMcp(
       deps,
@@ -64,11 +64,13 @@ export function serveMcpRequest(deps: ApiDeps) {
 
 function mcpPrincipalForAccess(deps: ApiDeps, access: OAuthAccess) {
   return Effect.gen(function* () {
-    const stored = yield* deps.account.ensureMcpOAuthPolicy({
-      clientId: access.clientId,
-      label: `OAuth client ${access.clientId.slice(0, 12)}`,
-      createdAt: new Date().toISOString(),
-    });
+    const stored = yield* deps.account
+      .ensureMcpOAuthPolicy({
+        clientId: access.clientId,
+        label: `OAuth client ${access.clientId.slice(0, 12)}`,
+        createdAt: yield* currentIso(deps),
+      })
+      .pipe(Effect.orDie);
     if (stored.state !== "active") return yield* Effect.fail("forbidden" as const);
     return {
       authority: "mcp",
@@ -97,10 +99,7 @@ function serveAuthenticatedMcp(
           jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
           supportedProtocolVersions: [...LEGACY_PROTOCOL_VERSIONS],
         });
-        registerUmailTools(
-          server,
-          provideRequestContext(makeInProcessUmailMcpClient(deps, principal), services),
-        );
+        registerTools(server, deps, principal, services);
         return server;
       },
       { legacy: "stateless" },
@@ -120,37 +119,14 @@ function serveAuthenticatedMcp(
 
 function mcpChallengeResponse(error: unknown, resource: string): Response {
   const challenge = oauthResourceChallenge(error, resource, [UMAIL_OAUTH_SCOPE]);
-  if (challenge === undefined) return mcpUnauthorizedResponse();
-  const headers = new Headers(challenge.headers);
+  if (challenge === undefined) return jsonRpcError(401, "Unauthorized");
+  return jsonRpcError(challenge.statusCode, challenge.message, new Headers(challenge.headers));
+}
+
+function jsonRpcError(status: number, message: string, headers = new Headers()): Response {
   headers.set("content-type", "application/json");
   return new Response(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: challenge.message },
-      id: null,
-    }),
-    { status: challenge.statusCode, headers },
-  );
-}
-
-function mcpUnauthorizedResponse(): Response {
-  return new Response(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Unauthorized" },
-      id: null,
-    }),
-    { status: 401, headers: { "content-type": "application/json" } },
-  );
-}
-
-function mcpForbiddenResponse(): Response {
-  return new Response(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Forbidden" },
-      id: null,
-    }),
-    { status: 403, headers: { "content-type": "application/json" } },
+    JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message }, id: null }),
+    { status, headers },
   );
 }

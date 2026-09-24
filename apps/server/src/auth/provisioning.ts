@@ -63,14 +63,6 @@ export const AuthProvision = Alchemy.Action(
   }).pipe(Effect.provide(Cloudflare.D1.QueryDatabaseLocal)),
 );
 
-export class AuthOwnershipConflictError extends Error {
-  readonly _tag = "AuthOwnershipConflictError";
-  constructor(message: string) {
-    super(message);
-    this.name = "AuthOwnershipConflictError";
-  }
-}
-
 export type AuthD1Database = {
   prepare(query: string): AuthD1Statement;
   batch(statements: AuthD1Statement[]): Promise<ReadonlyArray<AuthD1BatchResult>>;
@@ -347,6 +339,7 @@ async function persistOperatorIdentity(
       database.prepare(`DELETE FROM session WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM oauthRefreshToken WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM oauthAccessToken WHERE userId = ?`).bind(input.operatorId),
+      database.prepare(`DELETE FROM oauthConsent WHERE userId = ?`).bind(input.operatorId),
       database.prepare(`DELETE FROM verification`).bind(),
       database.prepare(`DELETE FROM deviceCode`).bind(),
     );
@@ -514,7 +507,7 @@ async function provisionStaticClient(
       throw new Error("oauthClient row for the static client is not usable");
     }
     if (decoded.success.clientDiscoveryId !== FIRST_PARTY_CLIENT_DISCOVERY_ID) {
-      throw new AuthOwnershipConflictError(
+      throw new Error(
         `oauthClient ${CURSOR_GROK_BOT_CLIENT_ID} is owned by ${decoded.success.clientDiscoveryId ?? "another registrant"}`,
       );
     }

@@ -1,3 +1,4 @@
+import { RpcCallError } from "alchemy/Rpc";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -20,6 +21,8 @@ import {
   ThreadMessage,
   UmailApi,
 } from "@umail/api-contract";
+import type { ListMessageSummariesQuery } from "../../src/account/domain.ts";
+import type { AccountStoreError } from "../../src/account/errors.ts";
 import { attachmentHeaders, attachmentResponseHeaders } from "../../src/api/attachments.ts";
 import { readMessageSource } from "../../src/api/operations.ts";
 import { REMOTE_HTML_SOURCE, REMOTE_HTML_STORED } from "./fakes.ts";
@@ -92,11 +95,7 @@ describe("authoritative inbound message metadata", () => {
       envelopeTo: FROM_ADDRESS,
       parsedDate: "2026-08-25T10:00:00.000Z",
       occurredAt: "2026-08-25T11:00:00.000Z",
-      forward: {
-        kind: "failure",
-        destination: "forward@example.net",
-        error: "provider rejected",
-      },
+      forward: { kind: "failure", destination: "forward@example.net" },
     });
 
     const list = await Schema.decodeUnknownPromise(MailMessagePage)(
@@ -110,7 +109,7 @@ describe("authoritative inbound message metadata", () => {
     const threadMessages = await Schema.decodeUnknownPromise(MailThreadMessagePage)(
       await (
         await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(inbound.threadHandle)}/messages`,
+          `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}/messages`,
           authorized(world),
         )
       ).json(),
@@ -118,7 +117,7 @@ describe("authoritative inbound message metadata", () => {
     const thread = await Schema.decodeUnknownPromise(MailThreadDetail)(
       await (
         await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(inbound.threadHandle)}`,
+          `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
           authorized(world),
         )
       ).json(),
@@ -294,7 +293,7 @@ describe("root mailbox API", () => {
       inReplyToHeader: "<message-html@example.com>",
     });
     const response = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(first.threadHandle)}`,
+      `http://umail.test/threads/${encodeURIComponent(first.threadId)}`,
       authorized(world),
     );
     expect(response.status).toBe(200);
@@ -342,7 +341,7 @@ describe("root mailbox API", () => {
       });
     }
     const response = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(first.threadHandle)}`,
+      `http://umail.test/threads/${encodeURIComponent(first.threadId)}`,
       authorized(world),
     );
     expect(response.status).toBe(200);
@@ -386,10 +385,10 @@ describe("root mailbox API", () => {
     expect(JSON.stringify(message)).not.toContain("sentBy");
   });
 
-  it("returns a durable job from POST /messages without claiming acceptance", async () => {
+  it("generates a request id for a submission without one and returns a durable job", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
-    const response = await world.fetch("http://umail.test/messages", {
+    const response = await world.fetch("http://umail.test/submissions", {
       method: "POST",
       headers: jsonHeaders(authorized(world).headers),
       body: JSON.stringify({
@@ -447,8 +446,8 @@ describe("root mailbox API", () => {
     expect(firstResponse.status).toBe(200);
     const first = await Schema.decodeUnknownPromise(MailThreadPage)(await firstResponse.json());
     expect(first.items.map((item) => item.threadId)).toEqual([
-      seeded[3]?.threadHandle,
-      seeded[2]?.threadHandle,
+      seeded[3]?.threadId,
+      seeded[2]?.threadId,
     ]);
     expect(first.nextCursor).not.toBeNull();
 
@@ -459,8 +458,8 @@ describe("root mailbox API", () => {
     expect(secondResponse.status).toBe(200);
     const second = await Schema.decodeUnknownPromise(MailThreadPage)(await secondResponse.json());
     expect(second.items.map((item) => item.threadId)).toEqual([
-      seeded[1]?.threadHandle,
-      seeded[0]?.threadHandle,
+      seeded[1]?.threadId,
+      seeded[0]?.threadId,
     ]);
     expect(second.nextCursor).toBeNull();
     const allIds = [...first.items, ...second.items].map((item) => item.threadId);
@@ -483,7 +482,7 @@ describe("root mailbox API", () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
     const inbound = await seedInboundMessage(world, mailbox.id);
-    const threadPath = `/threads/${encodeURIComponent(inbound.threadHandle)}`;
+    const threadPath = `/threads/${encodeURIComponent(inbound.threadId)}`;
 
     const initial = await world.fetch(`http://umail.test${threadPath}`, authorized(world));
     expect(initial.status).toBe(200);
@@ -561,7 +560,7 @@ describe("root mailbox API", () => {
     const thread = await Schema.decodeUnknownPromise(MailThreadDetail)(
       await (
         await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(target.threadHandle)}`,
+          `http://umail.test/threads/${encodeURIComponent(target.threadId)}`,
           authorized(world),
         )
       ).json(),
@@ -1053,7 +1052,7 @@ describe("root mailbox API", () => {
     expect(unknown.status).toBe(404);
 
     const removed = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(inbound.threadHandle)}`,
+      `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
       { ...authorized(world), method: "DELETE" },
     );
     expect(removed.status).toBe(204);
@@ -1153,7 +1152,7 @@ describe("root mailbox API", () => {
     expect(byAddress.items.map((item) => item.id)).not.toContain("probe-in");
 
     await Effect.runPromise(
-      world.account.markThreadRead(recent.threadHandle, true, "all", "2026-08-25T18:01:00.000Z"),
+      world.account.markThreadRead(recent.threadId, true, "all", "2026-08-25T18:01:00.000Z"),
     );
     const unreadResponse = await world.fetch(
       "http://umail.test/messages?unread=true",
@@ -1233,7 +1232,110 @@ describe("root mailbox API", () => {
     )(await listed.json());
     expect(page.items.map((item) => item.jobId)).toEqual([firstJob.jobId]);
   });
+
+  it("rejects a submission with more than 50 To and CC recipients without creating a job", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    const recipients = Array.from({ length: 51 }, (_, index) => ({
+      address: `recipient-${String(index)}@example.com`,
+      displayName: null,
+    }));
+    const response = await world.fetch("http://umail.test/submissions", {
+      method: "POST",
+      headers: jsonHeaders(authorized(world).headers),
+      body: JSON.stringify({
+        intent: "compose",
+        fromAddressId: mailbox.id,
+        to: recipients.slice(0, 40),
+        cc: recipients.slice(40),
+        subject: "Too many",
+        text: "body",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      _tag: "ApiProblem",
+      message: "A message may have at most 50 To and CC recipients.",
+    });
+    const jobs = await Effect.runPromise(
+      world.account.listOutboundJobs({ viewer: { kind: "operator" } }),
+    );
+    expect(jobs.items).toEqual([]);
+  });
 });
+
+describe("store failures and query input at the HTTP edge", () => {
+  it("answers 409 when creating an address fails with a plain conflict envelope", async () => {
+    const world = await createWorld({
+      account: {
+        createAddress: () =>
+          failOverRpc({ _tag: "AccountConflictError", resource: "address", id: "inbox" }),
+      },
+    });
+    const response = await world.fetch("http://umail.test/addresses", {
+      method: "POST",
+      headers: jsonHeaders(authorized(world).headers),
+      body: JSON.stringify({ localPart: "inbox" }),
+    });
+    expect(response.status).toBe(409);
+  });
+
+  it("answers 500, not 400, when the store call fails with an RpcCallError", async () => {
+    const world = await createWorld({
+      account: {
+        listAddresses: () =>
+          failOverRpc(new RpcCallError({ method: "listAddresses", cause: new Error("DO reset") })),
+      },
+    });
+    const response = await world.fetch("http://umail.test/addresses", authorized(world));
+    expect(response.status).toBe(500);
+  });
+
+  it("normalizes an offset since before the store call and rejects malformed ones with 400", async () => {
+    const queries: Array<ListMessageSummariesQuery> = [];
+    const world = await createWorld({
+      account: {
+        listMessageSummaries: (query) => {
+          queries.push(query);
+          return Effect.succeed({ items: [], nextCursor: null });
+        },
+      },
+    });
+    const offset = await world.fetch(
+      `http://umail.test/messages?since=${encodeURIComponent("2026-08-25T02:00:00+02:00")}`,
+      authorized(world),
+    );
+    expect(offset.status).toBe(200);
+    expect(queries.map((query) => query.since)).toEqual(["2026-08-25T00:00:00.000Z"]);
+
+    for (const since of ["not-a-date", "+275760-09-13T00:00:00.000Z"]) {
+      const malformed = await world.fetch(
+        `http://umail.test/messages?since=${encodeURIComponent(since)}`,
+        authorized(world),
+      );
+      expect(malformed.status).toBe(400);
+    }
+    expect(queries).toHaveLength(1);
+  });
+
+  it("answers 400 for a list cursor whose timestamp is out of range", async () => {
+    const world = await createWorld();
+    const cursor = Buffer.from("+010000-01-01T00:00:00.000Z\nx").toString("base64url");
+    for (const path of ["/jobs", "/threads", "/messages"]) {
+      const response = await world.fetch(
+        `http://umail.test${path}?cursor=${encodeURIComponent(cursor)}`,
+        authorized(world),
+      );
+      expect(response.status, path).toBe(400);
+    }
+  });
+});
+
+// Expected DO failures reach the Api as plain `{ _tag, ... }` objects, never class instances.
+function failOverRpc(error: unknown): Effect.Effect<never, AccountStoreError> {
+  return Effect.fail(error as AccountStoreError);
+}
 
 type StoredMcpReadAccess = Pick<PrincipalPolicy, "mailboxIds" | "canRead">;
 

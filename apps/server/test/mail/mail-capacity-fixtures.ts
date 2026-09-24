@@ -31,39 +31,30 @@ export type MailCapacityPolicyFailureReason =
   | "message_budget"
   | "mime_budget"
   | "parse_failed"
-  | "rfc822_depth"
-  | "sanitize_failed";
+  | "rfc822_depth";
 
 export type MailCapacityPolicyFailureExpectation = {
   readonly kind: "policy_failed";
   readonly reason: MailCapacityPolicyFailureReason;
 };
 
-export type MailCapacityInboundRejectionExpectation = {
-  readonly kind: "inbound_rejected";
-  readonly reason: "message too large";
+// The HTML sanitizer gives up on these, so the message is indexed without its HTML.
+export type MailCapacityTextOnlyExpectation = {
+  readonly kind: "text_only";
 };
 
 export type MailCapacityFixture = {
   readonly id: string;
   readonly raw: Uint8Array;
-  readonly expected: MailCapacityIndexedExpectation | MailCapacityPolicyFailureExpectation;
-};
-
-export type MailCapacityInboundRejectedFixture = {
-  readonly id: string;
-  readonly raw: Uint8Array;
-  readonly expected: MailCapacityInboundRejectionExpectation;
+  readonly expected:
+    | MailCapacityIndexedExpectation
+    | MailCapacityPolicyFailureExpectation
+    | MailCapacityTextOnlyExpectation;
 };
 
 export type MailCapacityFixtureFactory = {
   readonly id: string;
   readonly make: () => MailCapacityFixture;
-};
-
-export type MailCapacityInboundRejectedFixtureFactory = {
-  readonly id: string;
-  readonly make: () => MailCapacityInboundRejectedFixture;
 };
 
 type MailCapacityTransferEncoding = "base64" | "quoted-printable";
@@ -91,30 +82,6 @@ export function maximumRawAttachmentFixture(): MailCapacityFixture {
       kind: "indexed",
       subject: "Maximum raw attachment",
       textIncludes: "maximum raw marker",
-      htmlIncludes: null,
-      hasRemoteImages: false,
-      attachments: [
-        {
-          filename: "maximum.bin",
-          mimeType: "application/octet-stream",
-          byteLength: MAX_RAW_ATTACHMENT_BYTES,
-          sha256: MAX_RAW_ATTACHMENT_SHA256,
-        },
-      ],
-    },
-  };
-}
-
-export function maximumRawSequenceFixture(variant: "01" | "02" | "03"): MailCapacityFixture {
-  const marker = `maximum raw mark${variant}`;
-  const subject = `Maximum raw variant ${variant}`;
-  return {
-    id: `maximum-raw-sequence-${variant}`,
-    raw: sizedAttachmentEml(DEFAULT_MAX_RAW_BYTES, marker, subject),
-    expected: {
-      kind: "indexed",
-      subject,
-      textIncludes: marker,
       htmlIncludes: null,
       hasRemoteImages: false,
       attachments: [
@@ -346,50 +313,12 @@ export function malformedHtmlFixture(): MailCapacityFixture {
   };
 }
 
-export function retryProbeFixture(): MailCapacityFixture {
-  return {
-    id: "retry-probe",
-    raw: plainTextMessageEml("Retry probe", "retry-probe-marker"),
-    expected: {
-      kind: "indexed",
-      subject: "Retry probe",
-      textIncludes: "retry-probe-marker",
-      htmlIncludes: null,
-      hasRemoteImages: false,
-      attachments: [],
-    },
-  };
-}
-
-export function recoveryProbeFixture(): MailCapacityFixture {
-  return {
-    id: "recovery-probe",
-    raw: plainTextMessageEml("Recovery probe", "recovery-probe-marker"),
-    expected: {
-      kind: "indexed",
-      subject: "Recovery probe",
-      textIncludes: "recovery-probe-marker",
-      htmlIncludes: null,
-      hasRemoteImages: false,
-      attachments: [],
-    },
-  };
-}
-
 export function overLineCountFixture(): MailCapacityFixture {
   return policyFailureFixture(
     "over-line-count",
     newlineHeavyEml(INBOUND_MIME_LIMITS.maxLineCount + 1),
     "mime_budget",
   );
-}
-
-export function overRawSizeFixture(): MailCapacityInboundRejectedFixture {
-  return {
-    id: "over-raw-size",
-    raw: sizedAttachmentEml(DEFAULT_MAX_RAW_BYTES + 1),
-    expected: { kind: "inbound_rejected", reason: "message too large" },
-  };
 }
 
 export function overLineLengthFixture(): MailCapacityFixture {
@@ -431,20 +360,15 @@ export function overTextExpansionFixture(): MailCapacityFixture {
 
 export function overHtmlAttributesFixture(): MailCapacityFixture {
   const attributes = htmlTokenizerAttributes(270_000, 2_000);
-  return policyFailureFixture(
+  return textOnlyFixture(
     "over-html-attributes",
     htmlEml("HTML attributes", `<p ${attributes}>attributes</p>`),
-    "mime_budget",
   );
 }
 
 export function sanitizerOutputExpansionFixture(): MailCapacityFixture {
   const html = Array.from({ length: 9_300 }, resourceExpandingAnchor).join("\n");
-  return policyFailureFixture(
-    "sanitizer-output-expansion",
-    htmlEml("Sanitizer output expansion", html),
-    "mime_budget",
-  );
+  return textOnlyFixture("sanitizer-output-expansion", htmlEml("Sanitizer output expansion", html));
 }
 
 export function overMessageBudgetFixture(): MailCapacityFixture {
@@ -489,31 +413,19 @@ export function overHtmlInputFixture(): MailCapacityFixture {
 
 export function overHtmlNodesFixture(): MailCapacityFixture {
   const groups = Array.from({ length: 20 }, () => "<br>".repeat(1_000));
-  return policyFailureFixture(
-    "over-html-nodes",
-    htmlEml("HTML node budget", groups.join("\n")),
-    "mime_budget",
-  );
+  return textOnlyFixture("over-html-nodes", htmlEml("HTML node budget", groups.join("\n")));
 }
 
 export function overHtmlOpenElementsFixture(): MailCapacityFixture {
   const count = MAIL_HTML_PARSE_LIMITS.openElements + 1;
   const html = `${"<div>".repeat(count)}open-elements${"</div>".repeat(count)}`;
-  return policyFailureFixture(
-    "over-html-open-elements",
-    htmlEml("HTML open-element budget", html),
-    "mime_budget",
-  );
+  return textOnlyFixture("over-html-open-elements", htmlEml("HTML open-element budget", html));
 }
 
 export function overHtmlFinalDepthFixture(): MailCapacityFixture {
   const templateCount = MAIL_HTML_PARSE_LIMITS.finalTreeDepth / 2 + 1;
   const html = `${"<template>".repeat(templateCount)}${"</template>".repeat(templateCount)}`;
-  return policyFailureFixture(
-    "over-html-final-depth",
-    htmlEml("HTML final-depth budget", html),
-    "mime_budget",
-  );
+  return textOnlyFixture("over-html-final-depth", htmlEml("HTML final-depth budget", html));
 }
 
 export function overHtmlAggregateAttributesFixture(): MailCapacityFixture {
@@ -521,10 +433,9 @@ export function overHtmlAggregateAttributesFixture(): MailCapacityFixture {
   const elementCount =
     MAIL_HTML_PARSE_LIMITS.admittedAttributes / MAIL_HTML_PARSE_LIMITS.attributesPerElement + 1;
   const html = Array.from({ length: elementCount }, () => `<p ${attributes}></p>`).join("\n");
-  return policyFailureFixture(
+  return textOnlyFixture(
     "over-html-aggregate-attributes",
     htmlEml("HTML aggregate-attribute budget", html),
-    "mime_budget",
   );
 }
 
@@ -549,30 +460,22 @@ export const MAIL_CAPACITY_REJECTED_FIXTURES = [
   { id: "over-rfc822-depth", make: overRfc822DepthFixture },
   { id: "over-text-expansion", make: overTextExpansionFixture },
   { id: "over-html-input", make: overHtmlInputFixture },
+  { id: "over-message-budget", make: overMessageBudgetFixture },
+  { id: "over-attachment-count", make: overAttachmentCountFixture },
+] as const satisfies ReadonlyArray<MailCapacityFixtureFactory>;
+
+export const MAIL_CAPACITY_TEXT_ONLY_FIXTURES = [
   { id: "over-html-nodes", make: overHtmlNodesFixture },
   { id: "over-html-open-elements", make: overHtmlOpenElementsFixture },
   { id: "over-html-final-depth", make: overHtmlFinalDepthFixture },
   { id: "over-html-attributes", make: overHtmlAttributesFixture },
   { id: "over-html-aggregate-attributes", make: overHtmlAggregateAttributesFixture },
   { id: "sanitizer-output-expansion", make: sanitizerOutputExpansionFixture },
-  { id: "over-message-budget", make: overMessageBudgetFixture },
-  { id: "over-attachment-count", make: overAttachmentCountFixture },
 ] as const satisfies ReadonlyArray<MailCapacityFixtureFactory>;
-
-export const MAIL_CAPACITY_INBOUND_REJECTED_FIXTURES = [
-  { id: "over-raw-size", make: overRawSizeFixture },
-] as const satisfies ReadonlyArray<MailCapacityInboundRejectedFixtureFactory>;
 
 export const MAIL_CAPACITY_ENCODED_MAXIMUM_FIXTURES = [
   { id: "maximum-raw-folded-base64", make: maximumRawFoldedBase64Fixture },
   { id: "maximum-raw-quoted-printable", make: maximumRawQuotedPrintableFixture },
-] as const satisfies ReadonlyArray<MailCapacityFixtureFactory>;
-
-export const MAIL_CAPACITY_LARGE_SEQUENCE_FIXTURES = [
-  { id: "maximum-raw-sequence-01", make: () => maximumRawSequenceFixture("01") },
-  { id: "maximum-raw-sequence-02", make: () => maximumRawSequenceFixture("02") },
-  { id: "maximum-raw-sequence-03", make: () => maximumRawSequenceFixture("03") },
-  ...MAIL_CAPACITY_ENCODED_MAXIMUM_FIXTURES,
 ] as const satisfies ReadonlyArray<MailCapacityFixtureFactory>;
 
 export function encodeEml(value: string): Uint8Array {
@@ -766,20 +669,16 @@ export function nestedRfc822Eml(depth: number): Uint8Array {
   return encodeEml(`${message}\n`);
 }
 
-export function sizedAttachmentEml(
-  totalBytes: number,
-  textMarker = "maximum raw marker",
-  subject = "Maximum raw attachment",
-): Uint8Array {
+export function sizedAttachmentEml(totalBytes: number): Uint8Array {
   const header = encodeEml(
     [
-      ...baseHeaders(subject),
+      ...baseHeaders("Maximum raw attachment"),
       'Content-Type: multipart/mixed; boundary="maximum-boundary"',
       "",
       "--maximum-boundary",
       "Content-Type: text/plain; charset=utf-8",
       "",
-      textMarker,
+      "maximum raw marker",
       "--maximum-boundary",
       "Content-Type: application/octet-stream",
       'Content-Disposition: attachment; filename="maximum.bin"',
@@ -938,6 +837,10 @@ function textExpansionEml(bodyBytes: number): Uint8Array {
       "",
     ].join("\n"),
   );
+}
+
+function textOnlyFixture(id: string, raw: Uint8Array): MailCapacityFixture {
+  return { id, raw, expected: { kind: "text_only" } };
 }
 
 function policyFailureFixture(

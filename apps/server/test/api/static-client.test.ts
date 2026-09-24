@@ -11,7 +11,7 @@ const STATIC_CLIENT = {
   redirectUri: CURSOR_CLOUD_CALLBACK_URI,
 } as const;
 
-const MCP_TOOL_COUNT = 11;
+const MCP_TOOL_COUNT = 10;
 const MCP_RESOURCE = "https://umail.test/mcp";
 
 const RefreshedTokens = Schema.Struct({

@@ -7,7 +7,7 @@ export default defineConfig(async () => ({
   plugins: [
     await bundleMailTestModules(fileURLToPath(new URL("../..", import.meta.url).href)),
     cloudflareTest({
-      main: "./test/mail/worker-host.ts",
+      main: "./test/account/worker-host.ts",
       miniflare: {
         compatibilityDate: "2026-08-21",
         r2Buckets: ["ARCHIVE"],
@@ -17,9 +17,6 @@ export default defineConfig(async () => ({
             className: "AccountStoreTestHost",
             useSQLite: true,
           },
-        },
-        bindings: {
-          ACCOUNT_ID: "account-test",
         },
       },
     }),

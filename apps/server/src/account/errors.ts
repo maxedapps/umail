@@ -1,4 +1,5 @@
 import * as Data from "effect/Data";
+import * as Predicate from "effect/Predicate";
 
 export class SchemaIncompatibleError extends Data.TaggedError("SchemaIncompatibleError")<{
   readonly schemaVersion: number;
@@ -11,31 +12,18 @@ export class SchemaMigrationError extends Data.TaggedError("SchemaMigrationError
   readonly cause: unknown;
 }> {}
 
-export class AccountIdentityError extends Data.TaggedError("AccountIdentityError")<{
-  readonly message: string;
-}> {}
-
-export class CommandConflictError extends Data.TaggedError("CommandConflictError")<{
-  readonly groupId: string;
-  readonly id: string;
-}> {}
-
 export class MessageConflictError extends Data.TaggedError("MessageConflictError")<{
   readonly messageId: string;
 }> {}
 
 export class InboundMessageIntegrityError extends Data.TaggedError("InboundMessageIntegrityError")<{
   readonly messageId: string;
-  readonly reason: "receipt_missing" | "forward_observation_invalid";
+  readonly reason: "receipt_missing";
 }> {}
 
 export class ThreadHandleError extends Data.TaggedError("ThreadHandleError")<{
   readonly handle: string;
-  readonly reason: "invalid" | "not_found";
-}> {}
-
-export class QueryInputError extends Data.TaggedError("QueryInputError")<{
-  readonly reason: "invalid_since" | "invalid_query";
+  readonly reason: "not_found";
 }> {}
 
 export class AccountConflictError extends Data.TaggedError("AccountConflictError")<{
@@ -48,7 +36,6 @@ export const JobAuthorizationReason = [
   "recipient_not_allowed",
   "mailbox_forbidden",
   "client_inactive",
-  "approval_material_required",
 ] as const;
 export type JobAuthorizationReason = (typeof JobAuthorizationReason)[number];
 
@@ -61,36 +48,21 @@ export class SubmissionConflictError extends Data.TaggedError("SubmissionConflic
   readonly requesterClientId: string;
 }> {}
 
-export class AccountStoreUnexpectedError extends Data.TaggedError("AccountStoreUnexpectedError")<{
-  readonly cause: unknown;
-}> {}
-
 export type AccountStoreError =
-  | SchemaIncompatibleError
-  | SchemaMigrationError
-  | AccountIdentityError
-  | CommandConflictError
-  | MessageConflictError
-  | InboundMessageIntegrityError
   | ThreadHandleError
-  | QueryInputError
-  | AccountConflictError
   | JobAuthorizationError
+  | AccountConflictError
   | SubmissionConflictError
-  | AccountStoreUnexpectedError;
+  | MessageConflictError;
 
-export function toAccountStoreError(cause: unknown): AccountStoreError {
-  if (cause instanceof SchemaIncompatibleError) return cause;
-  if (cause instanceof SchemaMigrationError) return cause;
-  if (cause instanceof AccountIdentityError) return cause;
-  if (cause instanceof CommandConflictError) return cause;
-  if (cause instanceof MessageConflictError) return cause;
-  if (cause instanceof InboundMessageIntegrityError) return cause;
-  if (cause instanceof ThreadHandleError) return cause;
-  if (cause instanceof QueryInputError) return cause;
-  if (cause instanceof AccountConflictError) return cause;
-  if (cause instanceof JobAuthorizationError) return cause;
-  if (cause instanceof SubmissionConflictError) return cause;
-  if (cause instanceof AccountStoreUnexpectedError) return cause;
-  return new AccountStoreUnexpectedError({ cause });
-}
+export const EXPECTED_TAGS = [
+  "ThreadHandleError",
+  "JobAuthorizationError",
+  "AccountConflictError",
+  "SubmissionConflictError",
+  "MessageConflictError",
+] as const satisfies ReadonlyArray<AccountStoreError["_tag"]>;
+
+// Tag-based so it also matches the plain `{ _tag, ... }` envelopes that arrive over RPC.
+export const isExpectedStoreFailure = (u: unknown): u is AccountStoreError =>
+  EXPECTED_TAGS.some((tag) => Predicate.isTagged(u, tag));

@@ -7,11 +7,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import type { ApiAccountStore } from "../account/worker.ts";
+import type { AccountStoreRpc } from "../account/worker.ts";
 import { projectThreadMessage } from "./projection.ts";
 
 export type ApprovalHttpDeps = {
-  readonly account: ApiAccountStore;
+  readonly account: AccountStoreRpc;
   readonly approvalClock: {
     readonly now: Effect.Effect<DateTime.Utc>;
   };
@@ -75,21 +75,12 @@ export function decideApproval(
       }
       return { kind: "redirect", state: lookup.approval.state };
     }
-    if (lookup.approval.expiresAt <= now) {
-      const expired = yield* deps.account
-        .expirePendingApproval({ approvalId: lookup.approval.id, nowIso: now })
-        .pipe(Effect.orDie);
-      if (expired.kind === "missing") {
-        return { kind: "notFound" };
+    // A due approval skips the review: the store expires it instead of deciding it.
+    if (lookup.approval.expiresAt > now) {
+      const review = yield* reviewApproval(deps, token);
+      if (review.kind !== "available") {
+        return review;
       }
-      if (expired.kind === "pending") {
-        return { kind: "gone" };
-      }
-      return { kind: "redirect", state: expired.state };
-    }
-    const review = yield* reviewApproval(deps, token);
-    if (review.kind !== "available") {
-      return review;
     }
     const claimed = yield* deps.account
       .decideApproval({ tokenHash: lookup.approval.tokenHash, decision, nowIso: now })
@@ -107,23 +98,23 @@ export function decideApproval(
 function lookupApproval(deps: ApprovalHttpDeps, token: ApprovalToken) {
   return Effect.gen(function* () {
     const tokenHash = yield* Effect.promise(() => hashApprovalToken(token));
-    return yield* deps.account.lookupApprovalByTokenHash(tokenHash).pipe(Effect.orDie);
-  });
+    return yield* deps.account.lookupApprovalByTokenHash(tokenHash);
+  }).pipe(Effect.orDie);
 }
 
 function loadApprovalMessage(deps: ApprovalHttpDeps, messageId: string) {
   return Effect.gen(function* () {
-    const summary = yield* deps.account.getMessageSummary(messageId, "all").pipe(Effect.orDie);
-    const body = yield* deps.account.getMessageBody(messageId, "all").pipe(Effect.orDie);
+    const summary = yield* deps.account.getMessageSummary(messageId, "all");
+    const body = yield* deps.account.getMessageBody(messageId, "all");
     if (summary === null || body === null) {
       return null;
     }
     const message = projectThreadMessage(summary, body);
-    if (message === null || message.direction !== "outbound") {
+    if (message.direction !== "outbound") {
       return null;
     }
     return message;
-  });
+  }).pipe(Effect.orDie);
 }
 
 function isUnavailableState(state: StoredApproval["state"]): boolean {

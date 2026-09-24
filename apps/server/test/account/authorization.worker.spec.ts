@@ -3,7 +3,7 @@
 import { parseExternalMailAddress, parseMailDomain, type MailDomain } from "@umail/api-contract";
 import { describe, expect, it } from "vitest";
 
-import { accountStore, taggedName } from "./harness.ts";
+import { accountStore, failureOf, taggedName } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -19,7 +19,6 @@ describe("account-store scoped visibility and mutations", () => {
 
     const threads = await store.listThreadSummaries({
       mailboxScope: [inbox.id],
-      mailDomain: DOMAIN,
     });
     expect(threads.items).toHaveLength(1);
     expect(threads.items[0]?.messageCount).toBe(2);
@@ -27,7 +26,7 @@ describe("account-store scoped visibility and mutations", () => {
       threads.items[0]?.involvedMailboxIdentities.map((identity) => identity.id).sort(),
     ).toEqual([inbox.id, probe.id].sort());
 
-    const messages = await store.listThreadMessageSummaries(parent.threadHandle, {
+    const messages = await store.listThreadMessageSummaries(parent.threadId, {
       mailboxScope: [inbox.id],
     });
     expect(messages.items.map((item) => item.id)).toEqual(["parent", "child"]);
@@ -43,15 +42,15 @@ describe("account-store scoped visibility and mutations", () => {
       r2Key: "attachments/parent",
     });
 
-    await store.markThreadRead(parent.threadHandle, true, [inbox.id], "2026-01-01T00:00:02.000Z");
-    const afterRead = await store.listThreadMessageSummaries(parent.threadHandle, {
+    await store.markThreadRead(parent.threadId, true, [inbox.id], "2026-01-01T00:00:02.000Z");
+    const afterRead = await store.listThreadMessageSummaries(parent.threadId, {
       mailboxScope: [inbox.id],
     });
     expect(afterRead.items.find((item) => item.id === "parent")?.isRead).toBe(true);
     expect(afterRead.items.find((item) => item.id === "child")?.isRead).toBe(false);
 
-    await store.softDeleteThread(parent.threadHandle, [inbox.id], "2026-01-01T00:00:03.000Z");
-    const afterDelete = await store.listThreadMessageSummaries(parent.threadHandle, {
+    await store.softDeleteThread(parent.threadId, [inbox.id], "2026-01-01T00:00:03.000Z");
+    const afterDelete = await store.listThreadMessageSummaries(parent.threadId, {
       mailboxScope: [probe.id],
     });
     expect(afterDelete.items.map((item) => item.id)).toEqual(["child"]);
@@ -66,17 +65,13 @@ describe("account-store scoped visibility and mutations", () => {
     const other = await persistMail(store, probe.id, "other", null, "2026-01-01T00:00:00.000Z");
     const hidden = await store.listThreadSummaries({
       mailboxScope: [inbox.id],
-      mailDomain: DOMAIN,
     });
     expect(hidden.items).toEqual([]);
-    let missing: unknown;
-    try {
-      await store.listThreadMessageSummaries(other.threadHandle, {
+    const missing = await failureOf(store, (host) =>
+      host.listThreadMessageSummaries(other.threadId, {
         mailboxScope: [inbox.id],
-      });
-    } catch (cause) {
-      missing = cause;
-    }
+      }),
+    );
     expect(taggedName(missing)).toBe("ThreadHandleError");
     const empty = await store.listMessageSummaries({ mailboxScope: [] });
     expect(empty.items).toEqual([]);

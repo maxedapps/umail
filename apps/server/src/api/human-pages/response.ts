@@ -1,26 +1,8 @@
+import type { ApprovalPreviewHeaders, ApprovalTrustedPageHeaders } from "@umail/api-contract";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import type { HumanPagePolicy, RenderedHumanPage } from "./internal/page.ts";
-
-export type HumanPageHeaders = {
-  readonly "cache-control": "no-store";
-  readonly "content-security-policy": string;
-  readonly "content-type": "text/html; charset=utf-8";
-  readonly "permissions-policy": string;
-  readonly "referrer-policy": "no-referrer";
-  readonly "x-content-type-options": "nosniff";
-  readonly "x-frame-options": "DENY";
-  readonly "x-robots-tag": "noindex, nofollow, noarchive";
-};
-
-export type ApprovalMessagePreviewHeaders = {
-  readonly "cache-control": "no-store";
-  readonly "content-security-policy": string;
-  readonly "content-type": "text/html; charset=utf-8";
-  readonly "referrer-policy": "no-referrer";
-  readonly "x-content-type-options": "nosniff";
-};
 
 const APPROVAL_MESSAGE_PREVIEW_CSP =
   "default-src 'none'; sandbox; frame-ancestors 'self'; script-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; style-src-elem 'none'; style-src-attr 'unsafe-inline'";
@@ -28,7 +10,7 @@ const APPROVAL_MESSAGE_PREVIEW_CSP =
 const PERMISSIONS_POLICY =
   "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
-export function humanPageHeaders(page: RenderedHumanPage): HumanPageHeaders {
+export function humanPageHeaders(page: RenderedHumanPage): typeof ApprovalTrustedPageHeaders.Type {
   return {
     "cache-control": "no-store",
     "content-security-policy": contentSecurityPolicy(page.policy, page.nonce),
@@ -67,7 +49,7 @@ export function approvalMessagePreviewHttpApiResponse(html: string) {
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
-    } satisfies ApprovalMessagePreviewHeaders,
+    } satisfies typeof ApprovalPreviewHeaders.Type,
   });
 }
 

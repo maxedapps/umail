@@ -60,7 +60,7 @@ function testHttpClient(captured: Array<CapturedRequest>) {
       body = JSON.stringify({
         direction: "inbound",
         id: "message-1",
-        threadId: "node:550e8400-e29b-41d4-a716-446655440000",
+        threadId: "message-1",
         parentMessageId: null,
         addressId: "address-1",
         subject: "Hello",

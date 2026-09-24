@@ -127,18 +127,21 @@ export type McpPrincipal = {
 
 export type Principal = OperatorPrincipal | McpPrincipal;
 
+// The operator's full access; the API gate and the account store's send check both use it.
+export const OPERATOR_POLICY = {
+  mailboxIds: "all",
+  canRead: true,
+  canDelete: true,
+  sendMode: { kind: "allow" },
+  recipientAllowlist: "any",
+  canAdmin: true,
+} as const satisfies PrincipalPolicy;
+
 export function operatorOAuthPrincipal(userId: string, clientId: string): OperatorPrincipal {
   return {
     authority: "operator",
     identity: { kind: "oauth", userId, clientId, clientLabel: "AgentMail CLI" },
-    policy: {
-      mailboxIds: "all",
-      canRead: true,
-      canDelete: true,
-      sendMode: { kind: "allow" },
-      recipientAllowlist: "any",
-      canAdmin: true,
-    },
+    policy: OPERATOR_POLICY,
   };
 }
 

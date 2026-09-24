@@ -4,9 +4,9 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Runtime from "effect/Runtime";
 
-import { OAuthCredentialStore, OAuthScheduler } from "./auth.ts";
+import { OAuthScheduler } from "./auth.ts";
+import { OAuthCredentialStore } from "./credential-store.ts";
 import { ApprovalTokenSource } from "./approvals.ts";
 import { program } from "./main.ts";
 
@@ -18,12 +18,8 @@ export const CliLive = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 export function runCli(argv: ReadonlyArray<string>, env: UmailClientEnvironment) {
+  // Failures are printed once by `program`; the default teardown exits non-zero on failure only.
   NodeRuntime.runMain(program(argv, env).pipe(Effect.provide(CliLive)), {
     disableErrorReporting: true,
-    teardown: (exit, _onExit) => {
-      Runtime.defaultTeardown(exit, (code) => {
-        process.exit(code);
-      });
-    },
   });
 }

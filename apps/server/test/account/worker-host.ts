@@ -3,46 +3,27 @@ import * as Schema from "effect/Schema";
 
 import type { ApprovalTokenHash, MailDomain } from "@umail/api-contract";
 
-import { THREADING_ANCESTRY_WORK_BUDGET, cryptoThreadingIds } from "../../src/account/threading.ts";
 import {
   acceptInbound,
   acceptOutbound,
   applyAccountSchema,
-  claimInboundReceipt,
-  completeInboundReceipt,
   failInboundReceiptPolicy,
   getInboundReceipt,
-  getRecoveryScan,
-  inspectRfcLookup,
-  listAppliedMigrations,
-  listInboundReceiptWork,
-  listItemsByIds,
-  listSchemaTables,
   observeInboundForward,
-  putRecoveryScan,
-  recordInboundReceiptRedrive,
-  recordItemGroup,
+  redriveDueInboundReceipts,
   registerInboundReceipt,
-  resolveConversation,
-  schemaStatus,
 } from "../../src/account/commands.ts";
 import { accountMigrations, type AccountMigration } from "../../src/account/migrations.ts";
 import {
-  cancelApprovalAfterNotificationFailure,
   claimDispatch,
   completeAttempt,
   decideApproval,
-  expirePendingApproval,
   getOutboundDispatch,
   getOutboundJob,
-  listDuePendingApprovals,
   listOutboundJobs,
-  listPurgeableNotifications,
-  listSendWork,
   lookupApprovalByTokenHash,
-  purgeNotificationCiphertext,
+  recoverOutbound,
   rejectReadyDispatch,
-  settleExpiredInFlight,
   submitOutbound,
 } from "../../src/account/jobs.ts";
 import {
@@ -75,52 +56,45 @@ import {
   listThreadSummaries,
   markThreadRead,
   softDeleteThread,
+  threadMessagesSql,
 } from "../../src/account/queries.ts";
-import { toAccountStoreError } from "../../src/account/errors.ts";
 import {
+  SchemaMigrationRow,
   type AcceptInboundInput,
   type AcceptOutboundInput,
-  type CancelApprovalNotificationInput,
   type ClaimDispatchInput,
-  type ClaimInboundReceiptInput,
   type CompleteAttemptInput,
   type DecideApprovalInput,
   type EnsureMcpOAuthPolicyInput,
-  type ExpireApprovalInput,
   type FailInboundReceiptPolicyInput,
   type JobViewer,
-  type ListDueApprovalsInput,
-  type ListInboundReceiptWorkInput,
   type ListMessageSummariesQuery,
   type ListOutboundJobsQuery,
-  type ListPurgeableNotificationsInput,
-  type ListSendWorkInput,
   type ListThreadMessageSummariesQuery,
   type ListThreadSummariesQuery,
   type MailboxScope,
   type ObserveInboundForwardInput,
   type PatchAddressInput,
-  type PurgeNotificationCiphertextInput,
-  type PutRecoveryScanInput,
-  type RecordInboundReceiptRedriveInput,
   type RejectReadyDispatchInput,
-  type RecordItemGroupInput,
   type RegisterInboundReceiptInput,
   type SetMcpOAuthPolicyStateInput,
-  type SettleExpiredInFlightInput,
   type SubmitOutboundInput,
   type UpdateMcpOAuthPolicyInput,
 } from "../../src/account/domain.ts";
 
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
 
-const AccountSchemaColumnRow = Schema.Struct({
+const NameRow = Schema.Struct({
   name: Schema.String,
 });
 
+const QueryPlanRow = Schema.Struct({
+  detail: Schema.String,
+});
+
 const FAILING_MIGRATION = {
-  version: 10,
-  name: "0010_fail",
+  version: 11,
+  name: "0011_fail",
   sql: `CREATE TABLE fail_marker (
   id TEXT PRIMARY KEY NOT NULL
 );
@@ -130,58 +104,33 @@ INSERT INTO fail_marker (id) VALUES ('x');
 } as const satisfies AccountMigration;
 
 export class AccountStoreTestHost extends DurableObject {
-  #activationError: Error | undefined;
+  #activationError: unknown;
   #ready = false;
 
-  schemaStatus() {
+  acceptInbound(input: AcceptInboundInput) {
     this.#ensureReady();
-    return schemaStatus(this.ctx.storage);
+    return acceptInbound(this.ctx.storage, input);
   }
 
-  recordItemGroup(input: RecordItemGroupInput) {
-    this.#ensureReady();
-    recordItemGroup(this.ctx.storage, input);
-  }
-
-  listItemsByIds(ids: ReadonlyArray<string>) {
-    this.#ensureReady();
-    return listItemsByIds(this.ctx.storage, ids);
-  }
-
-  acceptInbound(input: AcceptInboundInput, ancestryWorkBudget?: number) {
-    this.#ensureReady();
-    return acceptInbound(this.ctx.storage, input, persistOptions(ancestryWorkBudget));
-  }
-
-  acceptInboundWithReceipt(input: AcceptInboundInput, ancestryWorkBudget?: number) {
+  acceptInboundWithReceipt(input: AcceptInboundInput) {
     this.#ensureReady();
     registerInboundReceipt(this.ctx.storage, {
       receiptId: input.messageId,
-      digest: `digest-${input.messageId}`,
       envelopeFrom: "sender@example.com",
       envelopeTo: "inbox@umail.example.com",
       rawKey: `raw/${input.messageId}`,
-      manifestKey: `receipts/${input.messageId}.json`,
-      advertisedRawSize: 1,
-      consumedBytes: 1,
       receivedAt: input.occurredAt,
     });
-    return acceptInbound(this.ctx.storage, input, persistOptions(ancestryWorkBudget));
+    const accepted = acceptInbound(this.ctx.storage, input);
+    if (accepted === null) {
+      throw new Error(`Receipt ${input.messageId} was already settled`);
+    }
+    return accepted;
   }
 
-  acceptOutbound(input: AcceptOutboundInput, ancestryWorkBudget?: number) {
+  acceptOutbound(input: AcceptOutboundInput) {
     this.#ensureReady();
-    return acceptOutbound(this.ctx.storage, input, persistOptions(ancestryWorkBudget));
-  }
-
-  resolveConversation(handle: string) {
-    this.#ensureReady();
-    return resolveConversation(this.ctx.storage, handle);
-  }
-
-  inspectRfcLookup(rfcMessageId: string) {
-    this.#ensureReady();
-    return inspectRfcLookup(this.ctx.storage, rfcMessageId);
+    return acceptOutbound(this.ctx.storage, input);
   }
 
   registerInboundReceipt(input: RegisterInboundReceiptInput) {
@@ -209,34 +158,9 @@ export class AccountStoreTestHost extends DurableObject {
     return failInboundReceiptPolicy(this.ctx.storage, input);
   }
 
-  claimInboundReceipt(input: ClaimInboundReceiptInput) {
+  redriveDueInboundReceipts(input: { readonly nowIso: string; readonly limit: number }) {
     this.#ensureReady();
-    return claimInboundReceipt(this.ctx.storage, input);
-  }
-
-  completeInboundReceipt(receiptId: string) {
-    this.#ensureReady();
-    return completeInboundReceipt(this.ctx.storage, receiptId);
-  }
-
-  recordInboundReceiptRedrive(input: RecordInboundReceiptRedriveInput) {
-    this.#ensureReady();
-    return recordInboundReceiptRedrive(this.ctx.storage, input);
-  }
-
-  listInboundReceiptWork(input: ListInboundReceiptWorkInput) {
-    this.#ensureReady();
-    return listInboundReceiptWork(this.ctx.storage, input);
-  }
-
-  getRecoveryScan(scanId: string) {
-    this.#ensureReady();
-    return getRecoveryScan(this.ctx.storage, scanId);
-  }
-
-  putRecoveryScan(input: PutRecoveryScanInput) {
-    this.#ensureReady();
-    return putRecoveryScan(this.ctx.storage, input);
+    return redriveDueInboundReceipts(this.ctx.storage, input);
   }
 
   listMessageSummaries(input: ListMessageSummariesQuery) {
@@ -309,14 +233,14 @@ export class AccountStoreTestHost extends DurableObject {
     return patchAddress(this.ctx.storage, id, payload, nowIso);
   }
 
-  listSendingIdentities(mailDomain: MailDomain, mailboxScope: MailboxScope = "all") {
+  listSendingIdentities(mailboxScope: MailboxScope = "all") {
     this.#ensureReady();
-    return listSendingIdentities(this.ctx.storage, mailDomain, mailboxScope);
+    return listSendingIdentities(this.ctx.storage, mailboxScope);
   }
 
-  resolveSendingIdentity(id: string, mailDomain: MailDomain) {
+  resolveSendingIdentity(id: string) {
     this.#ensureReady();
-    return resolveSendingIdentity(this.ctx.storage, id, mailDomain);
+    return resolveSendingIdentity(this.ctx.storage, id);
   }
 
   listDestinations() {
@@ -399,16 +323,6 @@ export class AccountStoreTestHost extends DurableObject {
     return decideApproval(this.ctx.storage, input);
   }
 
-  expirePendingApproval(input: ExpireApprovalInput) {
-    this.#ensureReady();
-    return expirePendingApproval(this.ctx.storage, input);
-  }
-
-  cancelApprovalAfterNotificationFailure(input: CancelApprovalNotificationInput) {
-    this.#ensureReady();
-    return cancelApprovalAfterNotificationFailure(this.ctx.storage, input);
-  }
-
   claimDispatch(input: ClaimDispatchInput) {
     this.#ensureReady();
     return claimDispatch(this.ctx.storage, input);
@@ -417,11 +331,6 @@ export class AccountStoreTestHost extends DurableObject {
   completeAttempt(input: CompleteAttemptInput) {
     this.#ensureReady();
     return completeAttempt(this.ctx.storage, input);
-  }
-
-  settleExpiredInFlight(input: SettleExpiredInFlightInput) {
-    this.#ensureReady();
-    return settleExpiredInFlight(this.ctx.storage, input);
   }
 
   rejectReadyDispatch(input: RejectReadyDispatchInput) {
@@ -434,6 +343,11 @@ export class AccountStoreTestHost extends DurableObject {
     return getOutboundDispatch(this.ctx.storage, jobId);
   }
 
+  recoverOutbound(input: { readonly nowIso: string; readonly limit: number }) {
+    this.#ensureReady();
+    return recoverOutbound(this.ctx.storage, input);
+  }
+
   getOutboundJob(jobId: string, viewer: JobViewer) {
     this.#ensureReady();
     return getOutboundJob(this.ctx.storage, jobId, viewer);
@@ -444,58 +358,35 @@ export class AccountStoreTestHost extends DurableObject {
     return listOutboundJobs(this.ctx.storage, input);
   }
 
-  listSendWork(input: ListSendWorkInput) {
-    this.#ensureReady();
-    return listSendWork(this.ctx.storage, input);
-  }
-
-  listDuePendingApprovals(input: ListDueApprovalsInput) {
-    this.#ensureReady();
-    return listDuePendingApprovals(this.ctx.storage, input);
-  }
-
-  listPurgeableNotifications(input: ListPurgeableNotificationsInput) {
-    this.#ensureReady();
-    return listPurgeableNotifications(this.ctx.storage, input);
-  }
-
-  purgeNotificationCiphertext(input: PurgeNotificationCiphertextInput) {
-    this.#ensureReady();
-    return purgeNotificationCiphertext(this.ctx.storage, input);
-  }
-
   listTables() {
     this.#ensureReady();
-    return listSchemaTables(this.ctx.storage);
+    return this.#tables();
   }
 
   listMigrations() {
     this.#ensureReady();
-    return listAppliedMigrations(this.ctx.storage);
+    return this.#migrations();
+  }
+
+  explainThreadOpen() {
+    this.#ensureReady();
+    return Schema.decodeUnknownSync(Schema.Array(QueryPlanRow))(
+      this.ctx.storage.sql
+        .exec(`EXPLAIN QUERY PLAN ${threadMessagesSql(false)}`, "thread-id", 50)
+        .toArray(),
+    ).map((row) => row.detail);
   }
 
   listMessageColumns() {
     this.#ensureReady();
-    return Schema.decodeUnknownSync(Schema.Array(AccountSchemaColumnRow))(
+    return Schema.decodeUnknownSync(Schema.Array(NameRow))(
       this.ctx.storage.sql.exec("PRAGMA table_info(messages)").toArray(),
     ).map((row) => row.name);
   }
 
   applyFailingMigration() {
     this.#ensureReady();
-    applyAccountSchema(this.ctx.storage, {
-      accountId: requireAccountId(this.ctx),
-      nowIso: TEST_NOW_ISO,
-      migrations: [...accountMigrations, FAILING_MIGRATION],
-    });
-  }
-
-  applySchemaForAccount(accountId: string) {
-    this.#ensureReady();
-    applyAccountSchema(this.ctx.storage, {
-      accountId,
-      nowIso: TEST_NOW_ISO,
-    });
+    applyAccountSchema(this.ctx.storage, TEST_NOW_ISO, [...accountMigrations, FAILING_MIGRATION]);
   }
 
   installUnsupportedSchema(version: number) {
@@ -517,17 +408,32 @@ export class AccountStoreTestHost extends DurableObject {
     this.ctx.storage.sql.exec("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY NOT NULL)");
     this.ctx.storage.sql.exec(
       "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-      8,
-      "0008_approval_notification_jobs",
+      9,
+      "0009_account",
       TEST_NOW_ISO,
     );
   }
 
   inspectUninitializedSchema() {
-    return {
-      tables: listSchemaTables(this.ctx.storage),
-      migrations: listAppliedMigrations(this.ctx.storage),
-    };
+    return { tables: this.#tables(), migrations: this.#migrations() };
+  }
+
+  #tables() {
+    return Schema.decodeUnknownSync(Schema.Array(NameRow))(
+      this.ctx.storage.sql
+        .exec(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .toArray(),
+    ).map((row) => row.name);
+  }
+
+  #migrations() {
+    return Schema.decodeUnknownSync(Schema.Array(SchemaMigrationRow))(
+      this.ctx.storage.sql
+        .exec("SELECT version, name FROM schema_migrations ORDER BY version")
+        .toArray(),
+    );
   }
 
   #ensureReady(): void {
@@ -536,14 +442,11 @@ export class AccountStoreTestHost extends DurableObject {
     }
     if (this.#ready) return;
     try {
-      applyAccountSchema(this.ctx.storage, {
-        accountId: requireAccountId(this.ctx),
-        nowIso: TEST_NOW_ISO,
-      });
+      applyAccountSchema(this.ctx.storage, TEST_NOW_ISO);
       this.#ready = true;
     } catch (cause) {
-      this.#activationError = toAccountStoreError(cause);
-      throw this.#activationError;
+      this.#activationError = cause;
+      throw cause;
     }
   }
 }
@@ -553,21 +456,3 @@ export default {
     return new Response("account-store-test-host", { status: 200 });
   },
 };
-
-function persistOptions(ancestryWorkBudget: number | undefined) {
-  return {
-    ancestryWorkBudget:
-      ancestryWorkBudget === undefined ? THREADING_ANCESTRY_WORK_BUDGET : ancestryWorkBudget,
-    ids: cryptoThreadingIds(),
-  };
-}
-
-function requireAccountId(state: DurableObjectState): string {
-  const accountId = state.id.name;
-  if (accountId === undefined) {
-    throw toAccountStoreError(
-      new Error("AccountStore test host must be addressed by a stable account name"),
-    );
-  }
-  return accountId;
-}

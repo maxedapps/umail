@@ -138,12 +138,11 @@ form.addEventListener("submit", async (event) => {
 `;
 
 const CONSENT_PAGE_SCRIPT = `
-const params = new URLSearchParams(location.search);
-const clientId = params.get("client_id") ?? "Not supplied";
-const scope = params.get("scope") ?? "Not supplied";
-document.getElementById("client-id").textContent = clientId;
-document.getElementById("scope").textContent = scope;
 const oauthQuery = signedOAuthQuery(location.search);
+const params = new URLSearchParams(oauthQuery ?? "");
+document.getElementById("client-id").textContent = params.get("client_id") ?? "Not supplied";
+document.getElementById("scope").textContent = params.get("scope") ?? "Not supplied";
+document.getElementById("redirect-host").textContent = redirectHost(params.get("redirect_uri"));
 const consentForm = document.getElementById("consent-form");
 const acceptButton = document.getElementById("accept");
 const denyButton = document.getElementById("deny");
@@ -154,6 +153,18 @@ function showStatus(message, kind) {
   status.textContent = message;
   status.dataset.kind = kind;
   status.setAttribute("role", kind === "error" ? "alert" : "status");
+}
+
+function redirectHost(redirectUri) {
+  if (redirectUri === null) {
+    return "Not supplied";
+  }
+  try {
+    const url = new URL(redirectUri);
+    return url.protocol + "//" + url.host;
+  } catch {
+    return redirectUri;
+  }
 }
 
 function setPending(pending) {
@@ -242,6 +253,8 @@ export function consentPageResponse() {
     <dd><bdi id="client-id" dir="auto"></bdi></dd>
     <dt>Scope</dt>
     <dd><bdi id="scope" dir="auto"></bdi></dd>
+    <dt>Redirects to</dt>
+    <dd><bdi id="redirect-host" dir="auto"></bdi></dd>
   </dl>
   <div class="form-actions">
     <button id="accept" type="button">Allow access</button>

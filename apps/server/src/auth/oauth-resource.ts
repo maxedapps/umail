@@ -18,6 +18,10 @@ const OAuthAccessTokenClaims = Schema.Struct({
   umail_operator: Schema.Literal(true),
 });
 
+// Module-level so the JWKS cache outlives the per-request auth instance. better-auth caches the
+// resolved key set with a TTL and refetches when a token's kid is missing.
+const JWKS_CACHE_KEY = {};
+
 export type OAuthAccess = {
   readonly subject: string;
   readonly clientId: string;
@@ -51,7 +55,7 @@ export async function verifyOAuthBearerToken(
   try {
     payload = await verifyJwsAccessToken(token, {
       jwksFetch: () => auth.api.getJwks({}),
-      jwksCacheKey: auth,
+      jwksCacheKey: JWKS_CACHE_KEY,
       verifyOptions: {
         issuer: requirements.issuer,
         audience: requirements.audience,

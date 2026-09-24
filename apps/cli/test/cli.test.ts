@@ -9,6 +9,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import type { Json } from "effect/Schema";
@@ -20,12 +21,8 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
-import {
-  OAuthCredentialStore,
-  type OAuthCredentialStoreService,
-  OAuthScheduler,
-  type OAuthSchedulerService,
-} from "../src/auth.ts";
+import { OAuthScheduler, type OAuthSchedulerService } from "../src/auth.ts";
+import { OAuthCredentialStore, type OAuthCredentialStoreService } from "../src/credential-store.ts";
 import {
   ApprovalTokenInputError,
   ApprovalTokenSource,
@@ -63,7 +60,6 @@ const testCredentialStore = {
     expiresAt: Date.now() + 3_600_000,
     generation: 0,
   }),
-  write: () => Effect.void,
   commit: () => Effect.succeed("committed" as const),
   takeLogoutSnapshot: () => Effect.succeed(null),
   withRefreshLock: (body) => body,
@@ -137,7 +133,7 @@ const threadPage = {
 };
 
 const threadDetail = {
-  threadId: "node:550e8400-e29b-41d4-a716-446655440000",
+  threadId: "message-1",
   messages: [],
   nextCursor: null,
 };
@@ -145,7 +141,7 @@ const threadDetail = {
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 
 const threadMessagePage = {
-  threadHandle: "node:550e8400-e29b-41d4-a716-446655440000",
+  threadHandle: "message-1",
   items: [],
   nextCursor: "next-thread-message-cursor",
 };
@@ -154,7 +150,7 @@ const outboundJob = {
   jobId: "job-1",
   requestId: REQUEST_ID,
   messageId: "message-1",
-  threadHandle: "node:550e8400-e29b-41d4-a716-446655440000",
+  threadHandle: "message-1",
   state: "ready",
   purpose: "message",
   attemptId: null,
@@ -169,7 +165,7 @@ const outboundJob = {
 const sentMessage = {
   direction: "outbound",
   id: "message-1",
-  threadId: "node:550e8400-e29b-41d4-a716-446655440000",
+  threadId: "message-1",
   parentMessageId: null,
   addressId: "address-1",
   subject: "Hello",
@@ -196,7 +192,7 @@ const sentMessage = {
 const receivedMessage = {
   direction: "inbound",
   id: "received-1",
-  threadId: "node:550e8400-e29b-41d4-a716-446655440000",
+  threadId: "message-1",
   parentMessageId: null,
   addressId: "address-1",
   subject: "Received",
@@ -340,8 +336,8 @@ function runDispatch(
   return Effect.runPromise(
     Effect.gen(function* () {
       const captured = yield* runProgram(argv, env, httpClient, tokenSource, credentialStore);
-      if (Result.isFailure(captured.outcome)) {
-        return yield* captured.outcome.failure;
+      if (Exit.isFailure(captured.outcome)) {
+        return yield* Effect.failCause(captured.outcome.cause);
       }
       if (captured.stdout.length === 0) {
         return yield* Effect.die("Expected JSON command output");
@@ -359,7 +355,7 @@ function runProgram(
   credentialStore: OAuthCredentialStoreService = testCredentialStore,
 ) {
   return Effect.gen(function* () {
-    const outcome = yield* Effect.result(program(argv, env));
+    const outcome = yield* Effect.exit(program(argv, env));
     const stdout = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(
       yield* TestConsole.logLines,
     );
@@ -385,8 +381,8 @@ function dispatchEffect(
 ) {
   return Effect.gen(function* () {
     const captured = yield* runProgram(argv, env, httpClient, tokenSource, credentialStore);
-    if (Result.isFailure(captured.outcome)) {
-      return yield* captured.outcome.failure;
+    if (Exit.isFailure(captured.outcome)) {
+      return yield* Effect.failCause(captured.outcome.cause);
     }
     if (captured.stdout.length === 0) {
       return yield* Effect.die("Expected JSON command output");
@@ -927,7 +923,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(malformed.outcome)).toBe(true);
+    expect(Exit.isFailure(malformed.outcome)).toBe(true);
     expect(malformed.stderr.join("\n")).toContain("--from");
     expect(malformed.stderr.join("\n")).toContain("valid mailbox address");
 
@@ -974,7 +970,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(invalidRecipient.outcome)).toBe(true);
+    expect(Exit.isFailure(invalidRecipient.outcome)).toBe(true);
     expect(invalidRecipient.stderr.join("\n")).toContain("not-an-address");
 
     const missingTo = await Effect.runPromise(
@@ -994,7 +990,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(missingTo.outcome)).toBe(true);
+    expect(Exit.isFailure(missingTo.outcome)).toBe(true);
     expect(missingTo.stderr.join("\n")).toMatch(/--to/u);
 
     const overflow = await Effect.runPromise(
@@ -1004,8 +1000,14 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(overflow.outcome)).toBe(true);
+    expect(Exit.isFailure(overflow.outcome)).toBe(true);
     expect(overflow.stderr.join("\n")).toContain("--since");
+
+    const hoursOverflow = await Effect.runPromise(
+      runProgram(["messages", "list", "--since-hours", "3000000000"], testEnv, unusedHttpClient()),
+    );
+    expect(Exit.isFailure(hoursOverflow.outcome)).toBe(true);
+    expect(hoursOverflow.stderr).toEqual(["--since-hours produced a date outside years 1-9999"]);
 
     const conflicting = await Effect.runPromise(
       runProgram(
@@ -1014,7 +1016,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(conflicting.outcome)).toBe(true);
+    expect(Exit.isFailure(conflicting.outcome)).toBe(true);
     expect(conflicting.stderr.join("\n")).toContain("--since and --since-hours");
   });
 
@@ -1037,7 +1039,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(send.outcome)).toBe(true);
+    expect(Exit.isFailure(send.outcome)).toBe(true);
     expect(send.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
 
     const composeReplyTo = await Effect.runPromise(
@@ -1060,7 +1062,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(composeReplyTo.outcome)).toBe(true);
+    expect(Exit.isFailure(composeReplyTo.outcome)).toBe(true);
     expect(composeReplyTo.stderr.join("\n")).toContain("--reply-to");
 
     const replyTo = await Effect.runPromise(
@@ -1083,7 +1085,7 @@ describe("retained CLI dispatch", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(replyTo.outcome)).toBe(true);
+    expect(Exit.isFailure(replyTo.outcome)).toBe(true);
     expect(replyTo.stderr.join("\n")).toContain("--to");
   });
 
@@ -1246,7 +1248,7 @@ describe("public approval capability commands", () => {
           invalid.failure.stack ?? "",
           String(invalid.failure),
           inspect(invalid.failure),
-          formatCliError({ cause: invalid.failure }),
+          formatCliError(invalid.failure),
         ]) {
           expect(rendered).not.toContain(invalidToken);
           expect(rendered).not.toContain(invalidPath);
@@ -1264,7 +1266,7 @@ describe("public approval capability commands", () => {
           String(unreadable.failure),
           inspect(unreadable.failure),
           serializeApprovalTokenInputError(unreadable.failure),
-          formatCliError({ cause: unreadable.failure }),
+          formatCliError(unreadable.failure),
         ]) {
           expect(rendered).not.toContain(missingPath);
         }
@@ -1341,13 +1343,13 @@ describe("public approval capability commands", () => {
           String(failure),
           serializePublicApprovalError(failure),
           inspect(failure),
-          formatCliError({ cause: failure }),
+          formatCliError(failure),
         ];
         for (const output of rendered) {
           expect(output, fixture.name).not.toContain(approvalTokenText);
           expect(output, fixture.name).not.toContain(testEnv.UMAIL_URL);
         }
-        expect(formatCliError({ cause: failure }), fixture.name).toBe(
+        expect(formatCliError(failure), fixture.name).toBe(
           "Could not complete the approval request.",
         );
         expect(captured.stdout, fixture.name).toEqual([]);
@@ -1380,7 +1382,7 @@ describe("public approval capability commands", () => {
       if (Result.isFailure(result)) {
         expect(result.failure).toEqual(new ApprovalTokenInputError({ reason: "invalid" }));
       }
-      expect(formatCliError({ cause: new ApprovalTokenInputError({ reason: "invalid" }) })).toBe(
+      expect(formatCliError(new ApprovalTokenInputError({ reason: "invalid" }))).toBe(
         "Approval token must be 64 lowercase hexadecimal characters",
       );
     });
@@ -1397,7 +1399,7 @@ describe("removed CLI surface and safe errors", () => {
       ["approvals", "list"],
     ] as const) {
       const captured = await Effect.runPromise(runProgram(argv, testEnv, unusedHttpClient()));
-      expect(Result.isFailure(captured.outcome)).toBe(true);
+      expect(Exit.isFailure(captured.outcome)).toBe(true);
       expect(captured.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
     }
   });
@@ -1412,7 +1414,7 @@ describe("removed CLI surface and safe errors", () => {
       const captured = await Effect.runPromise(
         runProgram(["addresses", "list", flag, "must-not-render"], testEnv, unusedHttpClient()),
       );
-      expect(Result.isFailure(captured.outcome)).toBe(true);
+      expect(Exit.isFailure(captured.outcome)).toBe(true);
       expect(captured.stderr.join("\n")).toContain(flag);
       expect(`${captured.stdout.join("")}${captured.stderr.join("")}`).not.toContain(
         "must-not-render",
@@ -1421,7 +1423,7 @@ describe("removed CLI surface and safe errors", () => {
     const equals = await Effect.runPromise(
       runProgram(["addresses", "list", "--api-key=must-not-render"], testEnv, unusedHttpClient()),
     );
-    expect(Result.isFailure(equals.outcome)).toBe(true);
+    expect(Exit.isFailure(equals.outcome)).toBe(true);
     expect(equals.stderr.join("\n")).toContain("--api-key");
     expect(`${equals.stdout.join("")}${equals.stderr.join("")}`).not.toContain("must-not-render");
     const approvalKey = await Effect.runPromise(
@@ -1431,7 +1433,7 @@ describe("removed CLI surface and safe errors", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(approvalKey.outcome)).toBe(true);
+    expect(Exit.isFailure(approvalKey.outcome)).toBe(true);
     expect(approvalKey.stderr.join("\n")).toContain("--api-key");
     const tokenFlag = await Effect.runPromise(
       runProgram(
@@ -1440,7 +1442,7 @@ describe("removed CLI surface and safe errors", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(tokenFlag.outcome)).toBe(true);
+    expect(Exit.isFailure(tokenFlag.outcome)).toBe(true);
     expect(tokenFlag.stderr.join("\n")).toContain("--token");
     const missingTokenFile = await Effect.runPromise(
       runProgram(
@@ -1449,7 +1451,7 @@ describe("removed CLI surface and safe errors", () => {
         unusedHttpClient(),
       ),
     );
-    expect(Result.isFailure(missingTokenFile.outcome)).toBe(true);
+    expect(Exit.isFailure(missingTokenFile.outcome)).toBe(true);
     expect(missingTokenFile.stderr.join("\n")).toContain("--token-file");
   });
 
@@ -1528,20 +1530,63 @@ describe("removed CLI surface and safe errors", () => {
     }),
   );
 
+  it("prints each failure once and stays silent on interruption", async () => {
+    const defect = await Effect.runPromise(
+      runProgram(
+        ["clients", "set-policy", "--id", "agent-1", "--label", ""],
+        testEnv,
+        capturingClient().httpClient,
+      ),
+    );
+    expect(Exit.isFailure(defect.outcome)).toBe(true);
+    expect(defect.stdout).toEqual([]);
+    expect(defect.stderr).toEqual(["Schema validation failed"]);
+
+    const usage = await Effect.runPromise(
+      runProgram(
+        [
+          "messages",
+          "compose",
+          "--from",
+          "not an address",
+          "--subject",
+          "s",
+          "--to",
+          "bob@example.com",
+          "--text",
+          "t",
+        ],
+        testEnv,
+        unusedHttpClient(),
+      ),
+    );
+    expect(usage.stderr.join("\n").match(/valid mailbox address/gu)).toHaveLength(1);
+
+    const interrupted = await Effect.runPromise(
+      runProgram(
+        ["threads", "list"],
+        testEnv,
+        HttpClient.make(() => Effect.interrupt),
+      ),
+    );
+    expect(Exit.hasInterrupts(interrupted.outcome)).toBe(true);
+    expect(interrupted.stderr).toEqual([]);
+  });
+
   it("formats HTTP and API errors without request credentials", () => {
     const keyValue = "root-key-that-must-not-render";
     const request = HttpClientRequest.get("https://umail.example.test/addresses").pipe(
       HttpClientRequest.setHeader("authorization", `Bearer ${keyValue}`),
     );
     const response = HttpClientResponse.fromWeb(request, new Response(null, { status: 401 }));
-    const formatted = formatCliError({
-      cause: new HttpClientError.HttpClientError({
+    const formatted = formatCliError(
+      new HttpClientError.HttpClientError({
         reason: new HttpClientError.StatusCodeError({ request, response }),
       }),
-    });
+    );
 
     expect(formatted).toContain("401");
     expect(formatted).not.toContain(keyValue);
-    expect(formatCliError({ cause: new HttpApiError.NotFound() })).toBe("NotFound");
+    expect(formatCliError(new HttpApiError.NotFound())).toBe("NotFound");
   });
 });

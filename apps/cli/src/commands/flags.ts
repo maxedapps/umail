@@ -5,9 +5,8 @@ import {
   parseUtcInstant,
   SubmissionRequestId,
 } from "@umail/api-contract";
-import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as CliError from "effect/unstable/cli/CliError";
 import * as Flag from "effect/unstable/cli/Flag";
 
 export const idFlag = Flag.string("id").pipe(Flag.withDescription("Resource id"));
@@ -22,20 +21,13 @@ export const cursorFlag = Flag.optional(
 
 export const fromFlag = Flag.string("from").pipe(
   Flag.withDescription("Send from this mailbox address"),
-  Flag.mapEffect((raw) => {
-    const parsed = parseMailboxAddress(raw);
-    if (parsed.kind === "invalid") {
-      return Effect.fail(
-        new CliError.InvalidValue({
-          option: "from",
-          value: raw,
-          expected: "a valid mailbox address",
-          kind: "flag",
-        }),
-      );
-    }
-    return Effect.succeed(parsed.address);
-  }),
+  Flag.filterMap(
+    (raw) => {
+      const parsed = parseMailboxAddress(raw);
+      return parsed.kind === "invalid" ? Option.none() : Option.some(parsed.address);
+    },
+    () => "a valid mailbox address",
+  ),
 );
 
 export const subjectFlag = Flag.string("subject").pipe(Flag.withDescription("Subject line"));
@@ -59,39 +51,17 @@ export const htmlFlag = Flag.optional(Flag.string("html").pipe(Flag.withDescript
 export const requestIdFlag = Flag.optional(
   Flag.string("request-id").pipe(
     Flag.withDescription("Stable submission id; generated once when omitted"),
-    Flag.mapEffect((raw) =>
-      Schema.decodeEffect(SubmissionRequestId)(raw).pipe(
-        Effect.mapError(
-          () =>
-            new CliError.InvalidValue({
-              option: "request-id",
-              value: raw,
-              expected: "a UUID",
-              kind: "flag",
-            }),
-        ),
-      ),
-    ),
+    Flag.filterMap(Schema.decodeOption(SubmissionRequestId), () => "a UUID"),
   ),
 );
 
 export const sinceFlag = Flag.optional(
   Flag.string("since").pipe(
     Flag.withDescription("Occurred at or after this instant"),
-    Flag.mapEffect((raw) => {
-      const instant = parseUtcInstant(raw);
-      if (instant === null) {
-        return Effect.fail(
-          new CliError.InvalidValue({
-            option: "since",
-            value: raw,
-            expected: "a canonical UTC instant",
-            kind: "flag",
-          }),
-        );
-      }
-      return Effect.succeed(instant);
-    }),
+    Flag.filterMap(
+      (raw) => Option.fromNullOr(parseUtcInstant(raw)),
+      () => "a canonical UTC instant",
+    ),
   ),
 );
 
@@ -144,24 +114,15 @@ export const recipientAllowlistFlag = Flag.optional(
   ),
 );
 
-export const activeFlag = Flag.optional(
-  Flag.choice("active", ["true", "false"]).pipe(
-    Flag.withDescription("Whether the client stays active"),
-  ),
-);
+export const activeFlag = booleanChoiceFlag("active", "Whether the client stays active");
 
-export const canReadFlag = Flag.optional(
-  Flag.choice("can-read", ["true", "false"]).pipe(Flag.withDescription("Allow reading mail")),
-);
+export const canReadFlag = booleanChoiceFlag("can-read", "Allow reading mail");
 
-export const canDeleteFlag = Flag.optional(
-  Flag.choice("can-delete", ["true", "false"]).pipe(Flag.withDescription("Allow deleting mail")),
-);
+export const canDeleteFlag = booleanChoiceFlag("can-delete", "Allow deleting mail");
 
-export const canAdminFlag = Flag.optional(
-  Flag.choice("can-admin", ["true", "false"]).pipe(
-    Flag.withDescription("Allow administration, including editing client policies"),
-  ),
+export const canAdminFlag = booleanChoiceFlag(
+  "can-admin",
+  "Allow administration, including editing client policies",
 );
 
 export const replyAllFlag = Flag.boolean("reply-all").pipe(
@@ -175,21 +136,25 @@ export const tokenFileFlag = Flag.optional(
   ),
 );
 
+function booleanChoiceFlag(name: string, description: string) {
+  return Flag.optional(
+    Flag.choiceWithValue(name, [
+      ["true", true],
+      ["false", false],
+    ]).pipe(Flag.withDescription(description)),
+  );
+}
+
 function recipientFlag(name: string) {
   return Flag.string(name).pipe(
-    Flag.mapEffect((raw) => {
-      const parsed = parseExternalMailAddress(raw);
-      if (parsed.kind !== "ok") {
-        return Effect.fail(
-          new CliError.InvalidValue({
-            option: name,
-            value: raw,
-            expected: "a valid recipient address",
-            kind: "flag",
-          }),
-        );
-      }
-      return Effect.succeed(new MailContact({ address: parsed.address, displayName: null }));
-    }),
+    Flag.filterMap(
+      (raw) => {
+        const parsed = parseExternalMailAddress(raw);
+        return parsed.kind === "ok"
+          ? Option.some(new MailContact({ address: parsed.address, displayName: null }))
+          : Option.none();
+      },
+      () => "a valid recipient address",
+    ),
   );
 }

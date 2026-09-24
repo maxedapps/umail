@@ -2,8 +2,6 @@
 
 import {
   approvalNotificationIdempotencyKey,
-  generateApprovalToken,
-  hashApprovalToken,
   parseExternalMailAddress,
   parseMailDomain,
   SubmissionRequestId,
@@ -12,7 +10,8 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { accountStore, taggedName } from "./harness.ts";
+import type { SubmitOutboundInput } from "../../src/account/domain.ts";
+import { accountStore, approvalMaterial, failureOf, taggedName } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -26,7 +25,7 @@ describe("account-store outbound submissions", () => {
     const store = accountStore("submit-replay");
     const mailbox = await requireAddress(store, "inbox");
     const first = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         subject: "Hello",
         to: ["recipient@example.com"],
       }),
@@ -36,7 +35,7 @@ describe("account-store outbound submissions", () => {
     expect(first.job.state).not.toBe("accepted");
 
     const replay = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         subject: "Hello",
         to: ["recipient@example.com"],
       }),
@@ -45,17 +44,11 @@ describe("account-store outbound submissions", () => {
     expect(replay.job.jobId).toBe(first.job.jobId);
     expect(replay.job.state).toBe("ready");
 
-    let conflict: unknown;
-    try {
-      await store.submitOutbound(
-        await composeInput(store, mailbox.id, REQUEST_A, {
-          subject: "Changed",
-          to: ["recipient@example.com"],
-        }),
-      );
-    } catch (cause) {
-      conflict = cause;
-    }
+    const conflictInput = composeInput(mailbox.id, REQUEST_A, {
+      subject: "Changed",
+      to: ["recipient@example.com"],
+    });
+    const conflict = await failureOf(store, (host) => host.submitOutbound(conflictInput));
     expect(taggedName(conflict)).toBe("SubmissionConflictError");
     expect(await store.getOutboundJob(first.job.jobId, { kind: "operator" })).toMatchObject({
       jobId: first.job.jobId,
@@ -69,13 +62,13 @@ describe("account-store outbound submissions", () => {
     await seedOauthPolicy(store, "client-a", { kind: "allow" });
     await seedOauthPolicy(store, "client-b", { kind: "allow" });
     const first = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("client-a"),
         to: ["recipient@example.com"],
       }),
     );
     const second = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("client-b"),
         to: ["recipient@example.com"],
       }),
@@ -91,17 +84,17 @@ describe("account-store outbound submissions", () => {
     await seedOauthPolicy(store, clientId, { kind: "allow" });
 
     const operator = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: { kind: "operator", clientId, label: "AgentMail CLI" },
       }),
     );
     const mcp = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester(clientId),
       }),
     );
     const replay = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester(clientId),
       }),
     );
@@ -130,22 +123,16 @@ describe("account-store outbound submissions", () => {
       preapproved: ["exempt@example.com"],
     });
 
-    let denied: unknown;
-    try {
-      await store.submitOutbound(
-        await composeInput(store, mailbox.id, REQUEST_A, {
-          requester: mcpRequester("agent"),
-          to: ["exempt@example.com"],
-          cc: ["blocked@example.com"],
-        }),
-      );
-    } catch (cause) {
-      denied = cause;
-    }
+    const deniedInput = composeInput(mailbox.id, REQUEST_A, {
+      requester: mcpRequester("agent"),
+      to: ["exempt@example.com"],
+      cc: ["blocked@example.com"],
+    });
+    const denied = await failureOf(store, (host) => host.submitOutbound(deniedInput));
     expect(taggedName(denied)).toBe("JobAuthorizationError");
 
     const waiting = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_B, {
+      composeInput(mailbox.id, REQUEST_B, {
         requester: mcpRequester("agent"),
         to: ["allowed@example.com"],
         cc: ["exempt@example.com"],
@@ -156,9 +143,10 @@ describe("account-store outbound submissions", () => {
     expect(waiting.approval?.state).toBe("pending");
     expect(waiting.job.state).not.toBe("accepted");
 
-    const ready = await store.listSendWork({ kind: "ready", nowIso: NOW, limit: 50 });
-    expect(ready.items).toHaveLength(1);
-    expect(ready.items[0]).toMatchObject({
+    const jobs = await store.listOutboundJobs({ viewer: { kind: "operator" }, limit: 50 });
+    const ready = jobs.items.filter((job) => job.state === "ready");
+    expect(ready).toHaveLength(1);
+    expect(ready[0]).toMatchObject({
       purpose: "approval_notification",
       state: "ready",
       requestId: approvalNotificationIdempotencyKey(
@@ -166,9 +154,9 @@ describe("account-store outbound submissions", () => {
       ),
       messageId: waiting.job.messageId,
     });
-    expect(ready.items[0]?.jobId).not.toBe(waiting.job.jobId);
+    expect(ready[0]?.jobId).not.toBe(waiting.job.jobId);
     const claimed = await store.claimDispatch({
-      jobId: ready.items[0]?.jobId ?? "",
+      jobId: ready[0]?.jobId ?? "",
       nowIso: NOW,
       claimExpiresAt: "2026-01-01T00:15:00.000Z",
     });
@@ -183,7 +171,7 @@ describe("account-store outbound submissions", () => {
     const mailbox = await requireAddress(store, "inbox");
     await seedOauthPolicy(store, "agent", { kind: "allow" });
     const first = await store.submitOutbound(
-      await composeInput(store, mailbox.id, REQUEST_A, {
+      composeInput(mailbox.id, REQUEST_A, {
         requester: mcpRequester("agent"),
         to: ["recipient@example.com"],
       }),
@@ -193,17 +181,11 @@ describe("account-store outbound submissions", () => {
 
     await store.revokeMcpOAuthPolicy("agent", NOW);
 
-    let denied: unknown;
-    try {
-      await store.submitOutbound(
-        await composeInput(store, mailbox.id, REQUEST_A, {
-          requester: mcpRequester("agent"),
-          to: ["recipient@example.com"],
-        }),
-      );
-    } catch (cause) {
-      denied = cause;
-    }
+    const deniedInput = composeInput(mailbox.id, REQUEST_A, {
+      requester: mcpRequester("agent"),
+      to: ["recipient@example.com"],
+    });
+    const denied = await failureOf(store, (host) => host.submitOutbound(deniedInput));
     expect(taggedName(denied)).toBe("JobAuthorizationError");
     expect(await store.getOutboundJob(first.job.jobId, { kind: "operator" })).toMatchObject({
       jobId: first.job.jobId,
@@ -214,97 +196,46 @@ describe("account-store outbound submissions", () => {
   it("fails closed for unknown, disabled, or revoked clients and deny send mode", async () => {
     const store = accountStore("submit-closed");
     const mailbox = await requireAddress(store, "inbox");
-    let missing: unknown;
-    try {
-      await store.submitOutbound(
-        await composeInput(store, mailbox.id, REQUEST_A, {
-          requester: mcpRequester("missing"),
-        }),
-      );
-    } catch (cause) {
-      missing = cause;
-    }
+    const missingInput = composeInput(mailbox.id, REQUEST_A, {
+      requester: mcpRequester("missing"),
+    });
+    const missing = await failureOf(store, (host) => host.submitOutbound(missingInput));
     expect(taggedName(missing)).toBe("JobAuthorizationError");
 
     await seedOauthPolicy(store, "denied", { kind: "deny" });
-    let sendDenied: unknown;
-    try {
-      await store.submitOutbound(
-        await composeInput(store, mailbox.id, REQUEST_B, {
-          requester: mcpRequester("denied"),
-        }),
-      );
-    } catch (cause) {
-      sendDenied = cause;
-    }
+    const sendDeniedInput = composeInput(mailbox.id, REQUEST_B, {
+      requester: mcpRequester("denied"),
+    });
+    const sendDenied = await failureOf(store, (host) => host.submitOutbound(sendDeniedInput));
     expect(taggedName(sendDenied)).toBe("JobAuthorizationError");
   });
 });
 
-async function composeInput(
-  store: DurableObjectStub<AccountStoreTestHost>,
+function composeInput(
   mailboxId: string,
   requestId: string,
   options: {
     readonly requester?: { kind: "operator" | "mcp"; clientId: string; label: string };
     readonly subject?: string;
-    readonly to?: ReadonlyArray<string>;
+    readonly to?: readonly [string, ...string[]];
     readonly cc?: ReadonlyArray<string>;
   },
-) {
-  const requester = options.requester ?? operatorRequester();
-  const needsApproval =
-    requester.kind === "mcp" && (await mcpNeedsApproval(store, requester.clientId, options));
-  const input = {
+): SubmitOutboundInput {
+  const [firstTo, ...restTo] = options.to ?? ["recipient@example.com"];
+  return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
-    requester,
+    requester: options.requester ?? operatorRequester(),
     mailboxId,
-    mailDomain: DOMAIN,
     subject: options.subject ?? "Hello",
     textBody: "body",
     htmlBody: null,
     hasRemoteImages: false,
-    to: (options.to ?? ["recipient@example.com"]).map(contact),
+    to: [contact(firstTo), ...restTo.map(contact)],
     cc: (options.cc ?? []).map(contact),
     inReplyToHeader: null,
     referencesHeader: null,
     nowIso: NOW,
-  };
-  if (!needsApproval) {
-    return input;
-  }
-  return {
-    ...input,
-    approval: await approvalMaterials(),
-  };
-}
-
-async function mcpNeedsApproval(
-  store: DurableObjectStub<AccountStoreTestHost>,
-  clientId: string,
-  options: {
-    readonly to?: ReadonlyArray<string>;
-    readonly cc?: ReadonlyArray<string>;
-  },
-): Promise<boolean> {
-  const policy = await store.getMcpOAuthPolicy(clientId);
-  if (policy === null || policy.policy.sendMode.kind !== "requireApproval") {
-    return false;
-  }
-  const preapproved = new Set(policy.policy.sendMode.preapprovedRecipients);
-  const recipients = [...(options.to ?? ["recipient@example.com"]), ...(options.cc ?? [])];
-  return recipients.some((address) => !preapproved.has(requireExternal(address)));
-}
-
-async function approvalMaterials() {
-  return {
-    tokenHash: await hashApprovalToken(generateApprovalToken()),
-    expiresAt: EXPIRES,
-    notification: {
-      keyVersion: "v1",
-      nonce: "n1",
-      ciphertext: "secret-capability-ciphertext",
-    },
+    approval: approvalMaterial(EXPIRES),
   };
 }
 

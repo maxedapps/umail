@@ -7,15 +7,20 @@ import {
   MAX_HEADER_BLOCK_BYTES,
   MailMessagePage,
   MailThreadDetail,
-  MailThreadMessagePage,
   MessageHeaders,
   OutboundJobStatus,
   ThreadMessage,
   headerBlock,
 } from "@umail/api-contract";
+import { RpcCallError } from "alchemy/Rpc";
+import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
+
+import type { AccountStoreError } from "../../src/account/errors.ts";
 
 import { connectedMcp } from "./mcp-drivers.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
@@ -34,20 +39,17 @@ const MCP_TOOL_NAMES = [
   "umail_list_threads",
   "umail_list_messages",
   "umail_get_thread",
-  "umail_list_thread_messages",
   "umail_get_message",
   "umail_get_message_headers",
   "umail_set_thread_read_state",
   "umail_send_message",
-  "umail_submit_message",
+  "umail_reply_to_message",
   "umail_get_job",
 ] as const;
 
-const SendMessageToolOutput = Schema.Struct({ job: OutboundJobStatus });
-const SubmitMessageToolOutput = Schema.Struct({ job: OutboundJobStatus });
+const JobToolOutput = Schema.Struct({ job: OutboundJobStatus });
 const GetThreadToolOutput = Schema.Struct({ thread: MailThreadDetail });
 const ListMessagesToolOutput = Schema.Struct({ page: MailMessagePage });
-const ListThreadMessagesToolOutput = Schema.Struct({ page: MailThreadMessagePage });
 const GetMessageToolOutput = Schema.Struct({ message: ThreadMessage });
 const ToolErrorBody = Schema.Struct({ error: Schema.String });
 
@@ -143,6 +145,34 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("advertises flat object inputs, with exact required fields and no intent for sends", async () => {
+    const world = await createWorld();
+    const token = await issueMcpAccessToken(world, await registerMcpClient(world));
+    const client = await connectedMcp(world, token.access_token);
+    try {
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        expect(tool.inputSchema.type, tool.name).toBe("object");
+        for (const key of ["anyOf", "oneOf", "$ref"]) {
+          expect(tool.inputSchema, tool.name).not.toHaveProperty(key);
+        }
+      }
+      const inputOf = (name: string) => tools.find((tool) => tool.name === name)?.inputSchema;
+      expect(inputOf("umail_send_message")?.required).toEqual(["fromAddressId", "subject", "to"]);
+      expect(inputOf("umail_reply_to_message")?.required).toEqual([
+        "fromAddressId",
+        "subject",
+        "replyToMessageId",
+        "replyMode",
+      ]);
+      expect(inputOf("umail_send_message")?.properties).not.toHaveProperty("intent");
+      expect(inputOf("umail_reply_to_message")?.properties).not.toHaveProperty("intent");
+      expect(inputOf("umail_list_messages")?.properties?.["since"]).toHaveProperty("description");
     } finally {
       await client.close();
     }
@@ -282,21 +312,38 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       sendMode: "allow",
       recipientAllowlist: "any",
     });
-    try {
-      const result = await client.callTool({
+    const send = (args: Record<string, unknown>) =>
+      client.callTool({
         name: "umail_send_message",
         arguments: {
-          intent: "compose",
           fromAddressId: mailbox.id,
-          to: [{ address: "recipient@example.com", displayName: null }],
+          to: [{ address: "recipient@example.com" }],
           subject: "Compose job",
           text: "body",
+          ...args,
         },
       });
+    try {
+      const result = await send({});
       expect(result.isError).not.toBe(true);
-      const output = Schema.decodeUnknownSync(SendMessageToolOutput)(result.structuredContent);
+      const output = Schema.decodeUnknownSync(JobToolOutput)(result.structuredContent);
       expect(output.job.state).toBe("ready");
       expect(output.job.state).not.toBe("accepted");
+      expect(output.job.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+
+      const requestId = "11111111-1111-4111-8111-111111111111";
+      const first = Schema.decodeUnknownSync(JobToolOutput)(
+        (await send({ requestId })).structuredContent,
+      );
+      const replay = Schema.decodeUnknownSync(JobToolOutput)(
+        (await send({ requestId })).structuredContent,
+      );
+      expect(replay.job.jobId).toBe(first.job.jobId);
+      const conflict = await send({ requestId, subject: "Changed" });
+      expect(conflict.isError).toBe(true);
+      expect(Schema.decodeUnknownSync(ToolErrorBody)(parseTextResult(conflict))).toEqual({
+        error: "requestId reused with different content.",
+      });
     } finally {
       await client.close();
     }
@@ -322,9 +369,8 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     });
     try {
       const result = await client.callTool({
-        name: "umail_submit_message",
+        name: "umail_send_message",
         arguments: {
-          intent: "compose",
           requestId: "11111111-1111-4111-8111-111111111111",
           fromAddressId: mailbox.id,
           to: [{ address: "blocked@example.com", displayName: null }],
@@ -335,6 +381,46 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       expect(result.isError).toBe(true);
       expect(Schema.decodeUnknownSync(ToolErrorBody)(parseTextResult(result))).toEqual({
         error: "The request is not permitted.",
+      });
+      const jobs = await Effect.runPromise(
+        world.account.listOutboundJobs({ viewer: { kind: "operator" } }),
+      );
+      expect(jobs.items).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("passes the API problem message through when sending from an unknown address", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    const registered = await registerMcpClient(world, {
+      label: "Sender",
+      mailboxIds: mailbox.id,
+      canRead: true,
+      sendMode: "allow",
+    });
+    const token = await issueMcpAccessToken(world, registered);
+    const client = await connectedMcp(world, token.access_token);
+    await updatePolicy(world, registered.clientId, {
+      label: "Sender",
+      mailboxIds: mailbox.id,
+      sendMode: "allow",
+      recipientAllowlist: "any",
+    });
+    try {
+      const result = await client.callTool({
+        name: "umail_send_message",
+        arguments: {
+          fromAddressId: "no-such-address",
+          to: [{ address: "recipient@example.com" }],
+          subject: "Unknown sender",
+          text: "body",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(Schema.decodeUnknownSync(ToolErrorBody)(parseTextResult(result))).toEqual({
+        error: "The from address is unknown or inactive.",
       });
       const jobs = await Effect.runPromise(
         world.account.listOutboundJobs({ viewer: { kind: "operator" } }),
@@ -358,9 +444,8 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     const client = await connectedMcp(world, token.access_token);
     const submit = (requestId: string, to: ReadonlyArray<string>, cc: ReadonlyArray<string> = []) =>
       client.callTool({
-        name: "umail_submit_message",
+        name: "umail_send_message",
         arguments: {
-          intent: "compose",
           requestId,
           fromAddressId: mailbox.id,
           to: to.map((address) => ({ address, displayName: null })),
@@ -379,9 +464,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       });
       const pending = await submit("11111111-1111-4111-8111-111111111111", ["allowed@example.com"]);
       expect(pending.isError).not.toBe(true);
-      const pendingJob = Schema.decodeUnknownSync(SubmitMessageToolOutput)(
-        pending.structuredContent,
-      ).job;
+      const pendingJob = Schema.decodeUnknownSync(JobToolOutput)(pending.structuredContent).job;
       expect(pendingJob.state).toBe("waiting_approval");
       expect(
         await Effect.runPromise(
@@ -439,9 +522,8 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     });
     try {
       const result = await client.callTool({
-        name: "umail_submit_message",
+        name: "umail_send_message",
         arguments: {
-          intent: "compose",
           requestId: "11111111-1111-4111-8111-111111111111",
           fromAddressId: mailbox.id,
           to: [{ address: "recipient@example.com", displayName: null }],
@@ -450,7 +532,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         },
       });
       expect(result.isError).not.toBe(true);
-      const output = Schema.decodeUnknownSync(SubmitMessageToolOutput)(result.structuredContent);
+      const output = Schema.decodeUnknownSync(JobToolOutput)(result.structuredContent);
       expect(output.job.state).toBe("waiting_approval");
       const job = await Effect.runPromise(
         world.account.getOutboundJob(output.job.jobId, {
@@ -485,9 +567,8 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     });
     const submit = (to: ReadonlyArray<string>, subject: string, requestId: string) =>
       client.callTool({
-        name: "umail_submit_message",
+        name: "umail_send_message",
         arguments: {
-          intent: "compose",
           requestId,
           fromAddressId: mailbox.id,
           to: to.map((address) => ({ address, displayName: null })),
@@ -501,27 +582,27 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         "Straight through",
         "11111111-1111-4111-8111-111111111111",
       );
-      expect(
-        Schema.decodeUnknownSync(SubmitMessageToolOutput)(direct.structuredContent).job.state,
-      ).toBe("ready");
+      expect(Schema.decodeUnknownSync(JobToolOutput)(direct.structuredContent).job.state).toBe(
+        "ready",
+      );
 
       const parked = await submit(
         ["someone@example.com"],
         "Needs a human",
         "22222222-2222-4222-8222-222222222222",
       );
-      expect(
-        Schema.decodeUnknownSync(SubmitMessageToolOutput)(parked.structuredContent).job.state,
-      ).toBe("waiting_approval");
+      expect(Schema.decodeUnknownSync(JobToolOutput)(parked.structuredContent).job.state).toBe(
+        "waiting_approval",
+      );
 
       const mixed = await submit(
         ["trusted@example.com", "someone@example.com"],
         "Mixed audience",
         "33333333-3333-4333-8333-333333333333",
       );
-      expect(
-        Schema.decodeUnknownSync(SubmitMessageToolOutput)(mixed.structuredContent).job.state,
-      ).toBe("waiting_approval");
+      expect(Schema.decodeUnknownSync(JobToolOutput)(mixed.structuredContent).job.state).toBe(
+        "waiting_approval",
+      );
     } finally {
       await client.close();
     }
@@ -548,7 +629,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       expect(listed.isError).not.toBe(true);
       const got = await client.callTool({
         name: "umail_get_thread",
-        arguments: { threadId: inbound.threadHandle },
+        arguments: { threadId: inbound.threadId },
       });
       const thread = Schema.decodeUnknownSync(GetThreadToolOutput)(got.structuredContent);
       expect(thread.thread.messages[0]?.id).toBe(inbound.messageId);
@@ -558,13 +639,6 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       });
       const messages = Schema.decodeUnknownSync(ListMessagesToolOutput)(
         listedMessages.structuredContent,
-      );
-      const listedThreadMessages = await client.callTool({
-        name: "umail_list_thread_messages",
-        arguments: { threadId: inbound.threadHandle },
-      });
-      const threadMessages = Schema.decodeUnknownSync(ListThreadMessagesToolOutput)(
-        listedThreadMessages.structuredContent,
       );
       const gotMessage = await client.callTool({
         name: "umail_get_message",
@@ -579,7 +653,6 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       const summaries = [
         thread.thread.messages[0],
         messages.page.items[0],
-        threadMessages.page.items[0],
         message.message,
         restMessage,
       ];
@@ -600,7 +673,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       expect(JSON.stringify(messages.page)).not.toContain("textBody");
       await client.callTool({
         name: "umail_set_thread_read_state",
-        arguments: { threadId: inbound.threadHandle, isRead: true },
+        arguments: { threadId: inbound.threadId, isRead: true },
       });
       const after = await client.callTool({
         name: "umail_list_messages",
@@ -622,9 +695,18 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     try {
       const excess = await client.callTool({
         name: "umail_get_thread",
-        arguments: { threadId: "node:00000000-0000-4000-8000-000000000000", extra: true },
+        arguments: { threadId: "filter-in", extra: true },
       });
       expect(excess.isError).toBe(true);
+      const bodyless = await client.callTool({
+        name: "umail_send_message",
+        arguments: {
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com" }],
+          subject: "No body",
+        },
+      });
+      expect(bodyless.isError).toBe(true);
       const unread = await client.callTool({
         name: "umail_list_messages",
         arguments: { unread: true },
@@ -758,6 +840,172 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     }
   });
 
+  it("replies with recipients derived from the parent through umail_reply_to_message", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    const parent = await seedInboundMessage(world, mailbox.id, { id: "reply-parent" });
+    const registered = await registerMcpClient(world, {
+      label: "Replier",
+      mailboxIds: mailbox.id,
+      canRead: true,
+      sendMode: "allow",
+    });
+    const token = await issueMcpAccessToken(world, registered);
+    const client = await connectedMcp(world, token.access_token);
+    await updatePolicy(world, registered.clientId, {
+      label: "Replier",
+      mailboxIds: mailbox.id,
+      sendMode: "allow",
+      recipientAllowlist: "any",
+    });
+    try {
+      const result = await client.callTool({
+        name: "umail_reply_to_message",
+        arguments: {
+          fromAddressId: mailbox.id,
+          replyToMessageId: parent.messageId,
+          replyMode: "reply",
+          subject: "Re: Subject reply-parent",
+          text: "reply body",
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      const { job } = Schema.decodeUnknownSync(JobToolOutput)(result.structuredContent);
+      expect(job.state).toBe("ready");
+      expect(job.threadHandle).toBe(parent.threadId);
+      const reply = await Schema.decodeUnknownPromise(ThreadMessage)(
+        await (
+          await world.fetch(`http://umail.test/messages/${job.messageId}`, authorized(world))
+        ).json(),
+      );
+      expect(reply.to.map((contact) => contact.address)).toEqual(["sender@example.com"]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("pages a thread from umail_get_thread given any message id in it", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    const root = await seedInboundMessage(world, mailbox.id, {
+      id: "thread-root",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const child = await seedInboundMessage(world, mailbox.id, {
+      id: "thread-child",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      inReplyToHeader: "<thread-root@example.com>",
+    });
+    const token = await issueMcpAccessToken(world, await registerMcpClient(world));
+    const client = await connectedMcp(world, token.access_token);
+    const getThread = async (args: Record<string, unknown>) =>
+      Schema.decodeUnknownSync(GetThreadToolOutput)(
+        (await client.callTool({ name: "umail_get_thread", arguments: args })).structuredContent,
+      ).thread;
+    try {
+      const first = await getThread({ threadId: child.messageId, limit: 1 });
+      expect(first.threadId).toBe(root.threadId);
+      expect(first.messages.map((message) => message.id)).toEqual(["thread-root"]);
+      const second = await getThread({
+        threadId: child.messageId,
+        limit: 1,
+        cursor: first.nextCursor,
+      });
+      expect(second.messages.map((message) => message.id)).toEqual(["thread-child"]);
+      expect(second.nextCursor).toBeNull();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("drops htmlBody from umail_get_message when a text body exists", async () => {
+    const world = await createWorld();
+    const mailbox = await seedMailbox(world);
+    const both = await seedInboundMessage(world, mailbox.id, {
+      id: "text-and-html",
+      htmlBody: "<p>html</p>",
+    });
+    const htmlOnly = await seedInboundMessage(world, mailbox.id, {
+      id: "html-only",
+      textBody: null,
+      htmlBody: "<p>only html</p>",
+    });
+    const token = await issueMcpAccessToken(world, await registerMcpClient(world));
+    const client = await connectedMcp(world, token.access_token);
+    const getMessage = async (messageId: string) =>
+      Schema.decodeUnknownSync(GetMessageToolOutput)(
+        (await client.callTool({ name: "umail_get_message", arguments: { messageId } }))
+          .structuredContent,
+      ).message;
+    try {
+      expect(await getMessage(both.messageId)).toMatchObject({ textBody: "text", htmlBody: null });
+      expect(await getMessage(htmlOnly.messageId)).toMatchObject({
+        textBody: null,
+        htmlBody: "<p>only html</p>",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("maps a plain ThreadHandleError envelope from the store to the not-found text", async () => {
+    const world = await createWorld({
+      account: {
+        listThreadMessageSummaries: () =>
+          failOverRpc({ _tag: "ThreadHandleError", handle: "missing", reason: "not_found" }),
+      },
+    });
+    const token = await issueMcpAccessToken(world, await registerMcpClient(world));
+    const client = await connectedMcp(world, token.access_token);
+    try {
+      const result = await client.callTool({
+        name: "umail_get_thread",
+        arguments: { threadId: "missing" },
+      });
+      expect(result.isError).toBe(true);
+      expect(Schema.decodeUnknownSync(ToolErrorBody)(parseTextResult(result))).toEqual({
+        error: "The requested resource was not found.",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("answers a generic failure and logs once in the tool helper for an RpcCallError", async () => {
+    const logs: Array<{ readonly message: unknown; readonly defect: unknown }> = [];
+    const capture = Logger.make(({ message, cause }) => {
+      logs.push({ message, defect: Cause.squash(cause) });
+    });
+    const world = await createWorld({
+      account: {
+        listSendingIdentities: () =>
+          failOverRpc(
+            new RpcCallError({ method: "listSendingIdentities", cause: new Error("DO reset") }),
+          ),
+      },
+      requestContext: Context.make(Logger.CurrentLoggers, new Set([capture])),
+    });
+    const token = await issueMcpAccessToken(world, await registerMcpClient(world));
+    const client = await connectedMcp(world, token.access_token);
+    logs.length = 0;
+    try {
+      const result = await client.callTool({
+        name: "umail_list_sending_identities",
+        arguments: {},
+      });
+      expect(result.isError).toBe(true);
+      expect(Schema.decodeUnknownSync(ToolErrorBody)(parseTextResult(result))).toEqual({
+        error: "The AgentMail API request failed.",
+      });
+      expect(JSON.stringify(result)).not.toContain("DO reset");
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.message).toEqual(["MCP tool failed"]);
+      expect(logs[0]?.defect).toBeInstanceOf(RpcCallError);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("serves exact MCP protected-resource metadata without registration discovery", async () => {
     const world = await createWorld();
     const response = await world.fetch(
@@ -823,6 +1071,10 @@ async function rawToolsList(world: World, token: string) {
     },
     body: JSON.stringify({ jsonrpc: JSONRPC_VERSION, id: 1, method: "tools/list" }),
   });
+}
+
+function failOverRpc(error: unknown): Effect.Effect<never, AccountStoreError> {
+  return Effect.fail(error as AccountStoreError);
 }
 
 function parseTextResult(result: Awaited<ReturnType<Client["callTool"]>>) {

@@ -1,6 +1,5 @@
 import type { OutboundJob, StoredApproval } from "../../account/domain.ts";
 import type { ApprovalToken, MailContact, OutboundThreadMessage } from "@umail/api-contract";
-import type { StoredMailHtml } from "@umail/mail-content";
 
 import { productPageTitle } from "../brand/identity.ts";
 import {
@@ -10,10 +9,6 @@ import {
 } from "./metadata.ts";
 import { escapeHtmlText, renderHumanPageInternal } from "./internal/page.ts";
 import { renderHumanPageNotice } from "./notices.ts";
-
-export type ApprovalMessagePreviewView = {
-  readonly storedHtml: StoredMailHtml;
-};
 
 export function renderApprovalReviewPage(
   token: ApprovalToken,
@@ -61,7 +56,7 @@ export function renderApprovalGonePage() {
   });
 }
 
-export function renderApprovalMessagePreview(view: ApprovalMessagePreviewView): string {
+export function renderApprovalMessagePreview(storedHtml: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -70,7 +65,7 @@ export function renderApprovalMessagePreview(view: ApprovalMessagePreviewView): 
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>Outbound email preview</title>
 </head>
-<body>${view.storedHtml.body}</body>
+<body>${storedHtml}</body>
 </html>`;
 }
 
@@ -167,6 +162,9 @@ function renderApprovalBody(token: ApprovalToken, message: OutboundThreadMessage
   ${textPreview.length === 0 ? '<p class="empty-value">No readable body is available.</p>' : textPreview}
 </section>`;
   }
+  const remoteImagesNotice = message.hasRemoteImages
+    ? `<div class="notice-panel" role="note"><p>This message contains remote images. They are blocked in this preview, but the recipient's mail client will load them, and image URLs can carry data out. Deny unless you expected images.</p></div>`
+    : "";
   const previewPath = `/approvals/${encodeURIComponent(token)}/message`;
   const htmlPreview = `<iframe class="message-frame" title="HTML email preview" src="${escapeHtmlText(previewPath)}" sandbox=""></iframe>`;
   const alternative =
@@ -175,6 +173,7 @@ function renderApprovalBody(token: ApprovalToken, message: OutboundThreadMessage
       : `<details class="text-alternative"><summary>Show plain-text alternative</summary>${textPreview}</details>`;
   return `<section class="review-section message-preview" aria-labelledby="message-body-title">
   <h2 id="message-body-title">Message body</h2>
+  ${remoteImagesNotice}
   ${htmlPreview}
   ${alternative}
 </section>`;

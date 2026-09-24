@@ -1,6 +1,11 @@
+import * as Alchemy from "alchemy";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 
+import {
+  type ExternalMailAddress,
+  parseExternalMailAddress,
+} from "../../../packages/api-contract/src/mail-contact.ts";
 import {
   type MailDomain,
   parseMailDomain,
@@ -30,6 +35,23 @@ export const rootDomain: Config.Config<MailDomain> = Config.string("UMAIL_DOMAIN
     return Effect.succeed(parsed.domain);
   }),
 );
+
+export const operatorEmail: Config.Config<ExternalMailAddress> = Config.string(
+  "UMAIL_OPERATOR_EMAIL",
+).pipe(
+  Config.mapOrFail((raw) => {
+    const parsed = parseExternalMailAddress(raw);
+    if (parsed.kind === "invalid") {
+      return Effect.die(new Error("UMAIL_OPERATOR_EMAIL is not a valid email address."));
+    }
+    return Effect.succeed(parsed.address);
+  }),
+);
+
+export const currentSite = Effect.gen(function* () {
+  const stack = yield* Alchemy.Stack;
+  return layoutForStage(yield* rootDomain, stack.stage);
+});
 
 export function stageHostnameLabel(stage: string): string {
   // Leave room for the preview mail domain's "-mail" suffix in a 63-byte DNS label.
