@@ -57,11 +57,13 @@ describe("mail pages", () => {
       expect(all.response.status).toBe(200);
       expect(all.body).toContain("For the inbox");
       expect(all.body).toContain("For the probe &lt;b&gt;");
-      expect(all.body.match(/class="row unread"/gu)).toHaveLength(2);
+      expect(all.body.match(/class="thread unread"/gu)).toHaveLength(2);
+      expect(all.body).toContain('class="chip">probe@</span>');
 
       const one = yield* page(world, `/mail?mailbox=${probe.id}`);
       expect(one.body).toContain("For the probe");
       expect(one.body).not.toContain("For the inbox");
+      expect(one.body).not.toContain('class="chip">probe@');
       expect(one.body).toMatch(/aria-current="page">\s*<span class="mono">probe@/u);
     }),
   );

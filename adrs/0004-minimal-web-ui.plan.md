@@ -318,7 +318,7 @@ Then run the full `pnpm test`.
 - Add one assertion that the all-mailboxes list contains `class="chip">probe@` and the single-mailbox list doesn't. Match the chip markup, because the heading and the nav contain `probe@` too.
 - Full `pnpm test`, including the `mail-thread` browser fixture (one `h1` holds the hostile subject, times are localized, no overflow).
 
-**Done:** no.
+**Done:** yes. The open message's header shows its time in the full format; list and collapsed rows use `shortTimeHtml`.
 
 ### 4. Compose and send status
 

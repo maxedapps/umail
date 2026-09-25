@@ -1,5 +1,6 @@
 import type {
   Address,
+  MailContact,
   MailMessageSummary,
   MailThreadSummary,
   Principal,
@@ -33,14 +34,18 @@ import {
   type PageView,
 } from "../document.ts";
 import {
+  bidiAddress,
   bidiText,
   contactListHtml,
   contactName,
   displayText,
   html,
+  initials,
+  shortTimeHtml,
   timeHtml,
   type Html,
 } from "../html.ts";
+import { icon } from "../icons.ts";
 
 const PAGE_SIZE = 25;
 
@@ -49,19 +54,27 @@ function subjectText(subject: string | null): string {
 }
 
 function threadRow(thread: MailThreadSummary, showMailboxes: boolean): Html {
-  const details = [
-    contactName(thread.latestSender.contact),
-    ...(showMailboxes ? thread.involvedMailboxIdentities.map((identity) => identity.address) : []),
-    ...(thread.messageCount > 1 ? [`${thread.messageCount} messages`] : []),
-  ];
   return html`<li>
     <a
-      class="row${thread.unreadCount > 0 ? " unread" : ""}"
+      class="${thread.unreadCount > 0 ? "thread unread" : "thread"}"
       href="/mail/threads/${encodeURIComponent(thread.threadId)}"
     >
-      <span class="primary">${bidiText(subjectText(thread.subject))}</span>
-      <span class="aside">${timeHtml(thread.lastActivityAt)}</span>
-      <span class="secondary">${bidiText(details.join(" · "))}</span>
+      <span class="dot"></span>
+      <span class="who"
+        ><b>${bidiText(contactName(thread.latestSender.contact))}</b>${
+          thread.messageCount > 1 ? html`<small>${thread.messageCount}</small>` : null
+        }</span
+      >
+      <span class="what"
+        >${bidiText(subjectText(thread.subject))}${
+          showMailboxes
+            ? thread.involvedMailboxIdentities.map(
+                (identity) => html`<span class="chip">${identity.address.split("@")[0]}@</span>`,
+              )
+            : null
+        }</span
+      >
+      ${shortTimeHtml(thread.lastActivityAt)}
     </a>
   </li>`;
 }
@@ -83,11 +96,17 @@ export function mailListPage(
     main: html`${
       threads.length === 0
         ? html`<p class="empty">No conversations here yet.</p>`
-        : html`<ul class="list">
+        : html`<ul class="threads">
             ${threads.map((thread) => threadRow(thread, mailbox === undefined))}
           </ul>`
     }
-    ${olderHref === null ? null : html`<p><a class="button secondary" href="${olderHref}">Older</a></p>`}`,
+    ${
+      olderHref === null
+        ? null
+        : html`<div class="pager">
+            <a class="button secondary" href="${olderHref}">Older${icon("right")}</a>
+          </div>`
+    }`,
   };
 }
 
@@ -97,42 +116,75 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function openMessageHtml(message: ThreadMessage, addresses: ReadonlyArray<Address>): Html {
+function namesHtml(contacts: ReadonlyArray<MailContact>): Html {
+  return html`${contacts.map(
+    (contact, index) => html`${index === 0 ? null : ", "}${bidiText(contactName(contact))}`,
+  )}`;
+}
+
+function senderName(from: MailContact | undefined): string {
+  return from === undefined ? "Unknown sender" : contactName(from);
+}
+
+function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): Html {
   const path = `/mail/messages/${encodeURIComponent(message.id)}`;
-  const mailbox = addresses.find((address) => address.id === message.addressId);
+  const from = message.from[0];
   const text =
     message.textBody === null ? null : html`<pre class="prose">${message.textBody}</pre>`;
   const attachments = message.attachments;
   const hidesImages =
     message.hasRemoteImages || attachments.some((attachment) => attachment.isInline);
-  return html`<article class="panel" id="open-message" aria-label="Message">
-    <dl class="meta">
-      <dt>From</dt>
-      <dd>${contactListHtml(message.from)}</dd>
-      <dt>To</dt>
-      <dd>${contactListHtml(message.to)}</dd>
-      ${
-        message.cc.length === 0
-          ? null
-          : html`<dt>Cc</dt>
-              <dd>${contactListHtml(message.cc)}</dd>`
-      }
-      <dt>Date</dt>
-      <dd>${timeHtml(message.occurredAt)}</dd>
-      ${
-        mailbox === undefined
-          ? null
-          : html`<dt>Mailbox</dt>
-              <dd class="mono">${mailbox.address}</dd>`
-      }
-    </dl>
+  return html`<article class="message" id="open-message" aria-label="Message">
+    <div class="message-head">
+      <span class="avatar">${bidiText(initials(senderName(from)))}</span>
+      <div>
+        <span
+          ><b>${bidiText(senderName(from))}</b>${
+            from === undefined
+              ? null
+              : html` <span class="mono muted">${bidiAddress(from.address)}</span>`
+          }</span
+        >
+        <small
+          >to
+          ${namesHtml(message.to)}${
+            message.cc.length === 0 ? null : html`, cc ${namesHtml(message.cc)}`
+          }</small
+        >
+      </div>
+      ${timeHtml(message.occurredAt)}
+    </div>
+    <details class="more">
+      <summary>Details</summary>
+      <dl class="meta">
+        <dt>From</dt>
+        <dd>${contactListHtml(message.from)}</dd>
+        <dt>To</dt>
+        <dd>${contactListHtml(message.to)}</dd>
+        ${
+          message.cc.length === 0
+            ? null
+            : html`<dt>Cc</dt>
+                <dd>${contactListHtml(message.cc)}</dd>`
+        }
+        <dt>Date</dt>
+        <dd>${timeHtml(message.occurredAt)}</dd>
+        ${
+          mailbox === undefined
+            ? null
+            : html`<dt>Mailbox</dt>
+                <dd class="mono">${mailbox.address}</dd>`
+        }
+      </dl>
+    </details>
     ${
       message.htmlBody === null
         ? (text ?? html`<p class="muted">This message has no readable body.</p>`)
         : html`${
               hidesImages
-                ? html`<p class="note warning" role="note">
-                    Images are not shown. Inline images are listed under Attachments.
+                ? html`<p class="note">
+                    ${icon("eye-off")}Images are not shown. Inline images are listed as attachments
+                    below.
                   </p>`
                 : null
             }
@@ -146,7 +198,7 @@ function openMessageHtml(message: ThreadMessage, addresses: ReadonlyArray<Addres
             ${
               text === null
                 ? null
-                : html`<details>
+                : html`<details class="more">
                     <summary>Show plain-text version</summary>
                     ${text}
                   </details>`
@@ -155,36 +207,29 @@ function openMessageHtml(message: ThreadMessage, addresses: ReadonlyArray<Addres
     ${
       attachments.length === 0
         ? null
-        : html`<section class="stack" aria-label="Attachments">
-            <h2>Attachments</h2>
-            <ul class="list">
-              ${attachments.map(
-                (attachment) =>
-                  html`<li>
-                    <a
-                      class="row"
-                      href="${path}/attachments/${encodeURIComponent(attachment.id)}"
-                      download
-                    >
-                      <span class="primary">${bidiText(attachment.filename)}</span>
-                      <span class="aside">${formatSize(attachment.size)}</span>
-                    </a>
-                  </li>`,
-              )}
-            </ul>
-          </section>`
+        : html`<ul class="files" aria-label="Attachments">
+            ${attachments.map(
+              (attachment) =>
+                html`<li>
+                  <a href="${path}/attachments/${encodeURIComponent(attachment.id)}" download
+                    >${icon("clip")}${bidiText(attachment.filename)}<small
+                      >${formatSize(attachment.size)}</small
+                    ></a
+                  >
+                </li>`,
+            )}
+          </ul>`
     }
   </article>`;
 }
 
 function collapsedMessageHtml(threadPath: string, message: MailMessageSummary): Html {
-  const from = message.from[0];
+  const name = senderName(message.from[0]);
   return html`<li>
-    <a class="row" href="${threadPath}?open=${encodeURIComponent(message.id)}">
-      <span class="primary"
-        >${bidiText(from === undefined ? "Unknown sender" : contactName(from))}</span
-      >
-      <span class="aside">${timeHtml(message.occurredAt)}</span>
+    <a class="message-row" href="${threadPath}?open=${encodeURIComponent(message.id)}">
+      <span class="avatar">${bidiText(initials(name))}</span>
+      <b>${bidiText(name)}</b>
+      ${shortTimeHtml(message.occurredAt)}
     </a>
   </li>`;
 }
@@ -197,28 +242,39 @@ export function threadPage(
 ): PageView {
   const threadPath = `/mail/threads/${encodeURIComponent(threadId)}`;
   const reply = `/mail/compose?reply=${encodeURIComponent(open.id)}`;
+  const mailbox = addresses.find((address) => address.id === open.addressId);
   return {
     kind: "console",
     section: "mail",
     title: subjectText(open.subject),
     heading: subjectText(open.subject),
-    lede: messages.length === 1 ? "1 message" : `${messages.length} messages`,
+    lede: html`${messages.length === 1 ? "1 message" : `${messages.length} messages`}
+    ${mailbox === undefined ? null : html`<span class="chip">${mailbox.address}</span>`}`,
     mailboxes: { addresses, current: null },
-    main: html`<div class="actions">
-        <a class="button" href="${reply}&mode=reply">Reply</a>
-        <a class="button secondary" href="${reply}&mode=reply-all">Reply all</a>
-        <form method="post" action="${threadPath}/unread">
-          <button class="secondary" type="submit">Mark unread</button>
-        </form>
-        <button class="danger" type="button" popovertarget="delete-dialog">Delete…</button>
-      </div>
-      <div id="delete-dialog" popover>
+    toolbar: html`<a class="button quiet" href="/mail"
+        >${icon("left")}<span class="label">All mailboxes</span></a
+      >
+      <a class="button" href="${reply}&mode=reply"
+        >${icon("reply")}<span class="label">Reply</span></a
+      >
+      <a class="button secondary" href="${reply}&mode=reply-all"
+        >${icon("reply-all")}<span class="label">Reply all</span></a
+      >
+      <form method="post" action="${threadPath}/unread">
+        <button class="button secondary" type="submit">
+          ${icon("mail")}<span class="label">Mark unread</span>
+        </button>
+      </form>
+      <button class="button danger" type="button" popovertarget="delete-dialog">
+        ${icon("trash")}<span class="label">Delete…</span>
+      </button>`,
+    main: html`<div id="delete-dialog" popover>
         <h2>Delete this conversation?</h2>
         <p>It disappears from every mailbox view and from agents.</p>
         <form class="actions" method="post" action="${threadPath}/delete">
-          <button class="danger solid" type="submit">Delete</button>
+          <button class="button danger solid" type="submit">Delete</button>
           <button
-            class="secondary"
+            class="button secondary"
             type="button"
             popovertarget="delete-dialog"
             popovertargetaction="hide"
@@ -227,10 +283,10 @@ export function threadPage(
           </button>
         </form>
       </div>
-      <ol class="list">
+      <ol class="messages">
         ${messages.map((message) =>
           message.id === open.id
-            ? html`<li>${openMessageHtml(open, addresses)}</li>`
+            ? html`<li>${openMessageHtml(open, mailbox)}</li>`
             : collapsedMessageHtml(threadPath, message),
         )}
       </ol>`,
