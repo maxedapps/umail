@@ -1505,6 +1505,10 @@ export const styles = String.raw`
       outline-offset: -2px;
     }
 
+    > .error {
+      padding: 0 1rem 0.5rem;
+    }
+
     textarea {
       display: block;
       min-block-size: 16rem;
@@ -1522,6 +1526,7 @@ export const styles = String.raw`
     display: grid;
     grid-template-columns: 4.5rem minmax(0, 1fr);
     align-items: center;
+    min-block-size: 2.75rem;
     padding-inline: 1rem;
     border-block-end: 1px solid var(--border);
 
@@ -1538,9 +1543,8 @@ export const styles = String.raw`
       box-shadow: none;
     }
 
-    > .mono,
     > ul {
-      padding-block: 0.75rem;
+      padding-block: 0.5rem;
     }
 
     > .error {

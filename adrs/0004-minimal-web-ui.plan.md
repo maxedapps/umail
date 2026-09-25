@@ -339,7 +339,7 @@ Then run the full `pnpm test`.
 
 **Verify:** `compose.test.ts` passes unchanged. Then the full `pnpm test` (the browser textarea-growth check and the 320px check).
 
-**Done:** no.
+**Done:** yes. A message error sits under the textarea inside the sheet.
 
 ### 5. Mailboxes and mailbox detail
 

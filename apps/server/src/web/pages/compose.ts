@@ -22,6 +22,7 @@ import {
 import { randomId } from "../../crypto.ts";
 import { htmlResponse, redirect, type MailboxNav, type PageView } from "../document.ts";
 import { contactListHtml, displayText, html, type Html } from "../html.ts";
+import { icon } from "../icons.ts";
 
 type ReplyMode = "reply" | "reply-all";
 
@@ -66,7 +67,7 @@ export function composePage(
 ): PageView {
   const recipients =
     reply === null
-      ? html`<div class="field">
+      ? html`<div class="compose-row">
             <label for="from">From</label>
             <select id="from" name="fromAddressId" required ${invalid(errors, "from")}>
               ${identities.map(
@@ -81,7 +82,7 @@ export function composePage(
             </select>
             ${fieldError(errors, "from")}
           </div>
-          <div class="field">
+          <div class="compose-row">
             <label for="to">To</label>
             <input
               id="to"
@@ -94,21 +95,25 @@ export function composePage(
             />
             ${fieldError(errors, "to")}
           </div>
-          <div class="field">
+          <div class="compose-row">
             <label for="cc">Cc</label>
             <input id="cc" name="cc" type="text" value="${state.cc}" ${invalid(errors, "cc")} />
             ${fieldError(errors, "cc")}
           </div>`
       : html`<input type="hidden" name="reply" value="${reply.messageId}" />
           <input type="hidden" name="mode" value="${reply.mode}" />
-          <dl class="meta">
-            <dt>From</dt>
-            <dd class="mono">${reply.from}</dd>
-            <dt>To</dt>
-            <dd>${contactListHtml(reply.to)}</dd>
-            <dt>Cc</dt>
-            <dd>${contactListHtml(reply.cc)}</dd>
-          </dl>`;
+          <div class="compose-row">
+            <span>From</span>
+            <span class="mono">${reply.from}</span>
+          </div>
+          <div class="compose-row">
+            <span>To</span>
+            ${contactListHtml(reply.to)}
+          </div>
+          <div class="compose-row">
+            <span>Cc</span>
+            ${contactListHtml(reply.cc)}
+          </div>`;
   return {
     kind: "console",
     section: "mail",
@@ -119,21 +124,20 @@ export function composePage(
       Object.keys(errors).length === 0
         ? undefined
         : { tone: "error", message: "Nothing was sent. Fix the marked field." },
-    main: html`<form class="stack" method="post" action="/mail/compose">
+    main: html`<form class="composer" method="post" action="/mail/compose">
       <input type="hidden" name="requestId" value="${state.requestId}" />
       ${recipients}
-      <div class="field">
+      <div class="compose-row">
         <label for="subject">Subject</label>
         <input id="subject" name="subject" type="text" value="${state.subject}" />
       </div>
-      <div class="field">
-        <label for="text">Message</label>
-        <textarea id="text" name="text" required ${invalid(errors, "text")}>${state.text}</textarea>
-        ${fieldError(errors, "text")}
-      </div>
-      <div class="actions">
-        <button type="submit">Send</button>
-        <a class="button secondary" href="/mail">Cancel</a>
+      <label class="sr-only" for="text">Message</label>
+      <textarea id="text" name="text" required ${invalid(errors, "text")}>${state.text}</textarea>
+      ${fieldError(errors, "text")}
+      <div class="composer-foot">
+        <button class="button" type="submit">${icon("send")}Send</button>
+        <a class="button quiet" href="/mail">Cancel</a>
+        <small class="muted">Plain text</small>
       </div>
     </form>`,
   };
