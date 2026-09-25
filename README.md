@@ -94,7 +94,7 @@ For another machine, run `pnpm build:clients`, copy `dist/clients/umail.mjs`, an
 
 After signing in at `/login`, the browser is a second operator surface next to the CLI:
 
-- **Mail** (`/mail`): read conversations across all mailboxes or one, open messages, download attachments, mark conversations read or unread, delete them, and write new messages, replies and reply-alls. Opening a conversation marks it read. Each send shows its status.
+- **Mail** (`/mail`): read conversations across all mailboxes or one, open messages, download attachments, mark conversations read or unread, delete them, and write new messages, replies and reply-alls. Opening a conversation marks it read, and read state is shared, so agents and the CLI that list only unread mail no longer see it. Each send shows its status.
 - **Mailboxes** (`/mailboxes`): create mailboxes, rename or pause them, and set or stop forwarding.
 - **Clients** (`/clients`): see every client with access, change what it may do, or revoke it.
 

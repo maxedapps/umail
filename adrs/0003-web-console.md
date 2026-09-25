@@ -59,6 +59,6 @@ The owner also wants a lean web UI to view, read and send mail. AgentMail stays 
 - **A second operator surface.** A stolen session cookie now reads and sends mail as well as managing clients. Better Auth's cookie flags, `cookieMutationAllowed` on every POST, and `frame-ancestors 'none'` stay the guards.
 - **Console pages run one script.** They are no longer script-free, but the script is nonce'd and only formats `<time>` elements.
 - **Limited mail rendering.** No images are shown in a mail body, remote or inline, and a sandboxed frame has a fixed height. Inline images are listed as attachments.
-- **Viewing changes state.** A conversation's GET marks it read. It is the operator's own session, and the change is visible and reversible.
+- **Viewing changes state.** A conversation's GET marks it read. It is the operator's own session, and the change is visible and reversible. Read state is one flag per message, shared with MCP clients and the CLI, so a conversation opened in the console drops out of their unread lists. The owner confirmed this trade-off after review on 2026-09-25.
 - **The page tests are rewritten**, because they assert today's markup and class names.
 - **README scope changes.** "There is no … browser mailbox" is no longer true.
