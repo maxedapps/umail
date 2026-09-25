@@ -134,23 +134,31 @@ export type MailboxNav = {
     <a class="compose" href="/mail/compose">{icon pen}Write</a>
     <nav class="nav" aria-label="Console">
       <a href="/mail" aria-current="true|false">{icon inbox}Mail</a>
-      <ul class="subnav">…only when view.mailboxes is set…</ul>
+      <ul class="subnav">
+        …only when view.mailboxes is set…
+      </ul>
       <a href="/mailboxes" aria-current="page|false">{icon at}Mailboxes</a>
       <a href="/clients" aria-current="page|false">{icon key}Clients</a>
     </nav>
     <form class="sidebar-foot" method="post" action="/logout">
       <span>Operator</span>
-      <button class="button quiet icon-only" type="submit">{icon logout}<span class="sr-only">Sign out</span></button>
+      <button class="button quiet icon-only" type="submit">
+        {icon logout}<span class="sr-only">Sign out</span>
+      </button>
     </form>
   </aside>
   <main>
-    <div class="toolbar">{view.toolbar}</div>           only when set; sticky
+    <div class="toolbar">{view.toolbar}</div>
+    only when set; sticky
     <div class="content">
-      <div class="page-head"><h1>…</h1><p class="lede">…</p></div>
-      {error flash inline}
-      {view.main}
+      <div class="page-head">
+        <h1>…</h1>
+        <p class="lede">…</p>
+      </div>
+      {error flash inline} {view.main}
     </div>
-    <p class="toast" role="status">{icon check}{message}</p>   success flash only
+    <p class="toast" role="status">{icon check}{message}</p>
+    success flash only
   </main>
   {time script}
 </body>
@@ -179,34 +187,34 @@ export type MailboxNav = {
 
 This is the complete list. The stylesheet defines exactly these, and task 8 checks it both ways.
 
-| Group      | Classes                                                                                                                                                                                                                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Layout     | `console`, `sidebar`, `brand`, `logo`, `compose`, `nav`, `subnav`, `sidebar-foot`, `toolbar`, `content`, `page-head`, `lede`, `focus`, `focus-bar`, `card`, `column`                                                                                                                                 |
-| Basics     | `icon`, `sr-only`, `mono`, `muted`, `stack`, `actions`, `label` (a toolbar button's text, hidden when narrow)                                                                                                                                                                                     |
-| Controls   | `button` with `secondary` (soft fill), `quiet`, `danger`, `solid`, `icon-only`; `field`, `hint`, `error`, `suffixed`, `choices`, `choice`, `revealed`, `checklist`, `switch-row`, `switch`                                                                                                        |
-| Feedback   | `badge` with `accent`, `success`, `warning`, `danger`; `chip`, `note` with `warning`, `flash`, `toast`, `status`, `empty`                                                                                                                                                                        |
-| Lists      | `threads`, `thread`, `unread`, `dot`, `who`, `what`, `pager`, `rows`, `row`, `crumbs`                                                                                                                                                                                                            |
-| Mail       | `messages`, `message-row`, `message`, `message-head`, `avatar`, `more` (a `details` disclosure), `meta`, `frame`, `prose`, `files`, `composer`, `compose-row`, `composer-foot`                                                                                                                     |
-| Settings   | `settings`, `setting`, `danger-zone`                                                                                                                                                                                                                                                             |
-| Approval   | `summary`, `decision`, `section-label`, `code` (device)                                                                                                                                                                                                                                          |
+| Group    | Classes                                                                                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Layout   | `console`, `sidebar`, `brand`, `logo`, `compose`, `nav`, `subnav`, `sidebar-foot`, `toolbar`, `content`, `page-head`, `lede`, `focus`, `focus-bar`, `card`, `column`                       |
+| Basics   | `icon`, `sr-only`, `mono`, `muted`, `stack`, `actions`, `label` (a toolbar button's text, hidden when narrow)                                                                              |
+| Controls | `button` with `secondary` (soft fill), `quiet`, `danger`, `solid`, `icon-only`; `field`, `hint`, `error`, `suffixed`, `choices`, `choice`, `revealed`, `checklist`, `switch-row`, `switch` |
+| Feedback | `badge` with `accent`, `success`, `warning`, `danger`; `chip`, `note` with `warning`, `flash`, `toast`, `status`, `empty`                                                                  |
+| Lists    | `threads`, `thread`, `unread`, `dot`, `who`, `what`, `pager`, `rows`, `row`, `crumbs`                                                                                                      |
+| Mail     | `messages`, `message-row`, `message`, `message-head`, `avatar`, `more` (a `details` disclosure), `meta`, `frame`, `prose`, `files`, `composer`, `compose-row`, `composer-foot`             |
+| Settings | `settings`, `setting`, `danger-zone`                                                                                                                                                       |
+| Approval | `summary`, `decision`, `section-label`, `code` (device)                                                                                                                                    |
 
 Type selectors also get styles: `[popover]` and `::backdrop`, `fieldset`, `details > summary`, `input`, `select` and `textarea`, and `:focus-visible`.
 
 ## Deletions
 
-| What                                                                                                                                                                                                                                                            | Where                                            | Task | Replaced by                                                         |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ---- | ------------------------------------------------------------------- |
-| The whole current stylesheet body, including:<br>• the tokens `--paper`, `--surface`, `--sunken`, `--ink`, `--muted`, `--rule`, `--rule-strong`, `--accent-hover`, `--accent-ink`, `--accent-soft` and the `*-soft` tones<br>• `--font-serif`<br>• the fluid `--step-*` and `--space-*` scales<br>• the serif `h1–h3` rule | `web/styles.ts`                                  | 2    | the ported mockup stylesheet                                         |
-| Classes: `.wordmark`, `.console > header` and its nav, `.console-body`, `.console-grid`, `.section`, `.split` (already unused), `.list`, today's `.row` with `.primary`/`.secondary`/`.aside` children, `.panel`, `.nav-list`, `.checks`, the left-bordered `.flash`/`.note`, the dashed `.empty` | `web/styles.ts`                                  | 2    | the class vocabulary                                                |
-| The blanket reduced-motion rule (`* { animation-duration: 0.01ms !important … }`)                                                                                                                                                                                | `web/styles.ts`                                  | 2    | targeted reduced-motion rules (see **Porting the mockup**)          |
-| `PageView.aside` and the `<aside>` / `console-body` / `console-grid` wrappers, the console `<header>` with its nav, and the focus `<header><span class="wordmark">`. `flashHtml` is rewritten, not kept beside a new one | `web/document.ts`                                | 2    | the sidebar, `toolbar`, `mailboxes`, a new `toastHtml` and the rewritten `flashHtml` |
-| `mailboxNav` (the `aside` builder), and its `<nav class="stack">` with the full-width Write button                                                                                                                                                              | `web/pages/mail.ts`                              | 2    | `view.mailboxes`, rendered by `document.ts`                         |
-| `composeAside`                                                                                                                                                                                                                                                  | `web/pages/compose.ts`                           | 2    | a `mailboxes: { addresses, current: null }` value                   |
-| `contactList` (mail.ts), `contactList` (approval.ts), `contactsHtml` (compose.ts)                                                                                                                                                                               | `web/pages/`                                     | 1    | `contactListHtml` in `html.ts`                                      |
-| `threadRow`, `collapsedMessageHtml`, `openMessageHtml` markup (rewritten, not kept beside the new)                                                                                                                                                             | `web/pages/mail.ts`                              | 3    | new markup of the same functions                                    |
-| The `<section class="section">` "Message details" block and the separate `summaryHtml` panel                                                                                                                                                                    | `web/pages/approval.ts`                          | 7    | one summary card holding the `.meta`                                |
-| The reply `<dl class="meta">` on compose                                                                                                                                                                                                                        | `web/pages/compose.ts`                           | 4    | read-only `.compose-row`s                                           |
-| The mockup copy                                                                                                                                                                                                                                                 | `adrs/0004-minimal-web-ui.mockup.html`           | 8    | the artifact URL in the ADR                                         |
+| What                                                                                                                                                                                                                                                                                                                       | Where                                  | Task | Replaced by                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---- | ------------------------------------------------------------------------------------ |
+| The whole current stylesheet body, including:<br>• the tokens `--paper`, `--surface`, `--sunken`, `--ink`, `--muted`, `--rule`, `--rule-strong`, `--accent-hover`, `--accent-ink`, `--accent-soft` and the `*-soft` tones<br>• `--font-serif`<br>• the fluid `--step-*` and `--space-*` scales<br>• the serif `h1–h3` rule | `web/styles.ts`                        | 2    | the ported mockup stylesheet                                                         |
+| Classes: `.wordmark`, `.console > header` and its nav, `.console-body`, `.console-grid`, `.section`, `.split` (already unused), `.list`, today's `.row` with `.primary`/`.secondary`/`.aside` children, `.panel`, `.nav-list`, `.checks`, the left-bordered `.flash`/`.note`, the dashed `.empty`                          | `web/styles.ts`                        | 2    | the class vocabulary                                                                 |
+| The blanket reduced-motion rule (`* { animation-duration: 0.01ms !important … }`)                                                                                                                                                                                                                                          | `web/styles.ts`                        | 2    | targeted reduced-motion rules (see **Porting the mockup**)                           |
+| `PageView.aside` and the `<aside>` / `console-body` / `console-grid` wrappers, the console `<header>` with its nav, and the focus `<header><span class="wordmark">`. `flashHtml` is rewritten, not kept beside a new one                                                                                                   | `web/document.ts`                      | 2    | the sidebar, `toolbar`, `mailboxes`, a new `toastHtml` and the rewritten `flashHtml` |
+| `mailboxNav` (the `aside` builder), and its `<nav class="stack">` with the full-width Write button                                                                                                                                                                                                                         | `web/pages/mail.ts`                    | 2    | `view.mailboxes`, rendered by `document.ts`                                          |
+| `composeAside`                                                                                                                                                                                                                                                                                                             | `web/pages/compose.ts`                 | 2    | a `mailboxes: { addresses, current: null }` value                                    |
+| `contactList` (mail.ts), `contactList` (approval.ts), `contactsHtml` (compose.ts)                                                                                                                                                                                                                                          | `web/pages/`                           | 1    | `contactListHtml` in `html.ts`                                                       |
+| `threadRow`, `collapsedMessageHtml`, `openMessageHtml` markup (rewritten, not kept beside the new)                                                                                                                                                                                                                         | `web/pages/mail.ts`                    | 3    | new markup of the same functions                                                     |
+| The `<section class="section">` "Message details" block and the separate `summaryHtml` panel                                                                                                                                                                                                                               | `web/pages/approval.ts`                | 7    | one summary card holding the `.meta`                                                 |
+| The reply `<dl class="meta">` on compose                                                                                                                                                                                                                                                                                   | `web/pages/compose.ts`                 | 4    | read-only `.compose-row`s                                                            |
+| The mockup copy                                                                                                                                                                                                                                                                                                            | `adrs/0004-minimal-web-ui.mockup.html` | 8    | the artifact URL in the ADR                                                          |
 
 ## Tasks
 
@@ -461,6 +469,9 @@ Then run the full `pnpm test`.
 - The old-names search matches only `class="section-label"`, a vocabulary class that the `class="section` pattern also catches.
 - No `style="` in `web/`. All 17 icons are used. Lint reports nothing.
 - The mockup copy is deleted; the ADR keeps the artifact link.
+- PR review fixes:
+  - "Waiting for verification" was a success flash, so it became a fading toast. The page then read "Mail is also forwarded to …" before the address was verified. It is now a persistent warning note in the Forwarding section. Only the `?forwarding=pending` redirect knows the state, since `Address` stores none.
+  - `.thread .what` clips its mailbox chips, so a conversation involving many mailboxes can't widen the page at 320px.
 
 ## Owner's manual QA after deploy
 
@@ -472,6 +483,7 @@ Then run the full `pnpm test`.
   - `/mailboxes` and one mailbox;
   - `/clients` and one client.
 - Sign out and sign in again. Check that the success toast fades out and that an error, such as an invalid forward address, stays visible.
+- Set forwarding to a new address. The waiting-for-verification note stays on the page until you leave it.
 - Trigger a real approval: review the page, and approve or deny from the bottom.
 - Connect an MCP client and check the consent card. Run `umail` login for the device page.
 

@@ -1164,6 +1164,7 @@ export const styles = String.raw`
       align-items: center;
       gap: 0.5rem;
       min-inline-size: 0;
+      overflow: hidden;
       color: var(--text-2);
 
       > bdi {

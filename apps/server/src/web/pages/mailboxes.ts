@@ -102,6 +102,7 @@ export function mailboxPage(
   forwardTo: string,
   error: FieldError | null,
   flash: Flash | undefined,
+  awaitingVerification: boolean,
 ): PageView {
   const path = `/mailboxes/${encodeURIComponent(address.id)}`;
   return {
@@ -150,13 +151,18 @@ export function mailboxPage(
           <p>Copies incoming mail to another address.</p>
         </header>
         <form method="post" action="${path}/forwarding">
-          <p class="muted">
-            ${
-              address.forwardTo === null
-                ? "Mail is kept here only."
-                : html`Mail is also forwarded to <span class="mono">${address.forwardTo}</span>.`
-            }
-          </p>
+          ${
+            address.forwardTo === null
+              ? html`<p class="muted">Mail is kept here only.</p>`
+              : awaitingVerification
+                ? html`<p class="note warning" role="status">
+                    ${icon("alert")}Waiting for verification — Cloudflare emailed
+                    ${address.forwardTo}. Mail is forwarded once the address is verified.
+                  </p>`
+                : html`<p class="muted">
+                    Mail is also forwarded to <span class="mono">${address.forwardTo}</span>.
+                  </p>`
+          }
           <div class="field">
             <label for="forwardTo">Forward to</label>
             <input
@@ -254,18 +260,18 @@ export const mailboxRoute = Effect.fn("mailboxRoute")(function* (deps: ApiDeps) 
   const { id } = yield* HttpRouter.schemaPathParams(MailboxParams);
   const query = yield* HttpServerRequest.schemaSearchParams(MailboxQuery);
   const address = yield* getAddress(deps, id);
-  return yield* htmlResponse(200, mailboxPage(address, "", null, mailboxFlash(address, query)));
+  // Only the redirect after a save knows forwarding is unverified, so that state stays on the page
+  // instead of in a toast that fades while the sentence below would claim mail is forwarded.
+  return yield* htmlResponse(
+    200,
+    mailboxPage(address, "", null, mailboxFlash(address, query), query.forwarding === "pending"),
+  );
 });
 
 function mailboxFlash(address: Address, query: typeof MailboxQuery.Type): Flash | undefined {
   switch (query.forwarding) {
     case "verified":
       return { tone: "success", message: `Forwarding to ${address.forwardTo ?? ""} is verified.` };
-    case "pending":
-      return {
-        tone: "success",
-        message: `Waiting for verification — Cloudflare emailed ${address.forwardTo ?? ""}.`,
-      };
     case "removed":
       return { tone: "success", message: "Forwarding stopped." };
   }
@@ -294,7 +300,10 @@ export const forwardingRoute = Effect.fn("forwardingRoute")(function* (deps: Api
   const email = (form.email ?? "").trim();
   const rejected = (message: string) =>
     Effect.flatMap(getAddress(deps, id), (address) =>
-      htmlResponse(400, mailboxPage(address, email, { field: "forwardTo", message }, undefined)),
+      htmlResponse(
+        400,
+        mailboxPage(address, email, { field: "forwardTo", message }, undefined, false),
+      ),
     );
   if (parseExternalMailAddress(email).kind !== "ok") {
     return yield* rejected(`“${email}” is not an email address.`);

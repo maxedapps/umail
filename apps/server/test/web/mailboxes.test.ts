@@ -78,9 +78,13 @@ describe("mailbox pages", () => {
 
       const pending = yield* post(world, `${path}/forwarding`, { email: "me@example.net" });
       expect(pending.headers.get("location")).toBe(`${path}?forwarding=pending`);
-      expect(yield* page(world, `${path}?forwarding=pending`)).toContain(
-        "Waiting for verification — Cloudflare emailed me@example.net.",
+      // Kept on the page, not in a toast that fades while the page claims mail is forwarded.
+      const waiting = yield* page(world, `${path}?forwarding=pending`);
+      expect(waiting).toMatch(
+        /class="note warning" role="status">[^]*Waiting for verification — Cloudflare emailed\s+me@example\.net\./u,
       );
+      expect(waiting).not.toContain('class="toast"');
+      expect(waiting).not.toContain("Mail is also forwarded");
 
       world.destinations.verify("me@example.net");
       const verified = yield* post(world, `${path}/forwarding`, { email: "me@example.net" });
