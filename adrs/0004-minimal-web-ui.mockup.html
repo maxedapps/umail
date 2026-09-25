@@ -1,0 +1,2232 @@
+<title>AgentMail Redesign</title>
+<style>
+  /* ---------- Tokens: one accent, near-neutral greys biased toward it ---------- */
+  :root {
+    color-scheme: light;
+    interpolate-size: allow-keywords;
+
+    --hue: 18;
+    --canvas: light-dark(oklch(94.5% 0.004 var(--hue)), oklch(11% 0.003 var(--hue)));
+    --bg: light-dark(oklch(99.4% 0.001 var(--hue)), oklch(15.5% 0.004 var(--hue)));
+    --bg-subtle: light-dark(oklch(97.6% 0.003 var(--hue)), oklch(18% 0.004 var(--hue)));
+    --surface: light-dark(oklch(100% 0 0), oklch(19.5% 0.005 var(--hue)));
+    --hover: light-dark(oklch(95.6% 0.004 var(--hue)), oklch(23.5% 0.006 var(--hue)));
+    --border: light-dark(oklch(91.5% 0.004 var(--hue)), oklch(27% 0.006 var(--hue)));
+    --border-strong: light-dark(oklch(85% 0.005 var(--hue)), oklch(35% 0.007 var(--hue)));
+    --text: light-dark(oklch(21% 0.006 var(--hue)), oklch(95.5% 0.003 var(--hue)));
+    --text-2: light-dark(oklch(48% 0.008 var(--hue)), oklch(72% 0.007 var(--hue)));
+    --text-3: light-dark(oklch(60% 0.008 var(--hue)), oklch(58% 0.007 var(--hue)));
+    --primary: var(--text);
+    --primary-ink: var(--bg);
+    --accent: light-dark(oklch(50% 0.17 var(--hue)), oklch(71% 0.15 var(--hue)));
+    --on-accent: oklch(99% 0.01 80);
+    --success: light-dark(oklch(52% 0.13 150), oklch(76% 0.14 150));
+    --warning: light-dark(oklch(58% 0.13 70), oklch(80% 0.13 80));
+    --danger: light-dark(oklch(53% 0.2 27), oklch(70% 0.17 27));
+
+    --font: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+    --radius: 0.5rem;
+    --radius-l: 0.75rem;
+    --shadow: 0 1px 2px oklch(0% 0 0 / 5%), 0 4px 16px oklch(0% 0 0 / 6%);
+    --viewport-h: min(46rem, 82dvh);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  * ,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    padding: 1.5rem 1rem 3rem;
+    background: var(--canvas);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    accent-color: var(--accent);
+  }
+
+  h1,
+  h2,
+  h3,
+  p,
+  dl,
+  dd {
+    margin: 0;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-weight: 620;
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  .mono {
+    font-family: var(--mono);
+    font-size: 0.92em;
+  }
+
+  .i {
+    inline-size: 1rem;
+    block-size: 1rem;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .sr {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* ---------- The artifact's own frame (not part of the proposal) ---------- */
+  .intro {
+    max-inline-size: 72rem;
+    margin-inline: auto;
+    display: grid;
+    gap: 1rem;
+    margin-block-end: 1rem;
+  }
+
+  .intro h1 {
+    font-size: 1.375rem;
+  }
+
+  .intro p {
+    color: var(--text-2);
+    max-inline-size: 70ch;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 0.625rem;
+    background: var(--hover);
+    border: 1px solid var(--border);
+
+    button {
+      border: 0;
+      background: transparent;
+      padding: 0.375rem 0.75rem;
+      border-radius: 0.4375rem;
+      color: var(--text-2);
+      font-weight: 550;
+      cursor: pointer;
+
+      &[aria-pressed="true"] {
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 1px 2px oklch(0% 0 0 / 10%);
+      }
+    }
+  }
+
+  .caption {
+    color: var(--text-2);
+    min-block-size: 2.9em;
+  }
+
+  .window {
+    max-inline-size: 72rem;
+    margin-inline: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-l);
+    overflow: hidden;
+    box-shadow: 0 2px 6px oklch(0% 0 0 / 6%), 0 24px 60px -24px oklch(0% 0 0 / 25%);
+    background: var(--bg);
+  }
+
+  .urlbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-block-end: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-3);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .viewport {
+    container: viewport / inline-size;
+    block-size: var(--viewport-h);
+    overflow: auto;
+    background: var(--bg);
+    scrollbar-gutter: stable;
+  }
+
+  .screen {
+    min-block-size: 100%;
+  }
+
+  /* ========== PROPOSAL: console shell ========== */
+  .app {
+    display: grid;
+    grid-template-columns: 16rem minmax(0, 1fr);
+    min-block-size: 100%;
+  }
+
+  .sidebar {
+    position: sticky;
+    inset-block-start: 0;
+    align-self: start;
+    block-size: var(--viewport-h);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 1.25rem 1rem;
+    background: var(--bg-subtle);
+    overflow: auto;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding-inline: 0.375rem;
+    font-weight: 650;
+    font-size: 0.9375rem;
+    letter-spacing: -0.01em;
+    text-decoration: none;
+  }
+
+  .logo {
+    inline-size: 1.5rem;
+    block-size: 1.5rem;
+    flex: none;
+
+    .disc {
+      fill: var(--accent);
+    }
+
+    .env {
+      fill: var(--on-accent);
+    }
+
+    .flap {
+      fill: var(--accent);
+      opacity: 0.55;
+    }
+  }
+
+  .nav a,
+  .compose {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-block-size: 2.25rem;
+    padding-inline: 0.625rem;
+    border-radius: 0.5rem;
+    color: var(--text-2);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .nav {
+    display: grid;
+    gap: 2px;
+    padding: 0;
+
+    a:hover {
+      background: var(--hover);
+      color: var(--text);
+    }
+
+    /* The section the page belongs to: stronger text only. The page itself: a soft fill. */
+    a[aria-current="true"] {
+      color: var(--text);
+    }
+
+    a[aria-current="page"] {
+      background: var(--hover);
+      color: var(--text);
+    }
+  }
+
+  /* Write: a nav-style row, marked by an accent pen rather than a filled button. */
+  .compose {
+    color: var(--text);
+    font-weight: 560;
+
+    .i {
+      color: var(--accent);
+    }
+
+    &:hover {
+      background: var(--hover);
+    }
+  }
+
+  /* Nested mailboxes line up with the parent's label; no guide line. */
+  .subnav {
+    display: grid;
+    gap: 2px;
+    margin: 0.125rem 0 0.5rem;
+    padding: 0 0 0 1.625rem;
+    list-style: none;
+
+    .mono {
+      font-family: inherit;
+      font-size: inherit;
+    }
+
+    a {
+      min-block-size: 2rem;
+      font-size: 0.8125rem;
+      font-weight: 450;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .sidebar-foot {
+    margin-block-start: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-inline: 0.625rem 0;
+    color: var(--text-3);
+    font-size: 0.8125rem;
+
+    span {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .main {
+    min-inline-size: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .topbar {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    min-block-size: 3.5rem;
+    padding: 0.75rem 2.5rem;
+    background: color-mix(in oklch, var(--bg) 82%, transparent);
+    backdrop-filter: blur(14px) saturate(1.4);
+    border-block-end: 1px solid transparent;
+    animation: edge linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 0 3rem;
+
+    h1 {
+      font-size: 0.9375rem;
+      font-weight: 620;
+    }
+
+    .spacer {
+      flex: 1;
+    }
+  }
+
+  @keyframes edge {
+    to {
+      border-block-end-color: var(--border);
+    }
+  }
+
+  .crumbs {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-inline-size: 0;
+    color: var(--text-3);
+    font-size: 0.875rem;
+
+    a {
+      color: var(--text-2);
+      text-decoration: none;
+
+      &:hover {
+        color: var(--text);
+      }
+    }
+
+    .here {
+      color: var(--text);
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .content {
+    padding: 2rem 2.5rem 3rem;
+    display: grid;
+    gap: 2rem;
+    align-content: start;
+  }
+
+  .narrow {
+    inline-size: min(100%, 50rem);
+  }
+
+  /* Narrow: the sidebar becomes a top bar; mailboxes turn into a scrolling chip row. */
+  @container viewport (inline-size < 52rem) {
+    .app {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: static;
+      block-size: auto;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      border-inline-end: 0;
+      border-block-end: 1px solid var(--border);
+    }
+
+    .sidebar .compose {
+      order: 2;
+    }
+
+    .sidebar .compose .label {
+      display: none;
+    }
+
+    .brand {
+      order: 0;
+      margin-inline-end: auto;
+    }
+
+    .nav {
+      order: 3;
+      flex-basis: 100%;
+      display: flex;
+      gap: 0.25rem;
+      overflow-x: auto;
+
+      > a {
+        flex: none;
+      }
+    }
+
+    .subnav {
+      display: flex;
+      gap: 0.25rem;
+      margin: 0;
+      padding: 0;
+      border: 0;
+
+      a {
+        flex: none;
+        border-radius: 999px;
+        padding-inline: 0.75rem;
+      }
+    }
+
+    .sidebar-foot {
+      order: 1;
+      margin: 0;
+      padding: 0;
+      border: 0;
+
+      span {
+        display: none;
+      }
+    }
+
+    .topbar {
+      position: static;
+      padding-inline: 1rem;
+    }
+
+    .content {
+      padding: 1.25rem 1rem 2rem;
+    }
+  }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4375rem;
+    min-block-size: 2.25rem;
+    padding: 0 0.875rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-ink);
+    font-weight: 560;
+    font-size: 0.875rem;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+
+    &:hover {
+      background: color-mix(in oklch, var(--primary) 86%, var(--bg));
+    }
+
+    &.ghost {
+      background: var(--hover);
+      color: var(--text);
+
+      &:hover {
+        background: color-mix(in oklch, var(--hover), var(--text) 7%);
+      }
+    }
+
+    &.quiet {
+      background: transparent;
+      color: var(--text-2);
+
+      &:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+    }
+
+    &.danger {
+      background: transparent;
+      color: var(--danger);
+
+      &:hover {
+        background: color-mix(in oklch, var(--danger) 9%, transparent);
+      }
+    }
+
+    &.danger.solid {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: var(--on-accent);
+    }
+
+    &.lg {
+      min-block-size: 2.75rem;
+      padding-inline: 1.125rem;
+      font-size: 0.9375rem;
+    }
+
+    &.block {
+      inline-size: 100%;
+    }
+  }
+
+  .icon-only {
+    padding-inline: 0.5rem;
+  }
+
+  @container viewport (inline-size < 40rem) {
+    .collapse-label .label {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+
+    .collapse-label {
+      padding-inline: 0.625rem;
+    }
+  }
+
+  /* ---------- Badges, chips, notes ---------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-block-size: 1.375rem;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--text-2);
+    font-size: 0.75rem;
+    font-weight: 560;
+    white-space: nowrap;
+
+    &::before {
+      content: "";
+      inline-size: 0.375rem;
+      block-size: 0.375rem;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    &.success {
+      background: color-mix(in oklch, var(--success) 13%, transparent);
+      color: var(--success);
+    }
+
+    &.warning {
+      background: color-mix(in oklch, var(--warning) 15%, transparent);
+      color: var(--warning);
+    }
+
+    &.danger {
+      background: color-mix(in oklch, var(--danger) 12%, transparent);
+      color: var(--danger);
+    }
+
+    &.accent {
+      background: color-mix(in oklch, var(--accent) 12%, transparent);
+      color: var(--accent);
+    }
+  }
+
+  .chip {
+    display: inline-block;
+    padding: 0.0625rem 0.375rem;
+    border-radius: 0.3125rem;
+    background: var(--hover);
+    color: var(--text-2);
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    font-style: normal;
+    white-space: nowrap;
+  }
+
+  .note {
+    display: flex;
+    align-items: start;
+    gap: 0.625rem;
+    padding: 0.625rem 0.75rem;
+    border-radius: var(--radius);
+    background: var(--hover);
+    color: var(--text-2);
+    font-size: 0.8125rem;
+
+    .i {
+      margin-block-start: 0.125rem;
+    }
+
+    &.warning {
+      background: color-mix(in oklch, var(--warning) 11%, var(--bg));
+      color: color-mix(in oklch, var(--warning) 55%, var(--text));
+    }
+  }
+
+  .toast {
+    position: sticky;
+    inset-block-end: 1rem;
+    z-index: 3;
+    align-self: center;
+    margin: auto auto 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem 0.5rem 0.625rem;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--primary-ink);
+    font-weight: 540;
+    box-shadow: var(--shadow);
+    animation: toast 4.5s ease both;
+
+    .i {
+      color: var(--success);
+    }
+  }
+
+  @keyframes toast {
+    0% {
+      opacity: 0;
+      translate: 0 0.75rem;
+    }
+    6%,
+    85% {
+      opacity: 1;
+      translate: 0 0;
+    }
+    100% {
+      opacity: 0;
+      translate: 0 0.25rem;
+    }
+  }
+
+  /* ---------- Mail list: one grid, rows share columns through subgrid ---------- */
+  .list-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 2rem 2.5rem 1rem;
+
+    h1 {
+      font-size: 1.375rem;
+    }
+
+    p {
+      color: var(--text-3);
+    }
+  }
+
+  .threads {
+    display: grid;
+    grid-template-columns: 0 0.5rem minmax(7rem, 12rem) minmax(0, 1fr) auto 0;
+    column-gap: 0.875rem;
+    margin: 0;
+    padding: 0 1.625rem;
+    list-style: none;
+
+    > li {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: subgrid;
+    }
+  }
+
+  .thread {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: center;
+    padding-block: 0.8125rem;
+    border-radius: 0.625rem;
+    text-decoration: none;
+
+    &:hover {
+      background: var(--hover);
+    }
+
+    .dot {
+      grid-column: 2;
+      inline-size: 0.5rem;
+      block-size: 0.5rem;
+      border-radius: 50%;
+    }
+
+    .who {
+      display: flex;
+      align-items: baseline;
+      gap: 0.375rem;
+      min-inline-size: 0;
+      color: var(--text);
+
+      b {
+        font-weight: 450;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      small {
+        color: var(--text-3);
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+      }
+    }
+
+    .what {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-inline-size: 0;
+      color: var(--text-2);
+
+      span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    time {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+      font-variant-numeric: tabular-nums;
+      text-align: end;
+    }
+
+    &.unread {
+      .dot {
+        background: var(--accent);
+      }
+
+      .who b {
+        font-weight: 640;
+      }
+
+      .what span {
+        color: var(--text);
+        font-weight: 560;
+      }
+
+      time {
+        color: var(--text);
+        font-weight: 560;
+      }
+    }
+  }
+
+  @container viewport (inline-size < 40rem) {
+    .threads,
+    .threads > li {
+      display: block;
+    }
+
+    .threads {
+      padding-inline: 0.5rem;
+    }
+
+    .thread {
+      grid-template-columns: 0.5rem minmax(0, 1fr) auto;
+      gap: 0.25rem 0.75rem;
+      padding-inline: 0.75rem;
+
+      .dot {
+        grid-column: auto;
+      }
+
+      .what {
+        grid-column: 2 / -1;
+      }
+    }
+
+    .list-head {
+      padding-inline: 1.25rem;
+    }
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.5rem 2.5rem;
+    color: var(--text-3);
+    font-size: 0.8125rem;
+  }
+
+  /* ---------- Thread ---------- */
+  .thread-head {
+    display: grid;
+    gap: 0.375rem;
+
+    h1 {
+      font-size: 1.5rem;
+    }
+
+    p {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-3);
+    }
+  }
+
+  .messages {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    overflow: hidden;
+
+    > li + li {
+      border-block-start: 1px solid var(--border);
+    }
+  }
+
+  .avatar {
+    display: grid;
+    place-items: center;
+    inline-size: 2rem;
+    block-size: 2rem;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-2);
+    font-size: 0.75rem;
+    font-weight: 620;
+    flex: none;
+  }
+
+  .msg-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    text-decoration: none;
+    color: var(--text-2);
+
+    &:hover {
+      background: var(--hover);
+    }
+
+    b {
+      color: var(--text);
+      font-weight: 560;
+    }
+
+    time {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+  }
+
+  .msg-open {
+    display: grid;
+    gap: 1.25rem;
+    padding: 1.25rem;
+  }
+
+  .msg-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: start;
+
+    .from {
+      display: grid;
+      gap: 0.0625rem;
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .from b {
+      font-weight: 620;
+    }
+
+    .from .addr {
+      color: var(--text-3);
+      font-weight: 400;
+    }
+
+    .to {
+      color: var(--text-2);
+      font-size: 0.8125rem;
+    }
+
+    time {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+      white-space: nowrap;
+    }
+  }
+
+  details.more {
+    > summary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      color: var(--text-3);
+      font-size: 0.8125rem;
+      cursor: pointer;
+      list-style: none;
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      &::after {
+        content: "";
+        inline-size: 0.4rem;
+        block-size: 0.4rem;
+        border: solid currentColor;
+        border-width: 0 1.5px 1.5px 0;
+        rotate: 45deg;
+        translate: 0 -0.1rem;
+        transition: rotate 150ms ease;
+      }
+
+      &:hover {
+        color: var(--text);
+      }
+    }
+
+    &[open] > summary::after {
+      rotate: 225deg;
+      translate: 0 0.1rem;
+    }
+
+    &::details-content {
+      block-size: 0;
+      overflow: clip;
+      transition: block-size 200ms ease, content-visibility 200ms allow-discrete;
+    }
+
+    &[open]::details-content {
+      block-size: auto;
+    }
+  }
+
+  .meta {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.375rem 1.25rem;
+    padding-block: 0.75rem 0.25rem;
+    font-size: 0.8125rem;
+
+    dt {
+      color: var(--text-3);
+    }
+
+    dd {
+      overflow-wrap: anywhere;
+    }
+  }
+
+  @container viewport (inline-size < 30rem) {
+    .meta {
+      grid-template-columns: 1fr;
+      gap: 0;
+
+      dd {
+        margin-block-end: 0.5rem;
+      }
+    }
+  }
+
+  /* The HTML body frame: emails assume a white page, so it stays paper-white in both themes. */
+  .paper {
+    padding: 1.25rem 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: #fff;
+    color: #1f1f1f;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.55;
+
+    p + p {
+      margin-block-start: 0.75rem;
+    }
+  }
+
+  pre.paper {
+    margin: 0.75rem 0 0;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      max-inline-size: 100%;
+      padding: 0.5rem 0.75rem;
+      border-radius: var(--radius);
+      background: var(--hover);
+      text-decoration: none;
+
+      &:hover {
+        background: color-mix(in oklch, var(--hover), var(--text) 7%);
+      }
+
+      span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      small {
+        color: var(--text-3);
+      }
+    }
+  }
+
+  /* ---------- Popover dialogs, animated in and out ---------- */
+  [popover] {
+    inline-size: min(100% - 2rem, 25rem);
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 24px 64px -12px oklch(0% 0 0 / 35%);
+    opacity: 0;
+    scale: 0.97;
+    transition: opacity 160ms ease, scale 160ms ease, overlay 160ms allow-discrete, display 160ms allow-discrete;
+
+    &:popover-open {
+      display: grid;
+      gap: 0.5rem;
+      opacity: 1;
+      scale: 1;
+
+      @starting-style {
+        opacity: 0;
+        scale: 0.97;
+      }
+    }
+
+    &::backdrop {
+      background: oklch(0% 0 0 / 30%);
+      backdrop-filter: blur(2px);
+    }
+
+    h2 {
+      font-size: 1rem;
+    }
+
+    p {
+      color: var(--text-2);
+    }
+
+    .row-end {
+      margin-block-start: 0.75rem;
+    }
+  }
+
+  .row-end {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  /* ---------- Forms ---------- */
+  .field {
+    display: grid;
+    gap: 0.375rem;
+
+    > label {
+      font-weight: 560;
+    }
+
+    .hint {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+  }
+
+  .input {
+    inline-size: 100%;
+    min-block-size: 2.25rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: inset 0 1px 1px oklch(0% 0 0 / 3%);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+
+    &:hover {
+      border-color: color-mix(in oklch, var(--border-strong) 60%, var(--text));
+    }
+
+    &:focus-visible {
+      outline: 0;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+    }
+
+    &.lg {
+      min-block-size: 2.75rem;
+      font-size: 0.9375rem;
+    }
+  }
+
+  /* Compose: one sheet, fields as hairline rows like a mail client. */
+  .composer {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    box-shadow: 0 1px 2px oklch(0% 0 0 / 4%);
+    overflow: hidden;
+  }
+
+  .crow {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    align-items: center;
+    padding-inline: 1rem;
+    border-block-end: 1px solid var(--border);
+
+    label {
+      color: var(--text-3);
+    }
+
+    input,
+    select {
+      inline-size: 100%;
+      min-block-size: 2.75rem;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      outline: 0;
+      min-inline-size: 0;
+    }
+
+    &:focus-within {
+      background: color-mix(in oklch, var(--hover) 50%, transparent);
+    }
+  }
+
+  .composer textarea {
+    display: block;
+    inline-size: 100%;
+    min-block-size: 16rem;
+    field-sizing: content;
+    padding: 1rem;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    resize: vertical;
+  }
+
+  .composer-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    border-block-start: 1px solid var(--border);
+    background: var(--bg-subtle);
+
+    .spacer {
+      flex: 1;
+    }
+
+    small {
+      color: var(--text-3);
+    }
+  }
+
+  /* Settings: label column on the left, controls on the right; one column when narrow. */
+  .page-title {
+    display: grid;
+    gap: 0.5rem;
+
+    h1 {
+      font-size: 1.5rem;
+    }
+
+    p {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-3);
+    }
+  }
+
+  .settings {
+    display: grid;
+  }
+
+  .setting {
+    display: grid;
+    grid-template-columns: 13rem minmax(0, 1fr);
+    gap: 1rem 3rem;
+    padding-block: 1.75rem;
+
+    > header {
+      display: grid;
+      gap: 0.25rem;
+      align-content: start;
+
+      h2 {
+        font-size: 0.9375rem;
+      }
+
+      p {
+        color: var(--text-3);
+        font-size: 0.8125rem;
+      }
+    }
+
+    > .body {
+      display: grid;
+      gap: 0.875rem;
+      align-content: start;
+      min-inline-size: 0;
+    }
+  }
+
+  @container viewport (inline-size < 46rem) {
+    .setting {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+    gap: 0.5rem;
+  }
+
+  .option {
+    position: relative;
+    display: grid;
+    gap: 0.125rem;
+    padding: 0.75rem 0.875rem 0.75rem 2.375rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease;
+
+    input {
+      position: absolute;
+      inset-inline-start: 0.875rem;
+      inset-block-start: 0.875rem;
+      margin: 0;
+    }
+
+    b {
+      font-weight: 560;
+    }
+
+    small {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+
+    &:hover {
+      border-color: var(--border-strong);
+    }
+
+    &:has(input:checked) {
+      border-color: var(--accent);
+      background: color-mix(in oklch, var(--accent) 5%, var(--surface));
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    &:has(input:focus-visible) {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  }
+
+  .checklist {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+
+    li + li {
+      border-block-start: 1px solid var(--border);
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      min-block-size: 2.5rem;
+      padding-inline: 0.875rem;
+      cursor: pointer;
+    }
+  }
+
+  /* A reveal: the fieldset shows its .revealed part only while the data-reveal choice is checked. */
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-inline-size: 0;
+    display: grid;
+    gap: 0.875rem;
+  }
+
+  fieldset:not(:has(input[data-reveal]:checked)) .revealed {
+    display: none;
+  }
+
+  /* The switch: a plain checkbox, restyled. */
+  .switch-row {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+
+    span {
+      display: grid;
+    }
+
+    b {
+      font-weight: 560;
+    }
+
+    small {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+  }
+
+  input.switch {
+    appearance: none;
+    flex: none;
+    position: relative;
+    inline-size: 2.125rem;
+    block-size: 1.25rem;
+    margin: 0;
+    border-radius: 999px;
+    background: var(--border-strong);
+    cursor: pointer;
+    transition: background-color 150ms ease;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0.125rem;
+      inline-size: 1rem;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 2px oklch(0% 0 0 / 25%);
+      transition: translate 150ms ease;
+    }
+
+    &:checked {
+      background: var(--accent);
+
+      &::before {
+        translate: 0.875rem 0;
+      }
+    }
+  }
+
+  .danger-zone {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    padding: 1rem;
+    border: 1px solid color-mix(in oklch, var(--danger) 28%, var(--border));
+    border-radius: var(--radius-l);
+
+    div {
+      display: grid;
+      gap: 0.125rem;
+      max-inline-size: 42ch;
+    }
+
+    b {
+      font-weight: 600;
+    }
+
+    p {
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+  }
+
+  /* ========== PROPOSAL: focus pages (sign-in, consent, device, approval, notices) ========== */
+  .focus {
+    min-block-size: 100%;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    background: var(--bg-subtle);
+  }
+
+  .focus-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.875rem 1.25rem;
+
+    small {
+      color: var(--text-3);
+    }
+  }
+
+  .focus-center {
+    display: grid;
+    place-items: center;
+    padding: 1rem 1rem 4rem;
+  }
+
+  .card {
+    inline-size: min(100%, 23rem);
+    display: grid;
+    gap: 1.25rem;
+    padding: 1.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+
+    .card-head {
+      display: grid;
+      gap: 0.75rem;
+      justify-items: start;
+    }
+
+    .logo {
+      inline-size: 2.25rem;
+      block-size: 2.25rem;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+    }
+
+    .card-head p {
+      color: var(--text-2);
+    }
+  }
+
+  .status {
+    min-block-size: 1.25rem;
+    color: var(--text-3);
+    font-size: 0.8125rem;
+  }
+
+  .column {
+    inline-size: min(100%, 44rem);
+    margin-inline: auto;
+    padding: 0.5rem 1rem 0;
+    display: grid;
+    gap: 1.25rem;
+    align-content: start;
+  }
+
+  .review-head {
+    display: grid;
+    gap: 0.625rem;
+    padding-block-start: 0.75rem;
+
+    h1 {
+      font-size: 1.625rem;
+    }
+
+    > p {
+      color: var(--text-2);
+    }
+
+    .state {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-3);
+      font-size: 0.8125rem;
+    }
+  }
+
+  .summary {
+    display: grid;
+    gap: 1rem;
+    padding: 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+
+    .who {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      color: var(--text-2);
+
+      b {
+        color: var(--text);
+        font-weight: 600;
+      }
+    }
+
+    .subject {
+      font-size: 1.0625rem;
+      font-weight: 620;
+      letter-spacing: -0.01em;
+    }
+
+    .meta {
+      padding: 0.25rem 0 0;
+    }
+  }
+
+  .section-label {
+    color: var(--text-3);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .decision {
+    position: sticky;
+    inset-block-end: 0;
+    margin-block-start: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1rem;
+    padding: 0.875rem 1rem;
+    border: 1px solid var(--border);
+    border-block-end: 0;
+    border-radius: var(--radius-l) var(--radius-l) 0 0;
+    background: color-mix(in oklch, var(--surface) 88%, transparent);
+    backdrop-filter: blur(14px) saturate(1.4);
+    box-shadow: 0 -8px 24px -12px oklch(0% 0 0 / 18%);
+
+    p {
+      flex: 1 1 16rem;
+      color: var(--text-2);
+      font-size: 0.8125rem;
+    }
+
+    div {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+</style>
+
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5" /><path d="m21 2-9.6 9.6" /><path d="m15.5 7.5 3 3L22 7l-3-3" /></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 17-5-5 5-5" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" /></symbol>
+  <symbol id="i-reply-all" viewBox="0 0 24 24"><path d="m7 17-5-5 5-5" /><path d="m12 17-5-5 5-5" /><path d="M22 18v-2a4 4 0 0 0-4-4H7" /></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><path d="m2 2 20 20" /></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></symbol>
+</svg>
+
+<div class="intro">
+  <h1>AgentMail redesign</h1>
+  <p>
+    The proposed look for every user-facing umail page. It uses system fonts, inline SVG icons and no images, because
+    production's CSP sets <span class="mono">font-src 'none'</span> and <span class="mono">img-src 'none'</span>.
+    Resize the window below 52rem to see the narrow layout.
+  </p>
+  <div class="controls">
+    <div class="seg" id="screens" role="group" aria-label="Screen">
+      <button type="button" data-screen="inbox" aria-pressed="true">Mail</button>
+      <button type="button" data-screen="thread" aria-pressed="false">Conversation</button>
+      <button type="button" data-screen="compose" aria-pressed="false">Compose</button>
+      <button type="button" data-screen="client" aria-pressed="false">Client access</button>
+      <button type="button" data-screen="login" aria-pressed="false">Sign in</button>
+      <button type="button" data-screen="approval" aria-pressed="false">Approval</button>
+    </div>
+    <div class="seg" id="themes" role="group" aria-label="Theme">
+      <button type="button" data-theme-choice="system" aria-pressed="true">System</button>
+      <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+  <p class="caption" id="caption"></p>
+</div>
+
+<div class="window">
+  <div class="urlbar" id="url">agentmail.example/mail</div>
+  <div class="viewport">
+    <!-- ============ MAIL LIST ============ -->
+    <section class="screen" id="inbox" data-url="agentmail.example/mail?deleted" data-caption="One sidebar replaces the top nav and the separate mailbox aside. Rows share columns through subgrid, unread is a dot plus weight, and times show compactly. A success flash becomes a toast that fades out; error flashes stay inline.">
+      <div class="app">
+        <aside class="sidebar">
+          <a class="brand" href="#inbox"
+            ><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg
+            >AgentMail</a
+          >
+          <a class="compose" href="#compose"><svg class="i"><use href="#i-pen" /></svg><span class="label">Write</span></a>
+          <nav class="nav" aria-label="Console">
+            <a href="#inbox" aria-current="true"><svg class="i"><use href="#i-inbox" /></svg>Mail</a>
+            <ul class="subnav">
+              <li><a href="#inbox" aria-current="page">All mailboxes</a></li>
+              <li><a href="#inbox"><span class="mono">hello@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">support@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">research@agentmail.example</span></a></li>
+            </ul>
+            <a href="#client"><svg class="i"><use href="#i-at" /></svg>Mailboxes</a>
+            <a href="#client"><svg class="i"><use href="#i-key" /></svg>Clients</a>
+          </nav>
+          <div class="sidebar-foot">
+            <span>Operator</span>
+            <button class="btn quiet icon-only" type="button"><svg class="i"><use href="#i-logout" /></svg><span class="sr">Sign out</span></button>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="list-head">
+            <h1>All mailboxes</h1>
+            <p>2 unread</p>
+          </div>
+          <ul class="threads">
+            <li>
+              <a class="thread unread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Anna Berg</b><small>3</small></span
+                ><span class="what"><span>Invoice #2291 for September</span><em class="chip">support@</em></span
+                ><time>09:41</time></a
+              >
+            </li>
+            <li>
+              <a class="thread unread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>GitHub</b></span
+                ><span class="what"><span>[maxedapps/umail] PR #14: Tighten reply recipients</span><em class="chip">research@</em></span
+                ><time>08:12</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Jonas Weber</b><small>5</small></span
+                ><span class="what"><span>Re: Workshop dates in October</span><em class="chip">hello@</em></span
+                ><time>Sep 24</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Cloudflare</b></span
+                ><span class="what"><span>Verify your forwarding address</span><em class="chip">hello@</em></span
+                ><time>Sep 23</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Lena Hoffmann</b><small>2</small></span
+                ><span class="what"><span>Question about the course bundle</span><em class="chip">support@</em></span
+                ><time>Sep 22</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Stripe</b></span
+                ><span class="what"><span>Your weekly payout summary</span><em class="chip">support@</em></span
+                ><time>Sep 21</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Priya Nair</b><small>4</small></span
+                ><span class="what"><span>Draft outline for the agents chapter</span><em class="chip">research@</em></span
+                ><time>Sep 19</time></a
+              >
+            </li>
+            <li>
+              <a class="thread" href="#thread"
+                ><i class="dot"></i><span class="who"><b>Deutsche Bahn</b></span
+                ><span class="what"><span>Ihre Buchungsbestätigung</span><em class="chip">hello@</em></span
+                ><time>Sep 17</time></a
+              >
+            </li>
+          </ul>
+          <div class="pager">
+            <span>Newest 25 conversations</span>
+            <a class="btn ghost" href="#inbox">Older<svg class="i"><use href="#i-right" /></svg></a>
+          </div>
+          <p class="toast" role="status"><svg class="i"><use href="#i-check" /></svg>Conversation deleted.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ THREAD ============ -->
+    <section class="screen" id="thread" hidden data-url="agentmail.example/mail/threads/th_8f2c" data-caption="Actions sit in a sticky toolbar with icon and label. Earlier messages are one-line rows; the open message gets a compact header, with the full address list behind Details. The HTML body stays paper-white in both themes, since emails assume a white page.">
+      <div class="app">
+        <aside class="sidebar">
+          <a class="brand" href="#inbox"
+            ><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg
+            >AgentMail</a
+          >
+          <a class="compose" href="#compose"><svg class="i"><use href="#i-pen" /></svg><span class="label">Write</span></a>
+          <nav class="nav" aria-label="Console">
+            <a href="#inbox" aria-current="true"><svg class="i"><use href="#i-inbox" /></svg>Mail</a>
+            <ul class="subnav">
+              <li><a href="#inbox">All mailboxes</a></li>
+              <li><a href="#inbox"><span class="mono">hello@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">support@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">research@agentmail.example</span></a></li>
+            </ul>
+            <a href="#client"><svg class="i"><use href="#i-at" /></svg>Mailboxes</a>
+            <a href="#client"><svg class="i"><use href="#i-key" /></svg>Clients</a>
+          </nav>
+          <div class="sidebar-foot">
+            <span>Operator</span>
+            <button class="btn quiet icon-only" type="button"><svg class="i"><use href="#i-logout" /></svg><span class="sr">Sign out</span></button>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <a class="btn quiet collapse-label" href="#inbox"><svg class="i"><use href="#i-left" /></svg><span class="label">All mailboxes</span></a>
+            <span class="spacer"></span>
+            <a class="btn collapse-label" href="#compose"><svg class="i"><use href="#i-reply" /></svg><span class="label">Reply</span></a>
+            <a class="btn ghost collapse-label" href="#compose"><svg class="i"><use href="#i-reply-all" /></svg><span class="label">Reply all</span></a>
+            <button class="btn ghost collapse-label" type="button"><svg class="i"><use href="#i-mail" /></svg><span class="label">Mark unread</span></button>
+            <button class="btn danger collapse-label" type="button" popovertarget="delete-dialog"><svg class="i"><use href="#i-trash" /></svg><span class="label">Delete…</span></button>
+          </div>
+          <div id="delete-dialog" popover>
+            <h2>Delete this conversation?</h2>
+            <p>It disappears from every mailbox view and from agents.</p>
+            <div class="row-end">
+              <button class="btn ghost" type="button" popovertarget="delete-dialog" popovertargetaction="hide">Cancel</button>
+              <button class="btn danger solid" type="button" popovertarget="delete-dialog" popovertargetaction="hide">Delete</button>
+            </div>
+          </div>
+          <div class="content narrow">
+            <div class="thread-head">
+              <h1>Invoice #2291 for September</h1>
+              <p>3 messages <span class="chip">support@agentmail.example</span></p>
+            </div>
+            <ol class="messages">
+              <li>
+                <a class="msg-row" href="#thread"
+                  ><span class="avatar">AB</span><span><b>Anna Berg</b> · sent the invoice</span><time>Sep 23, 16:05</time></a
+                >
+              </li>
+              <li>
+                <a class="msg-row" href="#thread"
+                  ><span class="avatar">AS</span><span><b>AgentMail Support</b> · to Anna Berg</span><time>Sep 23, 17:30</time></a
+                >
+              </li>
+              <li>
+                <article class="msg-open" aria-label="Message">
+                  <div class="msg-head">
+                    <span class="avatar">AB</span>
+                    <div class="from">
+                      <span><b>Anna Berg</b> <span class="addr mono">anna@bergdesign.example</span></span>
+                      <span class="to">to support@agentmail.example, cc finance@bergdesign.example</span>
+                    </div>
+                    <time>Sep 25, 09:41</time>
+                  </div>
+                  <details class="more">
+                    <summary>Details</summary>
+                    <dl class="meta">
+                      <dt>From</dt>
+                      <dd>Anna Berg &lt;<span class="mono">anna@bergdesign.example</span>&gt;</dd>
+                      <dt>To</dt>
+                      <dd class="mono">support@agentmail.example</dd>
+                      <dt>Cc</dt>
+                      <dd class="mono">finance@bergdesign.example</dd>
+                      <dt>Date</dt>
+                      <dd>Sep 25, 2026, 09:41</dd>
+                      <dt>Mailbox</dt>
+                      <dd class="mono">support@agentmail.example</dd>
+                    </dl>
+                  </details>
+                  <p class="note"><svg class="i"><use href="#i-eye-off" /></svg>Images are not shown. Inline images are listed under Attachments.</p>
+                  <div class="paper">
+                    <p>Hi,</p>
+                    <p>
+                      thanks for the quick reply. The corrected invoice is attached. Could you confirm that the VAT ID on your
+                      side matches DE 312 845 117?
+                    </p>
+                    <p>Best,<br />Anna</p>
+                  </div>
+                  <ul class="files" aria-label="Attachments">
+                    <li><a href="#thread"><svg class="i"><use href="#i-clip" /></svg><span>invoice-2291-corrected.pdf</span><small>184 KB</small></a></li>
+                    <li><a href="#thread"><svg class="i"><use href="#i-clip" /></svg><span>logo.png</span><small>12 KB</small></a></li>
+                  </ul>
+                </article>
+              </li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COMPOSE ============ -->
+    <section class="screen" id="compose" hidden data-url="agentmail.example/mail/compose" data-caption="Compose is a single sheet: From, To, Cc and Subject are hairline rows, and the message grows with its text through field-sizing. A reply shows its derived recipients read-only in the same rows.">
+      <div class="app">
+        <aside class="sidebar">
+          <a class="brand" href="#inbox"
+            ><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg
+            >AgentMail</a
+          >
+          <a class="compose" href="#compose"><svg class="i"><use href="#i-pen" /></svg><span class="label">Write</span></a>
+          <nav class="nav" aria-label="Console">
+            <a href="#inbox" aria-current="true"><svg class="i"><use href="#i-inbox" /></svg>Mail</a>
+            <ul class="subnav">
+              <li><a href="#inbox">All mailboxes</a></li>
+              <li><a href="#inbox"><span class="mono">hello@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">support@agentmail.example</span></a></li>
+              <li><a href="#inbox"><span class="mono">research@agentmail.example</span></a></li>
+            </ul>
+            <a href="#client"><svg class="i"><use href="#i-at" /></svg>Mailboxes</a>
+            <a href="#client"><svg class="i"><use href="#i-key" /></svg>Clients</a>
+          </nav>
+          <div class="sidebar-foot">
+            <span>Operator</span>
+            <button class="btn quiet icon-only" type="button"><svg class="i"><use href="#i-logout" /></svg><span class="sr">Sign out</span></button>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <h1>New message</h1>
+          </div>
+          <div class="content narrow">
+            <form class="composer" id="compose-form">
+              <div class="crow">
+                <label for="c-from">From</label>
+                <select id="c-from">
+                  <option>hello@agentmail.example</option>
+                  <option>support@agentmail.example</option>
+                  <option>research@agentmail.example</option>
+                </select>
+              </div>
+              <div class="crow">
+                <label for="c-to">To</label>
+                <input id="c-to" type="text" value="jonas@weber-studio.example" />
+              </div>
+              <div class="crow">
+                <label for="c-cc">Cc</label>
+                <input id="c-cc" type="text" placeholder="anna@example.net, team@example.net" />
+              </div>
+              <div class="crow">
+                <label for="c-subject">Subject</label>
+                <input id="c-subject" type="text" value="Workshop dates in October" />
+              </div>
+              <label class="sr" for="c-text">Message</label>
+              <textarea id="c-text">Hi Jonas,
+
+October 14 and 15 both work for us. I'll send the room details once the booking is confirmed.
+
+Best,
+Max</textarea>
+              <div class="composer-foot">
+                <button class="btn" type="button"><svg class="i"><use href="#i-send" /></svg>Send</button>
+                <a class="btn quiet" href="#inbox">Cancel</a>
+                <span class="spacer"></span>
+                <small>Plain text</small>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CLIENT ACCESS ============ -->
+    <section class="screen" id="client" hidden data-url="agentmail.example/clients/cc_7Hq2x9LmTz" data-caption="Settings pages put a label column beside the controls and stack when narrow. Choices are cards with an accent ring, Read mail is a CSS-only switch, and revoking sits in a danger zone with an animated popover confirm.">
+      <div class="app">
+        <aside class="sidebar">
+          <a class="brand" href="#inbox"
+            ><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg
+            >AgentMail</a
+          >
+          <a class="compose" href="#compose"><svg class="i"><use href="#i-pen" /></svg><span class="label">Write</span></a>
+          <nav class="nav" aria-label="Console">
+            <a href="#inbox"><svg class="i"><use href="#i-inbox" /></svg>Mail</a>
+            <a href="#client"><svg class="i"><use href="#i-at" /></svg>Mailboxes</a>
+            <a href="#client" aria-current="page"><svg class="i"><use href="#i-key" /></svg>Clients</a>
+          </nav>
+          <div class="sidebar-foot">
+            <span>Operator</span>
+            <button class="btn quiet icon-only" type="button"><svg class="i"><use href="#i-logout" /></svg><span class="sr">Sign out</span></button>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <nav class="crumbs" aria-label="Breadcrumb"><a href="#client">Clients</a><svg class="i"><use href="#i-right" /></svg><span class="here">Claude Code</span></nav>
+          </div>
+          <div class="content narrow">
+            <div class="page-title">
+              <h1>Claude Code</h1>
+              <p><span class="badge">Agent</span><span class="mono">cc_7Hq2x9LmTz</span></p>
+            </div>
+            <form class="settings" id="client-form">
+              <section class="setting">
+                <header>
+                  <h2>Mailboxes</h2>
+                  <p>Which mailboxes it can see and send from.</p>
+                </header>
+                <fieldset class="body">
+                  <legend class="sr">Mailboxes</legend>
+                  <div class="options">
+                    <label class="option"><input type="radio" name="scope" /><b>All mailboxes</b><small>Including ones you add later.</small></label>
+                    <label class="option"><input type="radio" name="scope" checked data-reveal /><b>Only these</b><small>Pick the mailboxes below.</small></label>
+                  </div>
+                  <ul class="checklist revealed">
+                    <li><label><input type="checkbox" /><span class="mono">hello@agentmail.example</span></label></li>
+                    <li><label><input type="checkbox" checked /><span class="mono">support@agentmail.example</span></label></li>
+                    <li><label><input type="checkbox" checked /><span class="mono">research@agentmail.example</span></label></li>
+                  </ul>
+                </fieldset>
+              </section>
+              <section class="setting">
+                <header>
+                  <h2>Sending</h2>
+                  <p>Whether its messages wait for you.</p>
+                </header>
+                <fieldset class="body">
+                  <legend class="sr">Sending</legend>
+                  <div class="options">
+                    <label class="option"><input type="radio" name="send" /><b>Never</b><small>It cannot send mail.</small></label>
+                    <label class="option"><input type="radio" name="send" checked data-reveal /><b>With my approval</b><small>Each message waits for you.</small></label>
+                    <label class="option"><input type="radio" name="send" /><b>Without approval</b><small>Messages go out at once.</small></label>
+                  </div>
+                  <div class="field revealed">
+                    <label for="preapproved">Skip approval for</label>
+                    <input class="input" id="preapproved" type="text" value="me@example.com" />
+                    <p class="hint">Comma-separated addresses. A message skips approval only when all its recipients are listed.</p>
+                  </div>
+                </fieldset>
+              </section>
+              <section class="setting">
+                <header>
+                  <h2>Reading</h2>
+                  <p>Access to received mail.</p>
+                </header>
+                <div class="body">
+                  <label class="switch-row"
+                    ><span><b>Read mail</b><small>List, open and download messages.</small></span
+                    ><input class="switch" type="checkbox" checked
+                  /></label>
+                </div>
+              </section>
+              <section class="setting">
+                <header>
+                  <h2>Recipients</h2>
+                  <p>Who it may write to.</p>
+                </header>
+                <fieldset class="body">
+                  <legend class="sr">Recipients</legend>
+                  <div class="options">
+                    <label class="option"><input type="radio" name="rcpt" checked /><b>Anyone</b><small>Any address it is told to write to.</small></label>
+                    <label class="option"><input type="radio" name="rcpt" data-reveal /><b>Only these</b><small>List the allowed addresses below.</small></label>
+                  </div>
+                  <div class="field revealed">
+                    <label for="recipients">Allowed recipients</label>
+                    <input class="input" id="recipients" type="text" placeholder="anna@example.net, team@example.net" />
+                  </div>
+                  <div class="row-end"><button class="btn" type="button">Save access</button></div>
+                </fieldset>
+              </section>
+            </form>
+            <div class="danger-zone">
+              <div>
+                <b>Revoke access</b>
+                <p>Its tokens stop working at once. It can ask again through the consent screen.</p>
+              </div>
+              <button class="btn danger" type="button" popovertarget="revoke-dialog">Revoke access…</button>
+            </div>
+            <div id="revoke-dialog" popover>
+              <h2>Revoke Claude Code?</h2>
+              <p>Its tokens stop working at once.</p>
+              <div class="row-end">
+                <button class="btn ghost" type="button" popovertarget="revoke-dialog" popovertargetaction="hide">Cancel</button>
+                <button class="btn danger solid" type="button" popovertarget="revoke-dialog" popovertargetaction="hide">Revoke</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SIGN IN ============ -->
+    <section class="screen" id="login" hidden data-url="agentmail.example/login" data-caption="Sign-in, consent, device, approval and notice pages share one centred card on a quiet ground. Their controls keep the 44px height the browser tests require.">
+      <div class="focus">
+        <div class="focus-bar"></div>
+        <div class="focus-center">
+          <form class="card" id="login-form">
+            <div class="card-head">
+              <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg>
+              <h1>Sign in to AgentMail</h1>
+            </div>
+            <div class="field">
+              <label for="l-email">Email</label>
+              <input class="input lg" id="l-email" type="email" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="l-secret">Password</label>
+              <input class="input lg" id="l-secret" type="password" autocomplete="off" />
+            </div>
+            <button class="btn lg block" type="button">Sign in</button>
+            <p class="status" role="status"></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ APPROVAL ============ -->
+    <section class="screen" id="approval" hidden data-url="agentmail.example/approvals/ap_Qm3…" data-caption="The approval page runs without script, so it is CSS only. The request comes first as a summary card, the body preview follows, and the decision bar stays pinned to the bottom while you scroll.">
+      <div class="focus">
+        <div class="focus-bar">
+          <span class="brand"
+            ><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle class="disc" cx="16" cy="16" r="16" /><rect class="env" x="8.5" y="11.5" width="15" height="10" rx="1.6" /><path class="flap" d="M9.5 12.2 16 16.6l6.5-4.4z" /></svg
+            >AgentMail</span
+          >
+          <small>Send approval</small>
+        </div>
+        <div class="column">
+          <div class="review-head">
+            <p class="state"><span class="badge warning">Waiting for you</span><svg class="i"><use href="#i-clock" /></svg>Expires in 58 min</p>
+            <h1>Review before sending</h1>
+            <p>Check the message below. Nothing is sent until you approve it.</p>
+          </div>
+          <div class="summary">
+            <div class="who"><span class="avatar">CC</span><span><b>Claude Code</b> wants to send</span></div>
+            <p class="subject">Re: Invoice #2291 for September</p>
+            <dl class="meta">
+              <dt>From</dt>
+              <dd>AgentMail Support &lt;<span class="mono">support@agentmail.example</span>&gt;</dd>
+              <dt>To</dt>
+              <dd>Anna Berg &lt;<span class="mono">anna@bergdesign.example</span>&gt;</dd>
+              <dt>Cc</dt>
+              <dd class="mono">finance@bergdesign.example</dd>
+              <dt>Context</dt>
+              <dd>Reply to an existing message</dd>
+              <dt>Requested</dt>
+              <dd>25 Sep 2026, 09:52 UTC</dd>
+              <dt>Expires</dt>
+              <dd>25 Sep 2026, 10:52 UTC</dd>
+            </dl>
+          </div>
+          <p class="section-label">Message body</p>
+          <p class="note warning" role="note">
+            <svg class="i"><use href="#i-alert" /></svg>This message contains remote images. They are blocked in this preview, but the
+            recipient's mail client will load them, and image URLs can carry data out. Deny unless you expected images.
+          </p>
+          <div class="paper">
+            <p>Hi Anna,</p>
+            <p>
+              thanks for sending the corrected invoice. I checked the VAT ID against our records and it matches
+              DE 312 845 117. The payment is scheduled for September 30.
+            </p>
+            <p>Best regards,<br />AgentMail Support</p>
+          </div>
+          <details class="more">
+            <summary>Show plain-text alternative</summary>
+            <pre class="paper">Hi Anna,
+
+thanks for sending the corrected invoice. I checked the VAT ID
+against our records and it matches DE 312 845 117. The payment
+is scheduled for September 30.
+
+Best regards,
+AgentMail Support</pre>
+          </details>
+          <div class="decision" id="decision">
+            <p>Approve only if every detail is correct. Denying is final, and the email is not sent.</p>
+            <div>
+              <button class="btn ghost lg" type="button">Deny request</button>
+              <button class="btn lg" type="button">Approve &amp; send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  const screens = document.querySelectorAll(".screen");
+  const url = document.getElementById("url");
+  const caption = document.getElementById("caption");
+  const screenButtons = document.querySelectorAll("#screens button");
+  const viewport = document.querySelector(".viewport");
+
+  function show(id) {
+    const target = document.getElementById(id);
+    if (target === null || !target.classList.contains("screen")) return;
+    for (const screen of screens) screen.hidden = screen !== target;
+    for (const button of screenButtons) button.setAttribute("aria-pressed", String(button.dataset.screen === id));
+    url.textContent = target.dataset.url;
+    caption.textContent = target.dataset.caption;
+    viewport.scrollTop = 0;
+  }
+
+  for (const button of screenButtons) button.addEventListener("click", () => show(button.dataset.screen));
+
+  // In-mockup links (#thread, #compose…) switch screens instead of jumping.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest('.viewport a[href^="#"]');
+    if (link === null) return;
+    event.preventDefault();
+    show(link.getAttribute("href").slice(1));
+  });
+
+  for (const form of document.querySelectorAll(".viewport form")) {
+    form.addEventListener("submit", (event) => event.preventDefault());
+  }
+
+  const themeButtons = document.querySelectorAll("#themes button");
+  for (const button of themeButtons) {
+    button.addEventListener("click", () => {
+      const choice = button.dataset.themeChoice;
+      if (choice === "system") delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = choice;
+      for (const other of themeButtons) other.setAttribute("aria-pressed", String(other === button));
+    });
+  }
+
+  show(/^[a-z]+$/.test(location.hash.slice(1)) ? location.hash.slice(1) : "inbox");
+</script>
