@@ -10,6 +10,8 @@ import {
 } from "../account/domain.ts";
 import { isExpectedStoreFailure, type AccountStoreError } from "../account/errors.ts";
 import {
+  Address,
+  AddressForwarding,
   ApiProblem,
   ArchiveTransportProblem,
   MailContact,
@@ -27,6 +29,7 @@ import {
   type ListJobsQuery,
   type ListMessagesQuery,
   type ListThreadMessagesQuery,
+  type PatchAddressPayload,
   type Principal,
   type SubmitMessagePayload,
 } from "@umail/api-contract";
@@ -80,6 +83,80 @@ export const storeCall = <A, R>(
         return Effect.die(error);
     }
   });
+
+// Mailboxes are operator-only: REST reaches these only with an operator token, the console only
+// with the operator's session.
+export const createAddress = Effect.fn("createAddress")(function* (
+  deps: ApiDeps,
+  input: { readonly localPart: string; readonly displayName?: string },
+) {
+  const now = yield* currentIso;
+  const address = yield* deps.account
+    .createAddress(input.localPart, deps.mailDomain, input.displayName, now)
+    .pipe(storeCall);
+  if (address === null) {
+    return yield* new HttpApiError.BadRequest();
+  }
+  return new Address(address);
+});
+
+export const listAddresses = Effect.fn("listAddresses")(function* (deps: ApiDeps) {
+  const addresses = yield* deps.account.listAddresses().pipe(storeCall);
+  return addresses.map((address) => new Address(address));
+});
+
+export const getAddress = Effect.fn("getAddress")(function* (deps: ApiDeps, id: string) {
+  const address = yield* deps.account.getAddress(id).pipe(storeCall);
+  if (address === null) {
+    return yield* new HttpApiError.NotFound();
+  }
+  return new Address(address);
+});
+
+export const patchAddress = Effect.fn("patchAddress")(function* (
+  deps: ApiDeps,
+  id: string,
+  patch: PatchAddressPayload,
+) {
+  const now = yield* currentIso;
+  const address = yield* deps.account.patchAddress(id, patch, now).pipe(storeCall);
+  if (address === null) {
+    return yield* new HttpApiError.NotFound();
+  }
+  return new Address(address);
+});
+
+// Cloudflare forwards only to a verified destination, so the destination is registered first.
+export const setAddressForwarding = Effect.fn("setAddressForwarding")(function* (
+  deps: ApiDeps,
+  id: string,
+  email: string,
+) {
+  const address = yield* getAddress(deps, id);
+  const destination = yield* deps.destinations
+    .ensure(email)
+    .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
+  const now = yield* currentIso;
+  const updated = yield* deps.account
+    .setAddressForwarding(address.id, destination.email, now)
+    .pipe(storeCall);
+  if (updated === null) {
+    return yield* new HttpApiError.NotFound();
+  }
+  return new AddressForwarding({ address: new Address(updated), verified: destination.verified });
+});
+
+export const removeAddressForwarding = Effect.fn("removeAddressForwarding")(function* (
+  deps: ApiDeps,
+  id: string,
+) {
+  const now = yield* currentIso;
+  const address = yield* deps.account.setAddressForwarding(id, null, now).pipe(storeCall);
+  if (address === null) {
+    return yield* new HttpApiError.NotFound();
+  }
+  return new Address(address);
+});
 
 export const listSendingIdentities = Effect.fn("listSendingIdentities")(function* (
   deps: ApiDeps,

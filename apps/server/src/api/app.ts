@@ -8,16 +8,12 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import {
-  Address,
   ApprovalPageGone,
   ApprovalPageNotFound,
   ApprovalToken,
-  ApiProblem,
-  AddressForwarding,
   CurrentPrincipal,
   PublicApprovalApi,
   UmailApi,
@@ -48,7 +44,9 @@ import {
 } from "../web/pages/approval.ts";
 import { approvalReviewUrl, type NotificationKey } from "../mail/notifications.ts";
 import {
+  createAddress,
   currentIso,
+  getAddress,
   getJob,
   getMessage,
   getThread,
@@ -56,11 +54,14 @@ import {
   listMessages,
   listSendingIdentities,
   listThreads,
+  listAddresses,
+  patchAddress,
   readAttachment,
   readMessageSource,
+  removeAddressForwarding,
+  setAddressForwarding,
   setThreadReadState,
   softDeleteVisibleThread,
-  storeCall,
   submitMessage,
 } from "./operations.ts";
 
@@ -135,77 +136,14 @@ export function makeApiHttpEffect(deps: ApiDeps) {
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>
     handlers
-      .handle("createAddress", ({ payload }) =>
-        Effect.gen(function* () {
-          const now = yield* currentIso;
-          const address = yield* deps.account
-            .createAddress(payload.localPart, deps.mailDomain, payload.displayName, now)
-            .pipe(storeCall);
-          if (address === null) {
-            return yield* new HttpApiError.BadRequest();
-          }
-          return new Address(address);
-        }),
-      )
-      .handle("listAddresses", () =>
-        Effect.gen(function* () {
-          const addresses = yield* deps.account.listAddresses().pipe(storeCall);
-          return addresses.map((address) => new Address(address));
-        }),
-      )
-      .handle("getAddress", ({ params }) =>
-        Effect.gen(function* () {
-          const address = yield* deps.account.getAddress(params.id).pipe(storeCall);
-          if (address === null) {
-            return yield* new HttpApiError.NotFound();
-          }
-          return new Address(address);
-        }),
-      )
-      .handle("patchAddress", ({ params, payload }) =>
-        Effect.gen(function* () {
-          const now = yield* currentIso;
-          const address = yield* deps.account.patchAddress(params.id, payload, now).pipe(storeCall);
-          if (address === null) {
-            return yield* new HttpApiError.NotFound();
-          }
-          return new Address(address);
-        }),
-      )
+      .handle("createAddress", ({ payload }) => createAddress(deps, payload))
+      .handle("listAddresses", () => listAddresses(deps))
+      .handle("getAddress", ({ params }) => getAddress(deps, params.id))
+      .handle("patchAddress", ({ params, payload }) => patchAddress(deps, params.id, payload))
       .handle("setForwarding", ({ params, payload }) =>
-        Effect.gen(function* () {
-          const address = yield* deps.account.getAddress(params.id).pipe(storeCall);
-          if (address === null) {
-            return yield* new HttpApiError.NotFound();
-          }
-          const destination = yield* deps.destinations
-            .ensure(payload.email)
-            .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
-          const now = yield* currentIso;
-          const updated = yield* deps.account
-            .setAddressForwarding(address.id, destination.email, now)
-            .pipe(storeCall);
-          if (updated === null) {
-            return yield* new HttpApiError.NotFound();
-          }
-          return new AddressForwarding({
-            address: new Address(updated),
-            verified: destination.verified,
-          });
-        }),
+        setAddressForwarding(deps, params.id, payload.email),
       )
-      .handle("removeForwarding", ({ params }) =>
-        Effect.gen(function* () {
-          const now = yield* currentIso;
-          const address = yield* deps.account
-            .setAddressForwarding(params.id, null, now)
-            .pipe(storeCall);
-          if (address === null) {
-            return yield* new HttpApiError.NotFound();
-          }
-          return new Address(address);
-        }),
-      ),
+      .handle("removeForwarding", ({ params }) => removeAddressForwarding(deps, params.id)),
   );
 }
 

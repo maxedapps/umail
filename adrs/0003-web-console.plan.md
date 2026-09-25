@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–3 done)
+- **Status:** In progress (tasks 1–4 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -246,7 +246,7 @@ Delete leftovers as each task finds them. After the last task, `rg "human-pages|
 
 **Verify:** `api.test.ts` and `destinations.test.ts` pass unchanged.
 
-**Done:** no.
+**Done:** yes. `getAddress` moved too, since the console's mailbox page reads one address.
 
 ### 5. Clients list and detail, server-rendered consent
 
