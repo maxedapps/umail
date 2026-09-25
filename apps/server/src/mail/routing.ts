@@ -1,7 +1,6 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { Input } from "alchemy";
-import { Unowned } from "alchemy/AdoptPolicy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import { Resource, type Resource as AlchemyResource } from "alchemy/Resource";
@@ -36,7 +35,10 @@ export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDo
 
 // The zone apex reports readiness in its routing settings. A subdomain is ready
 // once Cloudflare lists no missing DNS records for it.
-const inspect = Effect.fn(function* ({ zoneId, name }: EmailRoutingDomainProps) {
+const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
+  zoneId,
+  name,
+}: EmailRoutingDomainProps) {
   const settings = yield* emailRouting.getEmailRouting({ zoneId });
   if (settings.name === name) {
     return { apex: true, ready: settings.enabled && settings.status === "ready" };
@@ -65,17 +67,15 @@ function waitUntilReady(domain: EmailRoutingDomainProps) {
   );
 }
 
-export const readEmailRoutingDomain = Effect.fn(function* (
+// A ready registration is adopted as is; one that is not ready is created.
+export const readEmailRoutingDomain = Effect.fn("readEmailRoutingDomain")(function* (
   domain: EmailRoutingDomainProps,
-  output: EmailRoutingDomainProps | undefined,
 ) {
   const { ready } = yield* inspect(domain);
-  if (!ready) return undefined;
-  const attributes = { zoneId: domain.zoneId, name: domain.name };
-  return output === undefined ? Unowned(attributes) : attributes;
+  return ready ? { zoneId: domain.zoneId, name: domain.name } : undefined;
 });
 
-export const diffEmailRoutingDomain = Effect.fn(function* (
+export const diffEmailRoutingDomain = Effect.fn("diffEmailRoutingDomain")(function* (
   olds: EmailRoutingDomainProps,
   news: EmailRoutingDomainProps,
   output: EmailRoutingDomainProps | undefined,
@@ -88,7 +88,9 @@ export const diffEmailRoutingDomain = Effect.fn(function* (
   return ready ? undefined : ({ action: "update" } as const);
 });
 
-export const reconcileEmailRoutingDomain = Effect.fn(function* (domain: EmailRoutingDomainProps) {
+export const reconcileEmailRoutingDomain = Effect.fn("reconcileEmailRoutingDomain")(function* (
+  domain: EmailRoutingDomainProps,
+) {
   const { zoneId, name } = domain;
   const { apex, ready } = yield* inspect(domain);
   if (!ready) {
@@ -102,13 +104,13 @@ export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
   stables: ["zoneId", "name"],
   diff: ({ olds, news, output }) =>
     isResolved(news) ? diffEmailRoutingDomain(olds, news, output) : Effect.void,
-  read: ({ olds, output }) => readEmailRoutingDomain(olds, output),
+  read: ({ olds }) => readEmailRoutingDomain(olds),
   reconcile: ({ news }) => reconcileEmailRoutingDomain(news),
-  // Never runs: MailRoutingDomain is retained. Alchemy still requires a delete handler.
+  // Destroying a stage leaves the zone's Email Routing DNS in place; other stages share it.
   delete: () => Effect.void,
 });
 
-export const configureMailRouting = Effect.fn(function* (
+export const configureMailRouting = Effect.fn("configureMailRouting")(function* (
   site: StageSite,
   stage: string,
   workerName: Input<string>,
@@ -119,7 +121,7 @@ export const configureMailRouting = Effect.fn(function* (
   const routingDomain = yield* EmailRoutingDomain("MailRoutingDomain", {
     zoneId: routing.zoneId,
     name: site.mailDomain,
-  }).pipe(Alchemy.AdoptPolicy.adopt(), Alchemy.RemovalPolicy.retain());
+  });
 
   if (stageSendsMail(stage)) {
     yield* Cloudflare.Email.SendingSubdomain("MailSending", {

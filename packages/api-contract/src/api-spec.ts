@@ -185,19 +185,6 @@ export class ListThreadMessagesQuery extends Schema.Class<ListThreadMessagesQuer
   cursor: Schema.optionalKey(Schema.String),
 }) {}
 
-export class ReplyPlanQuery extends Schema.Class<ReplyPlanQuery>("ReplyPlanQuery")({
-  mode: Schema.Literals(["reply", "reply-all"]),
-}) {}
-
-export class ReplyPlan extends Schema.Class<ReplyPlan>("ReplyPlan")({
-  replyToMessageId: Schema.String,
-  replyMode: Schema.Literals(["reply", "reply-all"]),
-  fromAddressId: Schema.String,
-  to: Schema.Array(MailContact),
-  cc: Schema.Array(MailContact),
-  subject: Schema.NullOr(Schema.String),
-}) {}
-
 const messageFields = {
   requestId: Schema.optionalKey(
     SubmissionRequestId.annotate({
@@ -439,14 +426,6 @@ export class MessagesGroup extends HttpApiGroup.make("Messages")
       params: IdParams,
       success: ThreadMessage,
       error: scopedErrors,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("getReplyPlan", "/messages/:id/reply-plan", {
-      params: IdParams,
-      query: ReplyPlanQuery,
-      success: ReplyPlan,
-      error: [...scopedErrors, ApiProblem],
     }),
   )
   .add(

@@ -30,37 +30,12 @@ export function blockedAuthSurfaceResponse(request: Request): Response | null {
   return null;
 }
 
-export function configuredOriginAllowed(
-  originHeader: string | null,
-  configuredOrigin: string,
-): boolean {
-  return originHeader === configuredOrigin;
-}
-
 export function cookieMutationAllowed(request: Request, configuredOrigin: string): boolean {
   if (request.headers.get("sec-fetch-site") === "same-origin") {
     return true;
   }
   const originHeader = request.headers.get("origin");
-  if (configuredOriginAllowed(originHeader, configuredOrigin)) {
-    return true;
-  }
-  return originHeader === new URL(request.url).origin;
-}
-
-export function sameOriginReturnPath(next: string | null, configuredOrigin: string): string | null {
-  if (next === null || next.length === 0) return null;
-  if (!next.startsWith("/") || next.startsWith("//")) return null;
-  if (next.includes("\\") || next.includes("://") || /\s/u.test(next)) return null;
-  const parsed = URL.parse(next, configuredOrigin);
-  if (parsed === null) return null;
-  if (parsed.origin !== configuredOrigin) return null;
-  if (parsed.username.length > 0 || parsed.password.length > 0) return null;
-  if (parsed.hash.length > 0) return null;
-  const returned = `${parsed.pathname}${parsed.search}`;
-  if (returned !== next) return null;
-  if (parsed.pathname !== "/clients" && parsed.pathname !== "/device") return null;
-  return returned;
+  return originHeader === configuredOrigin || originHeader === new URL(request.url).origin;
 }
 
 function relativeAuthPath(pathname: string): string | null {

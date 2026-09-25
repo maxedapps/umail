@@ -208,7 +208,7 @@ Behaviour changes are limited to those the ADR lists:
 
 **Verify:** `approval-flow.test.ts`, `api.test.ts`, `auth-boundaries.test.ts`, `auth-pages.test.ts`, `routing.test.ts`, `stack.test.ts`, `reply-plan.test.ts` and the browser suite pass.
 
-**Done:** no
+**Done:** yes. The provisioning test deletion happened in task 3. The hostile `next=` cases that only the TS twin covered (`//evil.example`, `/\evil.example`, `/login`) moved into the browser spec, which runs the real login script. `jobs.ts` has one `allRecipientsIn` helper.
 
 ### 7. CLI
 

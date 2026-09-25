@@ -524,6 +524,7 @@ export type ApprovalDecisionResult =
       readonly kind: "resolved";
       readonly state: "approved" | "denied" | "expired" | "cancelled";
       readonly job: OutboundJob | null;
+      readonly expiresAt: string;
     }
   | { readonly kind: "unavailable"; readonly state: "pending" }
   | { readonly kind: "missing" };

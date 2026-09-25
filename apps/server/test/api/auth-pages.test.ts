@@ -42,18 +42,7 @@ describe("auth HTML pages", () => {
     expect(html).toContain('<label class="field__label" for="secret">Operator secret</label>');
     expect(html).toContain('name="password" type="password" autocomplete="current-password"');
     expect(html).toContain('role="status" aria-live="polite" aria-atomic="true"');
-    expect(html).toContain("submitButton.disabled = pending;");
-    expect(html).not.toContain('fetch("/api/auth/sign-up/email"');
-    expect(html).not.toContain("first-time");
-    expect(html).toContain('fetch("/api/auth/sign-in/email"');
-    expect(html).toContain("signedOAuthQuery(location.search)");
-    expect(html).toContain("signInBody.oauth_query = oauthQuery;");
-    expect(html).toContain(
-      'sameOriginReturnPath(new URLSearchParams(location.search).get("next"))',
-    );
-    expect(html).toContain("Signed in. Continue to the authorization request or use umail login.");
     expect(html).not.toContain(OPERATOR_PASSWORD);
-    expect(html).not.toContain("typeof");
   });
 
   it("keeps credentials out of the URL when the login script cannot run", async () => {
@@ -76,22 +65,10 @@ describe("auth HTML pages", () => {
     expect(html).toContain('<bdi id="scope" dir="auto"></bdi>');
     expect(html).toContain("<dt>Redirects to</dt>");
     expect(html).toContain('<bdi id="redirect-host" dir="auto"></bdi>');
-    expect(html).toContain('const params = new URLSearchParams(oauthQuery ?? "");');
-    expect(html).toContain('redirectHost(params.get("redirect_uri"))');
-    expect(html).not.toContain("new URLSearchParams(location.search)");
     expect(html).toContain('<button id="accept" type="button">Allow access</button>');
     expect(html).toContain('id="deny" type="button">Deny request</button>');
-    expect(html).toContain('fetch("/api/auth/oauth2/consent"');
-    expect(html).toContain("signedOAuthQuery(location.search)");
-    expect(html).toContain("body.oauth_query = oauthQuery;");
     expect(html).toContain('<input id="mailboxes" name="mailboxes" type="text" value="all"');
     expect(html).toContain('<option value="requireApproval" selected>');
-    expect(html).toContain("body.mailboxes = mailboxesField.value;");
-    expect(html).toContain("body.sendMode = sendModeField.value;");
-    expect(html).toContain("acceptButton.disabled = pending;");
-    expect(html).toContain("denyButton.disabled = pending;");
-    expect(html).toContain('status.setAttribute("role", kind === "error" ? "alert" : "status")');
-    expect(html).not.toContain("typeof");
   });
 
   it("serves the styled pages from the existing GET routes", async () => {

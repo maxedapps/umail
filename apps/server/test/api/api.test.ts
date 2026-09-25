@@ -14,7 +14,6 @@ import {
   MailThreadPage,
   OutboundJobStatus,
   OutboundThreadMessage,
-  ReplyPlan,
   SubmissionRequestId,
   ThreadMessage,
   UmailApi,
@@ -183,16 +182,12 @@ describe("root authorization boundary", () => {
       world.fetch("http://umail.test/jobs", authorized(world)),
       world.fetch(`http://umail.test/messages/${inbound.messageId}`, authorized(world)),
       world.fetch(
-        `http://umail.test/messages/${inbound.messageId}/reply-plan?mode=reply`,
-        authorized(world),
-      ),
-      world.fetch(
         `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
         authorized(world),
       ),
     ]);
     expect(responses.map((response) => response.status)).toEqual([
-      200, 200, 200, 200, 200, 200, 200, 200,
+      200, 200, 200, 200, 200, 200, 200,
     ]);
     expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
   });
@@ -498,7 +493,7 @@ describe("root mailbox API", () => {
     );
   });
 
-  it("plans reply-all recipients and submits a threaded reply job", async () => {
+  it("derives reply-all recipients and submits a threaded reply job", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);
     const target = await seedInboundMessage(world, mailbox.id, {
@@ -506,19 +501,6 @@ describe("root mailbox API", () => {
       to: [FROM_ADDRESS, "other@example.com"],
       cc: ["copy@example.com"],
     });
-
-    const planResponse = await world.fetch(
-      `http://umail.test/messages/${target.messageId}/reply-plan?mode=reply-all`,
-      authorized(world),
-    );
-    expect(planResponse.status).toBe(200);
-    const plan = await Schema.decodeUnknownPromise(ReplyPlan)(await planResponse.json());
-    expect(plan.fromAddressId).toBe(mailbox.id);
-    expect(plan.to.map((contact) => contact.address)).toEqual(["sender@example.com"]);
-    expect(plan.cc.map((contact) => contact.address)).toEqual([
-      "other@example.com",
-      "copy@example.com",
-    ]);
 
     const replyResponse = await world.fetch("http://umail.test/submissions", {
       method: "POST",
@@ -550,9 +532,11 @@ describe("root mailbox API", () => {
         await world.fetch(`http://umail.test/messages/${job.messageId}`, authorized(world))
       ).json(),
     );
-    expect(reply.to.map((contact) => contact.address)).toEqual(
-      plan.to.map((contact) => contact.address),
-    );
+    expect(reply.to.map((contact) => contact.address)).toEqual(["sender@example.com"]);
+    expect(reply.cc.map((contact) => contact.address)).toEqual([
+      "other@example.com",
+      "copy@example.com",
+    ]);
   });
 
   it("threads a reply to our own accepted outbound message onto that message", async () => {
@@ -608,10 +592,20 @@ describe("root mailbox API", () => {
 
   it("returns reply errors without creating a job", async () => {
     const world = await createWorld();
-    const missing = await world.fetch(
-      "http://umail.test/messages/missing/reply-plan?mode=reply",
-      authorized(world),
-    );
+    const mailbox = await seedMailbox(world);
+    const missing = await world.fetch("http://umail.test/submissions", {
+      method: "POST",
+      headers: jsonHeaders(authorized(world).headers),
+      body: JSON.stringify({
+        intent: "reply",
+        requestId: REQUEST_ID,
+        fromAddressId: mailbox.id,
+        subject: "Re: missing",
+        text: "reply body",
+        replyToMessageId: "missing",
+        replyMode: "reply",
+      }),
+    });
     expect(missing.status).toBe(404);
     const jobs = await Effect.runPromise(
       world.account.listOutboundJobs({ viewer: { kind: "operator" } }),

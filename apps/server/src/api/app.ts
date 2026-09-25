@@ -59,7 +59,6 @@ import {
   currentIso,
   getJob,
   getMessage,
-  getReplyPlan,
   getThread,
   listJobs,
   listMessages,
@@ -333,12 +332,6 @@ function messagesGroup(deps: ApiDeps) {
           return yield* getMessage(deps, principal, params.id);
         }),
       )
-      .handle("getReplyPlan", ({ params, query }) =>
-        Effect.gen(function* () {
-          const principal = yield* CurrentPrincipal;
-          return yield* getReplyPlan(deps, principal, params.id, query.mode);
-        }),
-      )
       .handle("getAttachment", ({ params }) =>
         Effect.gen(function* () {
           const principal = yield* CurrentPrincipal;
@@ -409,7 +402,7 @@ function showApproval(deps: ApiDeps, rawToken: string) {
     }
     return humanPageHttpApiResponse(
       renderApprovalReviewPage(token, outcome.approval, outcome.message, outcome.job),
-    ).value;
+    );
   });
 }
 
@@ -436,7 +429,7 @@ function decideApprovalRoute(deps: ApiDeps, rawToken: string, decision: "approve
     if (outcome.kind === "notFound") {
       return yield* approvalNotFoundError();
     }
-    if (outcome.kind === "gone" || outcome.state === "pending") {
+    if (outcome.kind === "gone") {
       return yield* approvalGoneError();
     }
     const headers = {
@@ -459,7 +452,7 @@ function decodeApprovalToken(rawToken: string) {
 }
 
 function approvalNotFoundError(): ApprovalPageNotFound {
-  const response = humanPageHttpApiResponse(renderApprovalNotFoundPage()).value;
+  const response = humanPageHttpApiResponse(renderApprovalNotFoundPage());
   return new ApprovalPageNotFound({
     html: response.body,
     headers: response.headers,
@@ -467,7 +460,7 @@ function approvalNotFoundError(): ApprovalPageNotFound {
 }
 
 function approvalGoneError(): ApprovalPageGone {
-  const response = humanPageHttpApiResponse(renderApprovalGonePage()).value;
+  const response = humanPageHttpApiResponse(renderApprovalGonePage());
   return new ApprovalPageGone({
     html: response.body,
     headers: response.headers,

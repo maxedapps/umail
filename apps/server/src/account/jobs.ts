@@ -655,6 +655,7 @@ function resolvedDecision(
     kind: "resolved",
     state: approval.state,
     job: job === null ? null : toOutboundJob(job),
+    expiresAt: approval.expiresAt,
   };
 }
 
@@ -675,13 +676,16 @@ function authorizeOutbound(
   if (policy.sendMode.kind === "deny") {
     return { kind: "denied", reason: "send_denied" };
   }
-  if (!recipientsAllowed(policy.recipientAllowlist, recipients)) {
+  if (
+    policy.recipientAllowlist !== "any" &&
+    !allRecipientsIn(policy.recipientAllowlist, recipients)
+  ) {
     return { kind: "denied", reason: "recipient_not_allowed" };
   }
   if (policy.sendMode.kind === "allow") {
     return { kind: "allow" };
   }
-  if (recipientsPreapproved(policy.sendMode.preapprovedRecipients, recipients)) {
+  if (allRecipientsIn(policy.sendMode.preapprovedRecipients, recipients)) {
     return { kind: "allow" };
   }
   return { kind: "require_approval" };
@@ -694,33 +698,12 @@ function mailboxInPolicy(mailboxIds: PrincipalPolicy["mailboxIds"], mailboxId: s
   return mailboxIds.includes(mailboxId);
 }
 
-function recipientsAllowed(
-  allowlist: PrincipalPolicy["recipientAllowlist"],
+function allRecipientsIn(
+  addresses: ReadonlyArray<AccountMailContact["address"]>,
   recipients: ReadonlyArray<AccountMailContact>,
 ): boolean {
-  if (allowlist === "any") {
-    return true;
-  }
-  const allowed = new Set(allowlist.map(comparisonKey));
-  for (const recipient of recipients) {
-    if (!allowed.has(comparisonKey(recipient.address))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function recipientsPreapproved(
-  preapproved: ReadonlyArray<AccountMailContact["address"]>,
-  recipients: ReadonlyArray<AccountMailContact>,
-): boolean {
-  const allowed = new Set(preapproved.map(comparisonKey));
-  for (const recipient of recipients) {
-    if (!allowed.has(comparisonKey(recipient.address))) {
-      return false;
-    }
-  }
-  return true;
+  const allowed = new Set(addresses.map(comparisonKey));
+  return recipients.every((recipient) => allowed.has(comparisonKey(recipient.address)));
 }
 
 function outboundIntentFingerprint(input: {

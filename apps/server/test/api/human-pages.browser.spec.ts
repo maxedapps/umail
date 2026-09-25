@@ -133,17 +133,24 @@ describe("human pages in Chromium", () => {
     expect(clients.authRequestBody).not.toContain("oauth_query");
     expect(clients.authRequestBody).toContain("approver@example.com");
 
-    const hostile = await observe("login", {
-      width: 1280,
-      height: 900,
-      colorScheme: "light",
-      search: "next=https://evil.example/callback",
-    });
-    expect(hostile.finalPath).toContain("/login");
-    expect(hostile.statusText).toBe(
-      "Signed in. Continue to the authorization request or use umail login.",
-    );
-    expect(hostile.authRequestBody).not.toContain("oauth_query");
+    for (const next of [
+      "https://evil.example/callback",
+      "//evil.example",
+      "/\\evil.example",
+      "/login",
+    ]) {
+      const hostile = await observe("login", {
+        width: 1280,
+        height: 900,
+        colorScheme: "light",
+        search: new URLSearchParams({ next }).toString(),
+      });
+      expect(hostile.finalPath).toContain("/login");
+      expect(hostile.statusText).toBe(
+        "Signed in. Continue to the authorization request or use umail login.",
+      );
+      expect(hostile.authRequestBody).not.toContain("oauth_query");
+    }
   });
 
   it("sends only a signed OAuth continuation query from the login page", async () => {

@@ -90,12 +90,9 @@ describe("human page rendering", () => {
     const page = notice(410);
     const typed = humanPageHttpApiResponse(page);
 
-    expect(typed.status).toBe(410);
-    expect(typed.value.body).toBe(page.html);
-    expect(typed.value.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(typed.value.headers["content-security-policy"]).toContain(
-      `style-src 'nonce-${page.nonce}'`,
-    );
+    expect(typed.body).toBe(page.html);
+    expect(typed.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(typed.headers["content-security-policy"]).toContain(`style-src 'nonce-${page.nonce}'`);
   });
 });
 

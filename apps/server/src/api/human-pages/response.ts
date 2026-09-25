@@ -31,13 +31,10 @@ export function humanPageHttpResponse(page: RenderedHumanPage) {
 }
 
 export function humanPageHttpApiResponse(page: RenderedHumanPage) {
-  return {
-    status: page.status,
-    value: HttpApiSchema.withHeaders({
-      body: page.html,
-      headers: humanPageHeaders(page),
-    }),
-  };
+  return HttpApiSchema.withHeaders({
+    body: page.html,
+    headers: humanPageHeaders(page),
+  });
 }
 
 export function approvalMessagePreviewHttpApiResponse(html: string) {

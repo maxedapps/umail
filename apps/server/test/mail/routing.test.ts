@@ -1,5 +1,4 @@
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Unowned } from "alchemy/AdoptPolicy";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -88,16 +87,13 @@ const dnsCheck = `GET ${routingPath}/dns?subdomain=${domain.name}`;
 const settingsRead = `GET ${routingPath}`;
 
 describe("Email Routing domain provider", () => {
-  it.effect("marks an existing ready registration as unowned for adoption", () =>
+  it.effect("adopts an existing ready registration", () =>
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({ subdomain: [true] });
 
-      const observed = yield* readEmailRoutingDomain(domain, undefined).pipe(
-        Effect.provide(cloudflare.layer),
-      );
+      const observed = yield* readEmailRoutingDomain(domain).pipe(Effect.provide(cloudflare.layer));
 
       expect(observed).toEqual(domain);
-      expect(Unowned.is(observed)).toBe(true);
       expect(cloudflare.requests).toEqual([settingsRead, dnsCheck]);
       expect([...cloudflare.authorizations]).toEqual(["Bearer deploy-token"]);
     }),
@@ -107,9 +103,7 @@ describe("Email Routing domain provider", () => {
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({ subdomain: [false] });
 
-      const observed = yield* readEmailRoutingDomain(domain, undefined).pipe(
-        Effect.provide(cloudflare.layer),
-      );
+      const observed = yield* readEmailRoutingDomain(domain).pipe(Effect.provide(cloudflare.layer));
 
       expect(observed).toBeUndefined();
     }),

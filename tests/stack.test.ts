@@ -109,8 +109,6 @@ describe("application resource graph", () => {
     expect(stack.resources.AuthDb?.RemovalPolicy).toBe("retain");
     expect(stack.resources.MailArchive?.RemovalPolicy).toBe("retain");
     expect(stack.resources.MailRouting?.RemovalPolicy).toBe("retain");
-    expect(stack.resources.MailRoutingDomain?.Adopt).toBe(true);
-    expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
     expect(await resolveGraphValue(stack.resources.MailCatchAll?.Props)).toMatchObject({
       zone: "test-zone",
       actions: [{ type: "worker", value: ["app-test"] }],
@@ -155,7 +153,6 @@ describe("application resource graph", () => {
         ...(stage === "dev" ? ["MailSending"] : []),
       ].sort(),
     );
-    expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
     for (const part of ["probe", "inbox"]) {
       expect(await resolveGraphValue(stack.resources[`Mail_${part}`]?.Props)).toMatchObject({
         zone: "test-zone",

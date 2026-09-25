@@ -17,7 +17,6 @@ import {
   MailThreadDetail,
   MailThreadPage,
   OutboundJobStatusPage,
-  ReplyPlan,
   SendingIdentity,
   buildOutboundReferences,
   headerBlock,
@@ -291,26 +290,6 @@ export function getJob(deps: ApiDeps, principal: Principal, jobId: string) {
       return yield* new HttpApiError.NotFound();
     }
     return projectJobStatus(job);
-  });
-}
-
-export function getReplyPlan(
-  deps: ApiDeps,
-  principal: Principal,
-  messageId: string,
-  mode: ReplyMode,
-) {
-  return Effect.gen(function* () {
-    const parent = yield* readReplyParent(deps, principal, messageId);
-    const recipients = yield* replyRecipients(deps, parent, mode, parent.mailboxId);
-    return new ReplyPlan({
-      replyToMessageId: messageId,
-      replyMode: mode,
-      fromAddressId: parent.mailboxId,
-      to: recipients.to,
-      cc: recipients.cc,
-      subject: parent.subject,
-    });
   });
 }
 

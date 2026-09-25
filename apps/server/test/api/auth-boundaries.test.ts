@@ -7,7 +7,7 @@ import { ExternalMailAddress } from "@umail/api-contract";
 
 import { provisionAuth } from "../../src/auth/provisioning.ts";
 import { memoryQueryDatabase } from "./memory-d1.ts";
-import { DISABLED_AUTH_PATHS, sameOriginReturnPath } from "../../src/auth/runtime-surface.ts";
+import { DISABLED_AUTH_PATHS } from "../../src/auth/runtime-surface.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
 import {
   APPLICATION_ORIGIN,
@@ -173,9 +173,6 @@ describe("runtime authentication surface", () => {
     const login = new URL(clients.headers.get("location") ?? "", "http://umail.test");
     expect(login.pathname).toBe("/login");
     expect(login.searchParams.get("next")).toBe("/clients");
-    expect(sameOriginReturnPath(login.searchParams.get("next"), APPLICATION_ORIGIN)).toBe(
-      "/clients",
-    );
 
     const signedIn = await world.fetch("http://umail.test/clients", {
       headers: { cookie: world.sessionCookie },
@@ -216,7 +213,7 @@ describe("runtime authentication surface", () => {
     expect(payload.url).toContain("/consent");
   });
 
-  it("rejects unsigned next values stuffed into oauth_query and external return paths", async () => {
+  it("rejects unsigned next values stuffed into oauth_query", async () => {
     const world = await createWorld();
     const stuffed = await world.fetch("http://umail.test/api/auth/sign-in/email", {
       method: "POST",
@@ -228,13 +225,6 @@ describe("runtime authentication surface", () => {
       }),
     });
     expect(stuffed.status).toBe(400);
-    expect(sameOriginReturnPath("https://evil.example/clients", APPLICATION_ORIGIN)).toBeNull();
-    expect(sameOriginReturnPath("//evil.example", APPLICATION_ORIGIN)).toBeNull();
-    expect(sameOriginReturnPath("/\\evil.example", APPLICATION_ORIGIN)).toBeNull();
-    expect(sameOriginReturnPath("/login", APPLICATION_ORIGIN)).toBeNull();
-    expect(sameOriginReturnPath("/device?user_code=ABCD-EFGH", APPLICATION_ORIGIN)).toBe(
-      "/device?user_code=ABCD-EFGH",
-    );
   });
 
   it("rejects missing, null, mixed-case, and hostile origins without mutating device or policy state", async () => {
