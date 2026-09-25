@@ -132,8 +132,8 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
   const text =
     message.textBody === null ? null : html`<pre class="prose">${message.textBody}</pre>`;
   const attachments = message.attachments;
-  const hidesImages =
-    message.hasRemoteImages || attachments.some((attachment) => attachment.isInline);
+  const hasInlineImages = attachments.some((attachment) => attachment.isInline);
+  const hidesImages = message.hasRemoteImages || hasInlineImages;
   return html`<article class="message" id="open-message" aria-label="Message">
     <div class="message-head">
       <span class="avatar">${bidiText(initials(senderName(from)))}</span>
@@ -185,8 +185,11 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
         : html`${
               hidesImages
                 ? html`<p class="note">
-                    ${icon("eye-off")}Images are not shown. Inline images are listed as attachments
-                    below.
+                    ${icon("eye-off")}${
+                      hasInlineImages
+                        ? "Images are not shown. Inline images are listed as attachments below."
+                        : "Images are not shown."
+                    }
                   </p>`
                 : null
             }

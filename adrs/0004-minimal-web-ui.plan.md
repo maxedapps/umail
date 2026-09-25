@@ -472,6 +472,12 @@ Then run the full `pnpm test`.
 - PR review fixes:
   - "Waiting for verification" was a success flash, so it became a fading toast. The page then read "Mail is also forwarded to …" before the address was verified. It is now a persistent warning note in the Forwarding section. Only the `?forwarding=pending` redirect knows the state, since `Address` stores none.
   - `.thread .what` clips its mailbox chips, so a conversation involving many mailboxes can't widen the page at 320px.
+- Visual review on a `pr-2` preview deploy, with agent-browser in light and dark mode at 1440px and 320px, plus the approval fixtures from the browser suite. Fixes:
+  - Long mailbox addresses in the sidebar overflowed its edge; the nav and subnav grid columns may now shrink, so they get an ellipsis.
+  - The subnav's sans-font override sat in the layout layer, which loses to `.mono` in the components layer; it moved next to `.mono`.
+  - Under 52rem the console grid stretched both rows to the page's minimum height, leaving a large gap under the top bar on short pages; its rows now keep their content height.
+  - A notice's icon wrapped onto its own line above the message; `.card > .lede` no longer wraps.
+  - The images note said "listed as attachments below" even without inline images; that sentence now appears only when there are some.
 
 ## Owner's manual QA after deploy
 

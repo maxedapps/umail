@@ -167,6 +167,7 @@ describe("mail pages", () => {
       expect(thread.body).toContain('src="/mail/messages/m-html/body"');
       expect(thread.body).toMatch(/sandbox=""/u);
       expect(thread.body).toContain("Images are not shown.");
+      expect(thread.body).toContain("Inline images are listed as attachments below.");
       expect(thread.body).toContain('href="/mail/messages/m-html/attachments/logo"');
 
       const signedOut = yield* world.request("http://umail.test/mail/messages/m-html/body", {

@@ -374,6 +374,7 @@ export const styles = String.raw`
   /* The section the page belongs to gets stronger text; the page itself a soft fill. */
   .nav {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 2px;
 
     a[aria-current="true"] {
@@ -398,15 +399,11 @@ export const styles = String.raw`
 
   .subnav {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 2px;
     margin: 0.125rem 0 0.5rem;
     padding: 0 0 0 1.625rem;
     list-style: none;
-
-    .mono {
-      font-family: inherit;
-      font-size: inherit;
-    }
 
     a {
       display: block;
@@ -494,6 +491,7 @@ export const styles = String.raw`
   @media (width < 52rem) {
     .console {
       grid-template-columns: minmax(0, 1fr);
+      align-content: start;
     }
 
     .sidebar {
@@ -595,6 +593,15 @@ export const styles = String.raw`
     }
   }
 
+  .card > .lede {
+    flex-wrap: nowrap;
+    align-items: start;
+
+    .icon {
+      margin-block-start: 0.2rem;
+    }
+  }
+
   .card:has(.meta) {
     inline-size: min(100%, 36rem);
   }
@@ -656,6 +663,12 @@ export const styles = String.raw`
   .mono {
     font-family: var(--mono);
     font-size: 0.92em;
+  }
+
+  /* Mailbox names in the sidebar read as names, not code. */
+  .subnav .mono {
+    font-family: inherit;
+    font-size: inherit;
   }
 
   .muted {
