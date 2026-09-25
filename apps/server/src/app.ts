@@ -6,7 +6,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { AccountStore, AccountStoreLive, OPERATOR_ACCOUNT } from "./account/worker.ts";
@@ -88,34 +87,37 @@ export default App.make(
         ),
     );
 
-    // Built on the first request and reused for the isolate's life: the Durable Object namespace
-    // exists only at runtime. The router holds nothing that needs closing, so its scope stays open.
-    const api = yield* Effect.cached(
-      Effect.suspend(() =>
-        makeApiHttpEffect({
-          account: accounts.getByName(OPERATOR_ACCOUNT),
-          archive: {
-            get: (key) =>
-              archive.get(key).pipe(
-                Effect.flatMap((object) =>
-                  object === null ? Effect.succeed(null) : object.bytes(),
-                ),
-                Effect.mapError(() => new ArchiveTransportError({ key })),
-              ),
-          },
-          destinations: cloudflareDestinations({ token: routingToken, accountId }),
-          htmlPolicy: runtime.htmlPolicy,
-          mailDomain: runtime.site.mailDomain,
-          applicationUrl: runtime.applicationUrl,
-          operatorId: runtime.operatorId,
-          notificationKey: runtime.notificationKey,
-          auth: { auth: Effect.map(authInstance.auth, asUmailBetterAuth) },
-          access: runtime.access,
-        }),
-      ).pipe(Effect.provideServiceEffect(Scope.Scope, Scope.make())),
-    );
+    const deps = {
+      archive: {
+        get: (key: string) =>
+          archive.get(key).pipe(
+            Effect.flatMap((object) => (object === null ? Effect.succeed(null) : object.bytes())),
+            Effect.mapError(() => new ArchiveTransportError({ key })),
+          ),
+      },
+      destinations: cloudflareDestinations({ token: routingToken, accountId }),
+      htmlPolicy: runtime.htmlPolicy,
+      mailDomain: runtime.site.mailDomain,
+      applicationUrl: runtime.applicationUrl,
+      operatorId: runtime.operatorId,
+      notificationKey: runtime.notificationKey,
+      auth: { auth: Effect.map(authInstance.auth, asUmailBetterAuth) },
+      access: runtime.access,
+    };
 
-    return { fetch: Effect.flatten(api) };
+    // Built per request: the router keeps the services it is built with, including the request
+    // itself, and workerd ties a Durable Object stub to the request that created it.
+    return {
+      fetch: Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* makeApiHttpEffect({
+            ...deps,
+            account: accounts.getByName(OPERATOR_ACCOUNT),
+          });
+          return yield* handle;
+        }),
+      ),
+    };
   }).pipe(
     Effect.provide(
       Layer.mergeAll(

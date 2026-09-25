@@ -178,7 +178,12 @@ Behaviour changes are limited to those the ADR lists:
 
 **Done:** yes, with deviations:
 
-- **Router built on the first request, not in the constructor.** The Worker constructor also runs at plan time, where `yield* AccountStore` is undefined, so it cannot build there. The build is wrapped in `Effect.cached` + `Effect.suspend`, and every later request in the isolate reuses the router.
+- **Router: reverted to per-request build (see ADR decision 3).** Building it in the constructor failed at plan time, where `yield* AccountStore` is undefined. Building it once on the first request (`Effect.cached`) shipped in the task 5 commit, but the final review found two faults:
+  - The cached router kept the first request's services, including its `HttpServerRequest`, so later REST calls authenticated with the first request's bearer token. A throwaway test reproduced it: an unauthorized request returned 200.
+  - workerd rejects a Durable Object stub reused from another request.
+
+  The fix restores per-request building, with the other deps built once. The workerd test pool cannot call store RPC methods, so no runtime spec covers this.
+
 - **The notification key is read lazily.** `appRuntime.notificationKey` is an `Effect` over the `Random` accessor, because the binding exists only at runtime.
 - **Only the store's side of the round trip runs in workerd.** `tests/runtime-startup.worker.spec.ts` sends a queued approval notification through the real bundle's alarm with the bound `NotificationKey`, and it fails when the key is malformed. The API side cannot run there, because that bundle has no provisioned auth. It is covered by the Node round trip in `approval-flow.test.ts`, and both sides read the key from the one `appRuntime`.
 - **Email validation error.** An invalid `UMAIL_OPERATOR_EMAIL` now fails with the schema's `ConfigError` rather than the old "not a valid email address" text.

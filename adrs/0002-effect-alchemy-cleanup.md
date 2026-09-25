@@ -41,7 +41,8 @@ The owner wants the defect fixed, every simplification done, zero lint warnings 
    - Configuration goes through `Config.schema`, so errors surface as `ConfigError`.
    - The CLI's files go through `FileSystem`.
    - Functions that return Effects use named `Effect.fn`.
-3. **Keep API dependencies as one explicit `deps` object.** Build the router once per isolate. Per-request values (the auth instance, D1) are Alchemy clients whose calls run in the request's `RuntimeContext`.
+3. **Keep API dependencies as one explicit `deps` object.** Per-request values (the auth instance, D1) are Alchemy clients whose calls run in the request's `RuntimeContext`. The router is still built per request.
+   - _Amended during implementation:_ the plan built it once per isolate. Review showed that a router built inside a request keeps that request's services, including the request itself. Later requests then ran with the first request's credentials, and workerd refuses Durable Object stubs from another request.
 4. **Replace `UMAIL_NOTIFICATION_KEY` with an `Alchemy.Random` resource.** It is minted once and kept in encrypted state.
 5. **The account store stays synchronous and transactional.**
    - IDs come from `Crypto` in the Effect caller and are passed in.
