@@ -103,6 +103,12 @@ export function stageSendsMail(stage: string): boolean {
   return stage === "prod" || stage === "dev";
 }
 
+// Prod and dev hold real mail and logins, so destroying them keeps their data. A preview's data is
+// disposable, and destroying the preview removes it.
+export function stageKeepsData(stage: string): boolean {
+  return stage === "prod" || stage === "dev";
+}
+
 function previewMailDomain(label: string, root: MailDomain): MailDomain {
   const parsed = parseMailDomain(`${label}-mail.${root}`);
   if (parsed.kind === "invalid") {

@@ -114,6 +114,8 @@ describe("application resource graph", () => {
         expect(stack.resources.AuthDb?.RemovalPolicy).toBe("retain");
         expect(stack.resources.MailArchive?.RemovalPolicy).toBe("retain");
         expect(stack.resources.MailRouting?.RemovalPolicy).toBe("retain");
+        expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
+        expect(yield* resolveGraphValue(stack.resources.MailArchive?.Props)).toEqual({});
         expect(yield* resolveGraphValue(stack.resources.MailCatchAll?.Props)).toMatchObject({
           zone: "test-zone",
           actions: [{ type: "worker", value: ["app-test"] }],
@@ -153,6 +155,24 @@ describe("application resource graph", () => {
           { type: "durable_object_namespace", name: "AccountStore", className: "AccountStore" },
         ]);
       }),
+  );
+
+  // Only the zone's routing is shared between stages; a preview's own data goes with it.
+  it.effect("destroys a preview's data on teardown but keeps dev's", () =>
+    Effect.gen(function* () {
+      const preview = yield* evaluateApplication("pr-42");
+      const dev = yield* evaluateApplication("dev");
+      const policies = (stack: typeof preview) =>
+        ["AuthDb", "MailArchive", "MailRoutingDomain", "MailRouting"].map(
+          (id) => stack.resources[id]?.RemovalPolicy,
+        );
+
+      expect(policies(preview)).toEqual(["destroy", "destroy", "destroy", "retain"]);
+      expect(yield* resolveGraphValue(preview.resources.MailArchive?.Props)).toEqual({
+        forceDestroy: true,
+      });
+      expect(policies(dev)).toEqual(["retain", "retain", "retain", "retain"]);
+    }),
   );
 
   it.effect.each(["dev", "pr-42"])("routes only preview mailboxes for %s", (stage) =>

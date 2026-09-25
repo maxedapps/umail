@@ -9,6 +9,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  deleteEmailRoutingDomain,
   diffEmailRoutingDomain,
   EmailRoutingDomainNotReady,
   readEmailRoutingDomain,
@@ -19,6 +20,21 @@ const zoneName = "example.com";
 const domain = { zoneId: "zone-1", name: "mail.example.com" };
 const apex = { zoneId: "zone-1", name: zoneName };
 const routingPath = "/client/v4/zones/zone-1/email/routing";
+const recordsPath = "/client/v4/zones/zone-1/dns_records";
+
+function record(id: string, name: string, type: string, content: string) {
+  return { id, name, type, content, ttl: 1, proxied: false, proxiable: false, meta: {} };
+}
+
+// What a zone holds at and around a routed subdomain once its routing records are unlocked.
+const records = [
+  record("mx-1", domain.name, "MX", "route1.mx.cloudflare.net"),
+  record("mx-2", domain.name, "MX", "route2.mx.cloudflare.net"),
+  record("spf", domain.name, "TXT", '"v=spf1 include:_spf.mx.cloudflare.net ~all"'),
+  record("site", domain.name, "A", "192.0.2.1"),
+  record("verify", domain.name, "TXT", '"site-verification=abc"'),
+  record("other", `other.${zoneName}`, "MX", "route1.mx.cloudflare.net"),
+];
 
 interface FakeReadiness {
   // Each readiness probe takes the next answer; the last one repeats.
@@ -45,6 +61,9 @@ function fakeCloudflare({ apex = [true], subdomain = [true] }: FakeReadiness) {
   const resultFor = (route: string, url: URL) => {
     if (route === `GET ${routingPath}`) return settings(next(apex));
     if (route === `POST ${routingPath}/dns`) return settings(true);
+    if (route === `PATCH ${routingPath}/dns`) return { ...settings(true), status: "unlocked" };
+    if (route === `GET ${recordsPath}`) return url.searchParams.get("page") === "1" ? records : [];
+    if (route.startsWith(`DELETE ${recordsPath}/`)) return { id: route.split("/").at(-1) };
     if (route !== `GET ${routingPath}/dns`) return undefined;
     const missing = {
       code: "missing",
@@ -166,6 +185,33 @@ describe("Email Routing domain provider", () => {
 
       expect(error).toBeInstanceOf(EmailRoutingDomainNotReady);
       expect(cloudflare.requests.filter((request) => request.startsWith("POST"))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("takes a subdomain down by unlocking and deleting only its routing records", () =>
+    Effect.gen(function* () {
+      const cloudflare = fakeCloudflare({});
+
+      yield* deleteEmailRoutingDomain(domain).pipe(Effect.provide(cloudflare.layer));
+
+      const writes = cloudflare.requests.filter((request) => !request.startsWith("GET"));
+      expect(writes).toEqual([
+        `PATCH ${routingPath}/dns {"name":"${domain.name}"}`,
+        `DELETE ${recordsPath}/mx-1`,
+        `DELETE ${recordsPath}/mx-2`,
+        `DELETE ${recordsPath}/spf`,
+      ]);
+    }),
+  );
+
+  // The apex carries every stage's routing; its only removal endpoints are zone-wide.
+  it.effect("never takes the zone apex down", () =>
+    Effect.gen(function* () {
+      const cloudflare = fakeCloudflare({});
+
+      yield* deleteEmailRoutingDomain(apex).pipe(Effect.provide(cloudflare.layer));
+
+      expect(cloudflare.requests).toEqual([settingsRead]);
     }),
   );
 

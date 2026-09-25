@@ -4,12 +4,14 @@ import type { Input } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import { Resource, type Resource as AlchemyResource } from "alchemy/Resource";
+import * as dns from "@distilled.cloud/cloudflare/dns";
 import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
+import * as Stream from "effect/Stream";
 
-import { stageSendsMail, type StageSite } from "../site.ts";
+import { stageKeepsData, stageSendsMail, type StageSite } from "../site.ts";
 
 const EmailRoutingDomainTypeId = "uMail.Email.RoutingDomain" as const;
 type EmailRoutingDomainTypeId = typeof EmailRoutingDomainTypeId;
@@ -100,14 +102,42 @@ export const reconcileEmailRoutingDomain = Effect.fn("reconcileEmailRoutingDomai
   return { zoneId, name };
 });
 
+// Cloudflare's only removal endpoints (`DELETE …/email/routing/dns`, `POST …/disable`) are
+// zone-wide, so a subdomain is taken down by hand: unlock its routing records, then delete them.
+// The registration entry itself stays listed as "unconfigured"; no subdomain-scoped API removes it.
+// The apex carries every stage's routing and is never touched; prod and dev retain their domain.
+export const deleteEmailRoutingDomain = Effect.fn("deleteEmailRoutingDomain")(function* ({
+  zoneId,
+  name,
+}: EmailRoutingDomainProps) {
+  const settings = yield* emailRouting.getEmailRouting({ zoneId });
+  if (settings.name === name) return;
+  yield* emailRouting.patchDns({ zoneId, name });
+  const records = yield* dns.listRecords
+    .items({ zoneId, name: { exact: name } })
+    .pipe(Stream.runCollect);
+  for (const record of records) {
+    if (record.name === name && isRoutingRecord(record.type, record.content ?? "")) {
+      yield* dns.deleteRecord({ zoneId, dnsRecordId: record.id });
+    }
+  }
+});
+
+// The MX and SPF records Email Routing adds to a subdomain; unlocking drops their routing marker.
+function isRoutingRecord(type: string, content: string): boolean {
+  return (
+    (type === "MX" && content.endsWith(".mx.cloudflare.net")) ||
+    (type === "TXT" && content.includes("include:_spf.mx.cloudflare.net"))
+  );
+}
+
 export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
   stables: ["zoneId", "name"],
   diff: ({ olds, news, output }) =>
     isResolved(news) ? diffEmailRoutingDomain(olds, news, output) : Effect.void,
   read: ({ olds }) => readEmailRoutingDomain(olds),
   reconcile: ({ news }) => reconcileEmailRoutingDomain(news),
-  // Destroying a stage leaves the zone's Email Routing DNS in place; other stages share it.
-  delete: () => Effect.void,
+  delete: ({ output }) => deleteEmailRoutingDomain(output),
 });
 
 export const configureMailRouting = Effect.fn("configureMailRouting")(function* (
@@ -121,7 +151,7 @@ export const configureMailRouting = Effect.fn("configureMailRouting")(function* 
   const routingDomain = yield* EmailRoutingDomain("MailRoutingDomain", {
     zoneId: routing.zoneId,
     name: site.mailDomain,
-  });
+  }).pipe(Alchemy.RemovalPolicy.retain(stageKeepsData(stage)));
 
   if (stageSendsMail(stage)) {
     yield* Cloudflare.Email.SendingSubdomain("MailSending", {
