@@ -20,5 +20,7 @@ export const hashApprovalToken = Effect.fn("hashApprovalToken")(function* (token
   const digest = yield* crypto
     .digest("SHA-256", new TextEncoder().encode(token))
     .pipe(Effect.orDie);
-  return Schema.decodeSync(ApprovalTokenHash)(Encoding.encodeHex(digest));
+  return yield* Schema.decodeEffect(ApprovalTokenHash)(Encoding.encodeHex(digest)).pipe(
+    Effect.orDie,
+  );
 });

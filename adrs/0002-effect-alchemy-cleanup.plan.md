@@ -252,7 +252,7 @@ Behaviour changes are limited to those the ADR lists:
 
 **Verify:** `pnpm typecheck`, and `pnpm lint` reports nothing in `apps/*/src`, `packages/*/src` or `alchemy.run.ts`.
 
-**Done:** no
+**Done:** yes. Named functions that wrapped `Effect.gen` are now `Effect.fn`, as are the store's `submitOutbound`, the destinations client's `ensure` and the credential store's `write`. HttpApi handler callbacks and the Worker's event callbacks stay inline, where the library names the span. The conversion surfaced new warnings, all fixed: synchronous Schema calls inside generators became their Effect forms, `Effect.try`'s `unknown` error became an `APIError`, and a redundant `orDie` was hoisted. The receipt-id JSON is encoded through Schema, byte-identical to `JSON.stringify`.
 
 ### 9. Tests on `@effect/vitest`, and no lint overrides
 

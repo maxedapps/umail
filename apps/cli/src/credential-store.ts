@@ -113,24 +113,28 @@ export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (f
 
   // Written to a private temporary file, then renamed over the old one, so readers never see a
   // partial file.
-  const write = (credentials: OAuthCredentials) =>
-    Effect.gen(function* () {
+  const write = Effect.fn("OAuthCredentialStore.write")(
+    function* (credentials: OAuthCredentials) {
       yield* ensureDirectory;
       if ((yield* entryAt(file)) === "entry") yield* assertSafe(file, "File", true);
       const temporary = path.join(directory, `.oauth-${yield* crypto.randomUUIDv4}.tmp`);
       yield* fs
-        .writeFileString(temporary, `${Schema.encodeSync(CredentialsJson)(credentials)}\n`, {
-          flag: "wx",
-          mode: 0o600,
-        })
+        .writeFileString(
+          temporary,
+          `${yield* Schema.encodeEffect(CredentialsJson)(credentials)}\n`,
+          {
+            flag: "wx",
+            mode: 0o600,
+          },
+        )
         .pipe(
           Effect.andThen(fs.rename(temporary, file)),
           Effect.onError(() => fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
         );
-    }).pipe(
-      Effect.uninterruptible,
-      Effect.mapError(() => new OAuthCredentialStoreError()),
-    );
+    },
+    Effect.uninterruptible,
+    Effect.mapError(() => new OAuthCredentialStoreError()),
+  );
 
   const remove = fs
     .remove(file, { force: true })

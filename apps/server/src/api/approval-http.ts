@@ -87,8 +87,8 @@ const loadApprovalMessage = Effect.fn("loadApprovalMessage")(function* (
   deps: ApprovalHttpDeps,
   messageId: string,
 ) {
-  const summary = yield* deps.account.getMessageSummary(messageId, "all").pipe(Effect.orDie);
-  const body = yield* deps.account.getMessageBody(messageId, "all").pipe(Effect.orDie);
+  const summary = yield* deps.account.getMessageSummary(messageId, "all");
+  const body = yield* deps.account.getMessageBody(messageId, "all");
   if (summary === null || body === null) {
     return null;
   }
@@ -97,7 +97,7 @@ const loadApprovalMessage = Effect.fn("loadApprovalMessage")(function* (
     return null;
   }
   return message;
-});
+}, Effect.orDie);
 
 function isUnavailableState(state: StoredApproval["state"]): boolean {
   return state === "expired" || state === "cancelled";

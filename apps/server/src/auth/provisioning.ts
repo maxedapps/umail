@@ -106,7 +106,9 @@ export const provisionAuth = Effect.fn("provisionAuth")(function* (
     .bind(operatorEmail)
     .first();
   const operatorId =
-    existingUser === null ? yield* randomId : Schema.decodeUnknownSync(IdRow)(existingUser).id;
+    existingUser === null
+      ? yield* randomId
+      : (yield* Schema.decodeUnknownEffect(IdRow)(existingUser).pipe(Effect.orDie)).id;
   const existingAccount = yield* loadCredentialAccount(db, operatorId);
   const passwordHash = yield* nextPasswordHash(request.password, existingAccount?.password ?? null);
 

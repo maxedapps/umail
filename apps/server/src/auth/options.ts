@@ -299,7 +299,7 @@ const checkClientRequest = Effect.fn("checkClientRequest")(function* (
   if (ctx.path === "/oauth2/register") {
     return yield* Effect.try({
       try: () => normalizedRegistration(ctx, mcpResource),
-      catch: (error) => error,
+      catch: (error) => (isAPIError(error) ? error : invalidRegistration()),
     });
   }
   return undefined;

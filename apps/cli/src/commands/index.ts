@@ -388,7 +388,7 @@ function patchAddress(id: string, payload: PatchAddressPayload) {
   return callApi((client) => client.Addresses.patchAddress({ params: { id }, payload }));
 }
 
-function download<E, R>(
+const download = Effect.fn("download")(function* <E, R>(
   output: string,
   request: (
     client: UmailClient,
@@ -398,17 +398,15 @@ function download<E, R>(
     R
   >,
 ) {
-  return Effect.gen(function* () {
-    const result = yield* request(yield* requireClient());
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFile(output, result.body);
-    yield* printJson({
-      output,
-      bytes: result.body.byteLength,
-      contentType: result.headers["content-type"],
-    });
+  const result = yield* request(yield* requireClient());
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFile(output, result.body);
+  yield* printJson({
+    output,
+    bytes: result.body.byteLength,
+    contentType: result.headers["content-type"],
   });
-}
+});
 
 function approvalDecisionCommand(decision: "approve" | "deny", description: string) {
   return Command.make(decision, { tokenFile: tokenFileFlag }, ({ tokenFile }) =>
@@ -421,16 +419,17 @@ function approvalDecisionCommand(decision: "approve" | "deny", description: stri
   ).pipe(Command.withDescription(description));
 }
 
-function resolveFromAddressId(client: UmailClient, from: MailboxAddress) {
-  return Effect.gen(function* () {
-    const identities = yield* client.SendingIdentities.listSendingIdentities({});
-    const identity = identities.find((candidate) => candidate.address === from);
-    if (identity === undefined) {
-      return yield* new IneligibleSendingIdentityError({ address: from });
-    }
-    return identity.id;
-  });
-}
+const resolveFromAddressId = Effect.fn("resolveFromAddressId")(function* (
+  client: UmailClient,
+  from: MailboxAddress,
+) {
+  const identities = yield* client.SendingIdentities.listSendingIdentities({});
+  const identity = identities.find((candidate) => candidate.address === from);
+  if (identity === undefined) {
+    return yield* new IneligibleSendingIdentityError({ address: from });
+  }
+  return identity.id;
+});
 
 function retryTransport<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return Effect.retry(effect, {

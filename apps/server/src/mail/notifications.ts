@@ -45,7 +45,9 @@ export const deriveApprovalToken = Effect.fn("deriveApprovalToken")(function* (
   const mac = yield* Effect.promise(() =>
     crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(approvalId)),
   );
-  return Schema.decodeSync(ApprovalToken)(Encoding.encodeHex(new Uint8Array(mac)));
+  return yield* Schema.decodeEffect(ApprovalToken)(Encoding.encodeHex(new Uint8Array(mac))).pipe(
+    Effect.orDie,
+  );
 });
 
 // Every submit carries approval material; the store uses it only when the job needs approval.

@@ -74,7 +74,9 @@ export function makeAccess(db: Cloudflare.D1.QueryDatabaseClient, operatorId: st
         )
         .bind(operatorId, operatorId, operatorId)
         .all();
-      const rows = Schema.decodeUnknownSync(Schema.Array(GrantRow))(results);
+      const rows = yield* Schema.decodeUnknownEffect(Schema.Array(GrantRow))(results).pipe(
+        Effect.orDie,
+      );
       return rows.map((row): ClientGrant => ({
         clientId: row.clientId,
         name: row.name,

@@ -38,7 +38,7 @@ export class AttachmentMeta extends Schema.Class<AttachmentMeta>("AttachmentMeta
   id: Schema.String,
   filename: Schema.String,
   mimeType: Schema.String,
-  size: Schema.Number,
+  size: Schema.Finite,
   contentId: Schema.NullOr(Schema.String),
   disposition: Schema.NullOr(Schema.String),
   isInline: Schema.Boolean,

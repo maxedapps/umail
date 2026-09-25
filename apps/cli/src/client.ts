@@ -8,13 +8,11 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { accessToken } from "./auth.ts";
 
-export function umailClient(httpClient: HttpClient.HttpClient) {
-  return Effect.gen(function* () {
-    const baseUrl = yield* umailBaseUrl;
-    const token = yield* accessToken;
-    return yield* makeUmailClient({ baseUrl, accessToken: token }, httpClient);
-  });
-}
+export const umailClient = Effect.fn("umailClient")(function* (httpClient: HttpClient.HttpClient) {
+  const baseUrl = yield* umailBaseUrl;
+  const token = yield* accessToken;
+  return yield* makeUmailClient({ baseUrl, accessToken: token }, httpClient);
+});
 
 export function publicApprovalClient(httpClient: HttpClient.HttpClient) {
   return Effect.flatMap(umailBaseUrl, (baseUrl) =>

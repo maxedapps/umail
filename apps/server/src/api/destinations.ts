@@ -35,8 +35,8 @@ export function cloudflareDestinations(config: {
   );
   const accountId = config.accountId;
   return {
-    ensure: (email) =>
-      Effect.gen(function* () {
+    ensure: Effect.fn("DestinationsClient.ensure")(
+      function* (email: string) {
         const wanted = email.toLowerCase();
         const existing = yield* emailRouting.listAddresses.items({ accountId }).pipe(
           Stream.filter((address) => address.email?.toLowerCase() === wanted),
@@ -46,18 +46,18 @@ export function cloudflareDestinations(config: {
           ? existing.value
           : yield* emailRouting.createAddress({ accountId, email });
         return { email: address.email ?? email, verified: typeof address.verified === "string" };
-      }).pipe(
-        // Cloudflare's own message (e.g. an address it will not accept) is shown as is.
-        Effect.mapError(
-          (error) =>
-            new DestinationError({
-              message:
-                error._tag === "HttpClientError" || error.message.length === 0
-                  ? "Could not reach Cloudflare."
-                  : error.message,
-            }),
-        ),
-        Effect.provide(cloudflare),
+      },
+      // Cloudflare's own message (e.g. an address it will not accept) is shown as is.
+      Effect.mapError(
+        (error) =>
+          new DestinationError({
+            message:
+              error._tag === "HttpClientError" || error.message.length === 0
+                ? "Could not reach Cloudflare."
+                : error.message,
+          }),
       ),
+      Effect.provide(cloudflare),
+    ),
   };
 }

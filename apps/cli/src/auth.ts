@@ -235,12 +235,8 @@ export const logout = Effect.gen(function* () {
   );
 });
 
-function revokeRefreshToken(
-  httpClient: HttpClient.HttpClient,
-  baseUrl: string,
-  refreshToken: string,
-) {
-  return Effect.gen(function* () {
+const revokeRefreshToken = Effect.fn("revokeRefreshToken")(
+  function* (httpClient: HttpClient.HttpClient, baseUrl: string, refreshToken: string) {
     const metadata = yield* discoverOAuth(httpClient, baseUrl);
     const response = yield* httpClient.execute(
       HttpClientRequest.post(metadata.revocation_endpoint).pipe(
@@ -253,11 +249,10 @@ function revokeRefreshToken(
     );
     yield* response.arrayBuffer.pipe(Effect.asVoid, Effect.ignore);
     if (response.status < 200 || response.status >= 300) return yield* new OAuthProtocolError();
-  }).pipe(
-    Effect.timeout(REVOCATION_TIMEOUT),
-    Effect.catchTag("TimeoutError", () => new OAuthProtocolError()),
-  );
-}
+  },
+  Effect.timeout(REVOCATION_TIMEOUT),
+  Effect.catchTag("TimeoutError", () => new OAuthProtocolError()),
+);
 
 function discoverOAuth(httpClient: HttpClient.HttpClient, baseUrl: string) {
   return requestJson(
@@ -300,7 +295,7 @@ function isDeviceVerificationUrl(value: string, origin: string): boolean {
   }
 }
 
-function pollForTokens(
+const pollForTokens = Effect.fn("pollForTokens")(function* (
   httpClient: HttpClient.HttpClient,
   scheduler: OAuthSchedulerService,
   tokenEndpoint: string,
@@ -308,54 +303,50 @@ function pollForTokens(
   device: typeof DeviceCodeResponse.Type,
   startedAt: number,
 ) {
-  return Effect.gen(function* () {
-    let intervalMs = Math.max(1, device.interval) * 1_000;
-    const expiresAt = startedAt + device.expires_in * 1_000;
-    while (true) {
-      yield* scheduler.sleep(intervalMs);
-      const now = yield* scheduler.now;
-      if (now >= expiresAt) return yield* new OAuthDeviceCodeExpiredError();
-      const response = yield* executeOAuth(
-        httpClient,
-        HttpClientRequest.post(tokenEndpoint).pipe(
-          HttpClientRequest.bodyUrlParams({
-            grant_type: DEVICE_GRANT,
-            device_code: device.device_code,
-            client_id: UMAIL_CLI_CLIENT_ID,
-            resource,
-          }),
-        ),
-      );
-      if (response.status >= 200 && response.status < 300) {
-        return yield* decodeResponse(response, OAuthTokenResponse);
-      }
-      const error = yield* decodeResponse(response, OAuthErrorResponse);
-      if (error.error === "authorization_pending") continue;
-      if (error.error === "slow_down") {
-        intervalMs += SLOW_DOWN_INCREMENT_MS;
-        continue;
-      }
-      if (error.error === "access_denied") return yield* new OAuthAccessDeniedError();
-      if (error.error === "expired_token") return yield* new OAuthDeviceCodeExpiredError();
-      return yield* new OAuthEndpointError({ error: error.error });
+  let intervalMs = Math.max(1, device.interval) * 1_000;
+  const expiresAt = startedAt + device.expires_in * 1_000;
+  while (true) {
+    yield* scheduler.sleep(intervalMs);
+    const now = yield* scheduler.now;
+    if (now >= expiresAt) return yield* new OAuthDeviceCodeExpiredError();
+    const response = yield* executeOAuth(
+      httpClient,
+      HttpClientRequest.post(tokenEndpoint).pipe(
+        HttpClientRequest.bodyUrlParams({
+          grant_type: DEVICE_GRANT,
+          device_code: device.device_code,
+          client_id: UMAIL_CLI_CLIENT_ID,
+          resource,
+        }),
+      ),
+    );
+    if (response.status >= 200 && response.status < 300) {
+      return yield* decodeResponse(response, OAuthTokenResponse);
     }
-  });
-}
+    const error = yield* decodeResponse(response, OAuthErrorResponse);
+    if (error.error === "authorization_pending") continue;
+    if (error.error === "slow_down") {
+      intervalMs += SLOW_DOWN_INCREMENT_MS;
+      continue;
+    }
+    if (error.error === "access_denied") return yield* new OAuthAccessDeniedError();
+    if (error.error === "expired_token") return yield* new OAuthDeviceCodeExpiredError();
+    return yield* new OAuthEndpointError({ error: error.error });
+  }
+});
 
-function requestJson<S extends Schema.Top>(
+const requestJson = Effect.fn("requestJson")(function* <S extends Schema.Top>(
   httpClient: HttpClient.HttpClient,
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
 ) {
-  return Effect.gen(function* () {
-    const response = yield* executeOAuth(httpClient, request);
-    if (response.status < 200 || response.status >= 300) {
-      const error = yield* decodeResponse(response, OAuthErrorResponse);
-      return yield* new OAuthEndpointError({ error: error.error });
-    }
-    return yield* decodeResponse(response, schema);
-  });
-}
+  const response = yield* executeOAuth(httpClient, request);
+  if (response.status < 200 || response.status >= 300) {
+    const error = yield* decodeResponse(response, OAuthErrorResponse);
+    return yield* new OAuthEndpointError({ error: error.error });
+  }
+  return yield* decodeResponse(response, schema);
+});
 
 function executeOAuth(
   httpClient: HttpClient.HttpClient,

@@ -105,15 +105,16 @@ export function makeAccountStoreRpc(storage: AccountStorage, crypto: Crypto.Cryp
     listSendingIdentities: call(listSendingIdentities),
     resolveSendingIdentity: call(resolveSendingIdentity),
     setAddressForwarding: call(setAddressForwarding),
-    submitOutbound: (input: SubmitOutboundInput) =>
-      Effect.gen(function* () {
-        const ids = {
-          messageId: yield* newId,
-          jobId: yield* newId,
-          notificationJobId: yield* newId,
-        };
-        return yield* callAndArm(submitOutbound)(input, ids);
-      }),
+    submitOutbound: Effect.fn("AccountStore.submitOutbound")(function* (
+      input: SubmitOutboundInput,
+    ) {
+      const ids = {
+        messageId: yield* newId,
+        jobId: yield* newId,
+        notificationJobId: yield* newId,
+      };
+      return yield* callAndArm(submitOutbound)(input, ids);
+    }),
     lookupApprovalByTokenHash: call(lookupApprovalByTokenHash),
     decideApproval: callAndArm(decideApproval),
     getOutboundJob: call(getOutboundJob),
@@ -192,30 +193,28 @@ export const AccountStoreLive = AccountStore.make(
 
 export default AccountStoreLive;
 
-export function seedDevelopmentAddresses(
+export const seedDevelopmentAddresses = Effect.fn("seedDevelopmentAddresses")(function* (
   store: Pick<AccountStoreRpc, "createAddress">,
   input: {
     readonly mailDomain: MailDomain;
     readonly localParts: ReadonlyArray<string>;
     readonly nowIso: string;
   },
-): Effect.Effect<{ readonly seeded: number }, AccountStoreError> {
-  return Effect.gen(function* () {
-    let seeded = 0;
-    for (const localPart of input.localParts) {
-      const normalized = constructMailboxAddress(localPart, input.mailDomain);
-      if (normalized.kind !== "ok") {
-        return yield* Effect.die(
-          new Error(
-            `SeedAddresses: mailbox address ${localPart}@${input.mailDomain} is ${normalized.kind}`,
-          ),
-        );
-      }
-      const created = yield* store
-        .createAddress(normalized.localPart, input.mailDomain, undefined, input.nowIso)
-        .pipe(Effect.catchTag("AccountConflictError", () => Effect.succeed(null)));
-      if (created !== null) seeded += 1;
+): Effect.fn.Return<{ readonly seeded: number }, AccountStoreError> {
+  let seeded = 0;
+  for (const localPart of input.localParts) {
+    const normalized = constructMailboxAddress(localPart, input.mailDomain);
+    if (normalized.kind !== "ok") {
+      return yield* Effect.die(
+        new Error(
+          `SeedAddresses: mailbox address ${localPart}@${input.mailDomain} is ${normalized.kind}`,
+        ),
+      );
     }
-    return { seeded };
-  });
-}
+    const created = yield* store
+      .createAddress(normalized.localPart, input.mailDomain, undefined, input.nowIso)
+      .pipe(Effect.catchTag("AccountConflictError", () => Effect.succeed(null)));
+    if (created !== null) seeded += 1;
+  }
+  return { seeded };
+});

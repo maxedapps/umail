@@ -161,23 +161,21 @@ function providerErrorCode(cause: unknown): string | null {
   return null;
 }
 
-export function cloudflareEmailSender(
+export const cloudflareEmailSender = Effect.fn("cloudflareEmailSender")(function* (
   client: Cloudflare.Email.SendClient,
-): Effect.Effect<EmailSender, never, Alchemy.RuntimeContext> {
-  return Effect.gen(function* () {
-    const binding = yield* client.raw;
-    return {
-      send: (mail) =>
-        Effect.promise(() =>
-          binding.send(toSendEmailMessage(mail)).then(
-            (result): CompleteAttemptOutcome => ({
-              kind: "accepted",
-              providerMessageId: result.messageId,
-              rfcMessageId: normalizeRfcMessageId(result.messageId),
-            }),
-            classifyProviderFailure,
-          ),
+): Effect.fn.Return<EmailSender, never, Alchemy.RuntimeContext> {
+  const binding = yield* client.raw;
+  return {
+    send: (mail) =>
+      Effect.promise(() =>
+        binding.send(toSendEmailMessage(mail)).then(
+          (result): CompleteAttemptOutcome => ({
+            kind: "accepted",
+            providerMessageId: result.messageId,
+            rfcMessageId: normalizeRfcMessageId(result.messageId),
+          }),
+          classifyProviderFailure,
         ),
-    } satisfies EmailSender;
-  });
-}
+      ),
+  } satisfies EmailSender;
+});

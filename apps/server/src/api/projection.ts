@@ -38,29 +38,44 @@ export function projectThreadSummary(summary: ThreadSummary): MailThreadSummary 
 }
 
 export function projectMessageSummary(summary: MessageSummary): MailMessageSummary {
-  const contacts = projectParticipants(summary);
-  const attachments = summary.attachments.map((meta) => new AttachmentMeta(meta));
-  const updatedAt = summary.updatedAt ?? summary.createdAt;
+  const fields = messageSummaryFields(summary);
+  return fields.direction === "inbound"
+    ? new InboundMailMessageSummary(fields)
+    : new OutboundMailMessageSummary(fields);
+}
+
+export function projectThreadMessage(
+  summary: MessageSummary,
+  body: MessageBody,
+): InboundThreadMessage | OutboundThreadMessage {
+  const fields = messageSummaryFields(summary);
+  const bodies = { textBody: body.textBody, htmlBody: body.htmlBody };
+  return fields.direction === "inbound"
+    ? new InboundThreadMessage({ ...fields, ...bodies })
+    : new OutboundThreadMessage({ ...fields, ...bodies });
+}
+
+function messageSummaryFields(summary: MessageSummary) {
+  const common = {
+    id: summary.id,
+    threadId: summary.threadId,
+    parentMessageId: summary.parentMessageId,
+    addressId: summary.mailboxId,
+    subject: summary.subject,
+    occurredAt: summary.occurredAt,
+    ...projectParticipants(summary),
+    hasRemoteImages: summary.hasRemoteImages,
+    rfcMessageId: summary.rfcMessageId,
+    inReplyToRfcMessageId: summary.inReplyToRfcMessageId,
+    references: summary.references,
+    attachments: summary.attachments.map((meta) => new AttachmentMeta(meta)),
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt ?? summary.createdAt,
+  };
   if (summary.direction === "inbound") {
-    return new InboundMailMessageSummary({
+    return {
+      ...common,
       direction: "inbound",
-      id: summary.id,
-      threadId: summary.threadId,
-      parentMessageId: summary.parentMessageId,
-      addressId: summary.mailboxId,
-      subject: summary.subject,
-      occurredAt: summary.occurredAt,
-      from: contacts.from,
-      replyTo: contacts.replyTo,
-      to: contacts.to,
-      cc: contacts.cc,
-      hasRemoteImages: summary.hasRemoteImages,
-      rfcMessageId: summary.rfcMessageId,
-      inReplyToRfcMessageId: summary.inReplyToRfcMessageId,
-      references: summary.references,
-      attachments,
-      createdAt: summary.createdAt,
-      updatedAt,
       envelopeFrom: summary.envelopeFrom,
       envelopeTo: summary.envelopeTo,
       parsedDate: summary.parsedDate,
@@ -68,51 +83,16 @@ export function projectMessageSummary(summary: MessageSummary): MailMessageSumma
       readAt: summary.readAt,
       forwardOutcome: summary.forwardOutcome,
       forwardDestination: summary.forwardDestination,
-    });
+    } as const;
   }
   const job = summary.outboundJob;
-  return new OutboundMailMessageSummary({
+  return {
+    ...common,
     direction: "outbound",
-    id: summary.id,
-    threadId: summary.threadId,
-    parentMessageId: summary.parentMessageId,
-    addressId: summary.mailboxId,
-    subject: summary.subject,
-    occurredAt: summary.occurredAt,
-    from: contacts.from,
-    replyTo: contacts.replyTo,
-    to: contacts.to,
-    cc: contacts.cc,
-    hasRemoteImages: summary.hasRemoteImages,
-    rfcMessageId: summary.rfcMessageId,
-    inReplyToRfcMessageId: summary.inReplyToRfcMessageId,
-    references: summary.references,
-    attachments,
-    createdAt: summary.createdAt,
-    updatedAt,
     sendState: job.state,
     sendError: job.failureClass,
     providerMessageId: job.providerMessageId,
-  });
-}
-
-export function projectThreadMessage(
-  summary: MessageSummary,
-  body: MessageBody,
-): InboundThreadMessage | OutboundThreadMessage {
-  const projected = projectMessageSummary(summary);
-  if (projected.direction === "inbound") {
-    return new InboundThreadMessage({
-      ...projected,
-      textBody: body.textBody,
-      htmlBody: body.htmlBody,
-    });
-  }
-  return new OutboundThreadMessage({
-    ...projected,
-    textBody: body.textBody,
-    htmlBody: body.htmlBody,
-  });
+  } as const;
 }
 
 export function projectJobStatus(job: OutboundJob): OutboundJobStatus {

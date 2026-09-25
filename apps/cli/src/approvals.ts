@@ -80,27 +80,25 @@ export interface ApprovalDecisionOutput {
   readonly state: ApprovalDecisionState;
 }
 
-export function decideApproval(
+export const decideApproval = Effect.fn("decideApproval")(function* (
   command: ApprovalDecisionCommand,
   tokenFile: string | undefined,
   httpClient: HttpClient.HttpClient,
 ) {
-  return Effect.gen(function* () {
-    const client = yield* publicApprovalClient(httpClient);
-    const tokenSource = yield* ApprovalTokenSource;
-    const token = yield* tokenSource.readToken(tokenFile);
-    const request =
-      command === "approve"
-        ? client.PublicApprovals.approveApproval({ params: { token } })
-        : client.PublicApprovals.denyApproval({ params: { token } });
-    const response = yield* request.pipe(
-      Effect.catchCause(() => Effect.fail(new PublicApprovalRequestError())),
-    );
-    return {
-      state: response.headers["x-umail-approval-state"],
-    } satisfies ApprovalDecisionOutput;
-  });
-}
+  const client = yield* publicApprovalClient(httpClient);
+  const tokenSource = yield* ApprovalTokenSource;
+  const token = yield* tokenSource.readToken(tokenFile);
+  const request =
+    command === "approve"
+      ? client.PublicApprovals.approveApproval({ params: { token } })
+      : client.PublicApprovals.denyApproval({ params: { token } });
+  const response = yield* request.pipe(
+    Effect.catchCause(() => Effect.fail(new PublicApprovalRequestError())),
+  );
+  return {
+    state: response.headers["x-umail-approval-state"],
+  } satisfies ApprovalDecisionOutput;
+});
 
 function decodeApprovalToken(value: string) {
   return Schema.decodeEffect(ApprovalToken)(value).pipe(

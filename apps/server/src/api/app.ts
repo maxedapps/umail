@@ -1,5 +1,4 @@
 import type * as Alchemy from "alchemy";
-import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -70,7 +69,6 @@ import {
   softDeleteVisibleThread,
   storeCall,
   submitMessage,
-  type StoreHttpError,
 } from "./operations.ts";
 
 export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportError>()(
@@ -390,60 +388,61 @@ function publicApprovalsGroup(deps: ApiDeps) {
   );
 }
 
-function showApproval(deps: ApiDeps, rawToken: string) {
-  return Effect.gen(function* () {
-    const token = yield* decodeApprovalToken(rawToken);
-    const outcome = yield* reviewApproval(deps, token);
-    if (outcome.kind === "notFound") {
-      return yield* approvalNotFoundError();
-    }
-    if (outcome.kind === "gone") {
-      return yield* approvalGoneError();
-    }
-    return humanPageHttpApiResponse(
-      renderApprovalReviewPage(token, outcome.approval, outcome.message, outcome.job),
-    );
-  });
-}
+const showApproval = Effect.fn("showApproval")(function* (deps: ApiDeps, rawToken: string) {
+  const token = yield* decodeApprovalToken(rawToken);
+  const outcome = yield* reviewApproval(deps, token);
+  if (outcome.kind === "notFound") {
+    return yield* approvalNotFoundError();
+  }
+  if (outcome.kind === "gone") {
+    return yield* approvalGoneError();
+  }
+  return humanPageHttpApiResponse(
+    renderApprovalReviewPage(token, outcome.approval, outcome.message, outcome.job),
+  );
+});
 
-function showApprovalMessagePreview(deps: ApiDeps, rawToken: string) {
-  return Effect.gen(function* () {
-    const token = yield* decodeApprovalToken(rawToken);
-    const outcome = yield* reviewApproval(deps, token);
-    if (outcome.kind === "notFound") {
-      return yield* approvalNotFoundError();
-    }
-    if (outcome.kind === "gone" || outcome.message.htmlBody === null) {
-      return yield* approvalGoneError();
-    }
-    return approvalMessagePreviewHttpApiResponse(
-      renderApprovalMessagePreview(outcome.message.htmlBody),
-    );
-  });
-}
+const showApprovalMessagePreview = Effect.fn("showApprovalMessagePreview")(function* (
+  deps: ApiDeps,
+  rawToken: string,
+) {
+  const token = yield* decodeApprovalToken(rawToken);
+  const outcome = yield* reviewApproval(deps, token);
+  if (outcome.kind === "notFound") {
+    return yield* approvalNotFoundError();
+  }
+  if (outcome.kind === "gone" || outcome.message.htmlBody === null) {
+    return yield* approvalGoneError();
+  }
+  return approvalMessagePreviewHttpApiResponse(
+    renderApprovalMessagePreview(outcome.message.htmlBody),
+  );
+});
 
-function decideApprovalRoute(deps: ApiDeps, rawToken: string, decision: "approved" | "denied") {
-  return Effect.gen(function* () {
-    const token = yield* decodeApprovalToken(rawToken);
-    const outcome = yield* decideApproval(deps, token, decision);
-    if (outcome.kind === "notFound") {
-      return yield* approvalNotFoundError();
-    }
-    if (outcome.kind === "gone") {
-      return yield* approvalGoneError();
-    }
-    const headers = {
-      location: approvalReviewUrl(deps.applicationUrl, token),
-      "x-umail-approval-state": outcome.state,
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-    } as const;
-    return HttpApiSchema.withHeaders({
-      body: undefined,
-      headers,
-    });
+const decideApprovalRoute = Effect.fn("decideApprovalRoute")(function* (
+  deps: ApiDeps,
+  rawToken: string,
+  decision: "approved" | "denied",
+) {
+  const token = yield* decodeApprovalToken(rawToken);
+  const outcome = yield* decideApproval(deps, token, decision);
+  if (outcome.kind === "notFound") {
+    return yield* approvalNotFoundError();
+  }
+  if (outcome.kind === "gone") {
+    return yield* approvalGoneError();
+  }
+  const headers = {
+    location: approvalReviewUrl(deps.applicationUrl, token),
+    "x-umail-approval-state": outcome.state,
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+  } as const;
+  return HttpApiSchema.withHeaders({
+    body: undefined,
+    headers,
   });
-}
+});
 
 function decodeApprovalToken(rawToken: string) {
   return Schema.decodeEffect(ApprovalToken)(rawToken).pipe(
