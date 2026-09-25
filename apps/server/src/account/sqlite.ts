@@ -4,11 +4,11 @@ export type AccountSqlRow = {
   readonly [column: string]: AccountSqlValue;
 };
 
-export interface AccountSqlCursor {
+interface AccountSqlCursor {
   toArray(): ReadonlyArray<AccountSqlRow>;
 }
 
-export interface AccountSql {
+interface AccountSql {
   exec(query: string, ...bindings: ReadonlyArray<AccountSqlValue>): AccountSqlCursor;
 }
 

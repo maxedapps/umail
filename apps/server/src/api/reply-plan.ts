@@ -9,14 +9,14 @@ import {
 
 export type ReplyMode = "reply" | "reply-all";
 
-export type ReplyParticipants = {
+type ReplyParticipants = {
   readonly from: ReadonlyArray<MailContact>;
   readonly replyTo: ReadonlyArray<MailContact>;
   readonly to: ReadonlyArray<MailContact>;
   readonly cc: ReadonlyArray<MailContact>;
 };
 
-export type ReplyRecipients = {
+type ReplyRecipients = {
   readonly to: ReadonlyArray<MailContact>;
   readonly cc: ReadonlyArray<MailContact>;
 };

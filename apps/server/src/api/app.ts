@@ -103,7 +103,7 @@ const HttpPlatformStub = Layer.succeed(HttpPlatform.HttpPlatform, {
   fileWebResponse: () => Effect.die("HttpPlatform.fileWebResponse not supported"),
 });
 
-export function apiLayers(deps: ApiDeps) {
+function apiLayers(deps: ApiDeps) {
   return Layer.mergeAll(
     addressesGroup(deps),
     sendingIdentitiesGroup(deps),

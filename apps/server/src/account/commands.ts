@@ -243,7 +243,7 @@ function applyMigration(
   }
 }
 
-export type ThreadedMailWrite =
+type ThreadedMailWrite =
   | { readonly direction: "inbound"; readonly input: AcceptInboundInput }
   | { readonly direction: "outbound"; readonly input: AcceptOutboundInput };
 

@@ -6,17 +6,17 @@ import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 
 import { ExternalMailAddress, parseExternalMailAddress } from "./mail-contact.ts";
 
-export const PrincipalMailboxIds = Schema.Union([
+const PrincipalMailboxIds = Schema.Union([
   Schema.Literal("all"),
   Schema.NonEmptyArray(Schema.String),
 ]);
-export type PrincipalMailboxIds = typeof PrincipalMailboxIds.Type;
+type PrincipalMailboxIds = typeof PrincipalMailboxIds.Type;
 
-export const PrincipalRecipientAllowlist = Schema.Union([
+const PrincipalRecipientAllowlist = Schema.Union([
   Schema.Literal("any"),
   Schema.NonEmptyArray(ExternalMailAddress),
 ]);
-export type PrincipalRecipientAllowlist = typeof PrincipalRecipientAllowlist.Type;
+type PrincipalRecipientAllowlist = typeof PrincipalRecipientAllowlist.Type;
 
 export const PrincipalSendMode = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("deny") }),
@@ -34,15 +34,15 @@ export function requireApprovalSendMode(
   return { kind: "requireApproval", preapprovedRecipients };
 }
 
-export type MailAddressListParseResult =
+type MailAddressListParseResult =
   | { readonly kind: "ok"; readonly addresses: ReadonlyArray<ExternalMailAddress> }
   | { readonly kind: "invalid_address"; readonly value: string };
 
-export type PrincipalMailboxIdsParseResult =
+type PrincipalMailboxIdsParseResult =
   | { readonly kind: "ok"; readonly mailboxIds: PrincipalMailboxIds }
   | { readonly kind: "empty" };
 
-export type PrincipalRecipientAllowlistParseResult =
+type PrincipalRecipientAllowlistParseResult =
   | { readonly kind: "ok"; readonly recipientAllowlist: PrincipalRecipientAllowlist }
   | { readonly kind: "empty" }
   | { readonly kind: "invalid_address"; readonly value: string };
@@ -102,16 +102,16 @@ export const PrincipalPolicy = Schema.Struct({
 });
 export type PrincipalPolicy = typeof PrincipalPolicy.Type;
 
-export type OAuthIdentity = {
+type OAuthIdentity = {
   readonly kind: "oauth";
   readonly userId: string;
   readonly clientId: string;
   readonly clientLabel: string;
 };
 
-export type PrincipalIdentity = OAuthIdentity;
+type PrincipalIdentity = OAuthIdentity;
 
-export type OperatorPrincipal = {
+type OperatorPrincipal = {
   readonly authority: "operator";
   readonly identity: PrincipalIdentity;
   readonly policy: PrincipalPolicy;

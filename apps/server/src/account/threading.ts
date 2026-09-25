@@ -10,7 +10,7 @@ import { bindJsonStringArray, type AccountSqliteStorage } from "./sqlite.ts";
 
 export const THREADING_REFERENCE_LIMIT = 128;
 
-export type ThreadingHeaders = {
+type ThreadingHeaders = {
   readonly rfcMessageId: NormalizedRfcMessageId | null;
   readonly inReplyTo: NormalizedRfcMessageId | null;
   readonly references: ReadonlyArray<NormalizedRfcMessageId>;

@@ -10,7 +10,7 @@ export const NormalizedRfcMessageId = Schema.String.check(
 ).pipe(Schema.brand("NormalizedRfcMessageId"));
 export type NormalizedRfcMessageId = typeof NormalizedRfcMessageId.Type;
 
-export function unfoldHeader(raw: string): string {
+function unfoldHeader(raw: string): string {
   return raw.replace(/\r\n[ \t]+/g, " ").replace(/\n[ \t]+/g, " ");
 }
 

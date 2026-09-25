@@ -1,4 +1,4 @@
-export const INLINE_SAFE_TYPES = new Set([
+const INLINE_SAFE_TYPES = new Set([
   "image/png",
   "image/jpeg",
   "image/gif",
@@ -6,22 +6,22 @@ export const INLINE_SAFE_TYPES = new Set([
   "application/pdf",
 ]);
 
-export type AttachmentDisposition = "inline" | "attachment";
+type AttachmentDisposition = "inline" | "attachment";
 
-export type AttachmentHeaders = {
+type AttachmentHeaders = {
   readonly contentType: string;
   readonly contentDisposition: string;
   readonly contentSecurityPolicy: string | null;
 };
 
-export function declaredMediaType(declaredMime: string): string {
+function declaredMediaType(declaredMime: string): string {
   const trimmed = declaredMime.trim().toLowerCase();
   const separator = trimmed.indexOf(";");
   if (separator === -1) return trimmed;
   return trimmed.slice(0, separator).trim();
 }
 
-export function isInlineSafeType(declaredMime: string): boolean {
+function isInlineSafeType(declaredMime: string): boolean {
   return INLINE_SAFE_TYPES.has(declaredMediaType(declaredMime));
 }
 
@@ -49,7 +49,7 @@ export function attachmentHeaders(declaredMime: string, filename: string): Attac
   };
 }
 
-export type AttachmentResponseHeaders = {
+type AttachmentResponseHeaders = {
   readonly "content-type": string;
   readonly "content-disposition": string;
   readonly "x-content-type-options": "nosniff";

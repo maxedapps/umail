@@ -52,7 +52,7 @@ import { deriveReplyRecipients, type ReplyMode } from "./reply-plan.ts";
 
 const HTML_BODY_VALIDATION_PROBLEM = "The HTML body could not be processed safely." as const;
 
-export type StoreHttpError =
+type StoreHttpError =
   | HttpApiError.NotFound
   | HttpApiError.Forbidden
   | HttpApiError.Conflict

@@ -11,11 +11,11 @@ import * as Effect from "effect/Effect";
 import type { AccountStoreRpc } from "../account/worker.ts";
 import { projectThreadMessage } from "./projection.ts";
 
-export type ApprovalHttpDeps = {
+type ApprovalHttpDeps = {
   readonly account: AccountStoreRpc;
 };
 
-export type ApprovalReviewOutcome =
+type ApprovalReviewOutcome =
   | {
       readonly kind: "available";
       readonly approval: StoredApproval;

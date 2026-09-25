@@ -37,15 +37,15 @@ export const MailboxAddress = Schema.String.check(
 ).pipe(Schema.brand("MailboxAddress"));
 export type MailboxAddress = typeof MailboxAddress.Type;
 
-export type MailDomainParseResult =
+type MailDomainParseResult =
   | { readonly kind: "ok"; readonly domain: MailDomain }
   | { readonly kind: "invalid" };
 
-export type MailboxLocalPartParseResult =
+type MailboxLocalPartParseResult =
   | { readonly kind: "ok"; readonly localPart: MailboxLocalPart }
   | { readonly kind: "invalid" };
 
-export type MailboxAddressParseResult =
+type MailboxAddressParseResult =
   | {
       readonly kind: "ok";
       readonly localPart: MailboxLocalPart;
@@ -54,15 +54,13 @@ export type MailboxAddressParseResult =
     }
   | { readonly kind: "invalid" };
 
-export type RegistrationMailboxAddressResult =
-  | MailboxAddressParseResult
-  | { readonly kind: "reserved" };
+type RegistrationMailboxAddressResult = MailboxAddressParseResult | { readonly kind: "reserved" };
 
 export function parseMailDomain(raw: string): MailDomainParseResult {
   return decodeMailDomain(raw.trim().toLowerCase());
 }
 
-export function parseMailboxLocalPart(raw: string): MailboxLocalPartParseResult {
+function parseMailboxLocalPart(raw: string): MailboxLocalPartParseResult {
   return decodeRawMailboxLocalPart(raw.trim());
 }
 

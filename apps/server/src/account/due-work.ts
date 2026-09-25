@@ -10,7 +10,7 @@ import { expireDueApprovals, readyJobIds, settleAbandonedClaims } from "./jobs.t
 import type { AccountSqliteStorage } from "./sqlite.ts";
 
 // The store's single alarm; the Durable Object storage provides it.
-export interface AccountAlarm {
+interface AccountAlarm {
   setAlarm(scheduledTime: number): Promise<void>;
   deleteAlarm(): Promise<void>;
 }

@@ -56,7 +56,7 @@ export type AccountStoreError =
   | SubmissionConflictError
   | MessageConflictError;
 
-export const EXPECTED_TAGS = [
+const EXPECTED_TAGS = [
   "ThreadNotFoundError",
   "JobAuthorizationError",
   "AccountConflictError",

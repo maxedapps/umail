@@ -517,7 +517,7 @@ bdi[dir="ltr"] {
 
 const RenderedHumanPageTypeId = Symbol("umail/RenderedHumanPage");
 
-export type HumanPageStatus = 200 | 400 | 403 | 404 | 410 | 500;
+type HumanPageStatus = 200 | 400 | 403 | 404 | 410 | 500;
 
 export type HumanPagePolicy = "static" | "auth" | "approvalReview";
 
@@ -529,7 +529,7 @@ export type RenderedHumanPage<Status extends HumanPageStatus = HumanPageStatus> 
   readonly html: string;
 };
 
-export type HumanPageDocumentView = {
+type HumanPageDocumentView = {
   readonly title: string;
   readonly eyebrow: string;
   readonly heading: string;
@@ -538,13 +538,13 @@ export type HumanPageDocumentView = {
   readonly script?: string | undefined;
 };
 
-export type HumanPageInternalView<Status extends HumanPageStatus> = {
+type HumanPageInternalView<Status extends HumanPageStatus> = {
   readonly status: Status;
   readonly policy: HumanPagePolicy;
   readonly document: HumanPageDocumentView;
 };
 
-export function createHumanPageNonce(): string {
+function createHumanPageNonce(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   let nonce = "";
   for (const byte of bytes) {
@@ -566,7 +566,7 @@ export function renderHumanPageInternal<Status extends HumanPageStatus>(
   };
 }
 
-export function renderHumanPageDocument(view: HumanPageDocumentView, nonce: string): string {
+function renderHumanPageDocument(view: HumanPageDocumentView, nonce: string): string {
   let scriptHtml = "";
   if (view.script !== undefined) {
     scriptHtml = `<script nonce="${escapeHtmlText(nonce)}">${view.script}</script>`;

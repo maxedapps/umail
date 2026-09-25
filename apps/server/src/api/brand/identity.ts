@@ -3,18 +3,18 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { AGENTMAIL_ICON_PNG } from "./icon-bytes.ts";
 
 export const PRODUCT_NAME = "AgentMail";
-export const MCP_SERVER_NAME = "umail";
-export const MCP_SERVER_VERSION = "0.0.0";
-export const PRODUCT_DESCRIPTION =
+const MCP_SERVER_NAME = "umail";
+const MCP_SERVER_VERSION = "0.0.0";
+const PRODUCT_DESCRIPTION =
   "Self-hosted mailbox for AI agents. Read mail, manage threads, and send with approval.";
-export const PRODUCT_WEBSITE_URL = "https://github.com/maxedapps/umail";
-export const AGENTMAIL_ICON_PATH = "/icon.png";
+const PRODUCT_WEBSITE_URL = "https://github.com/maxedapps/umail";
+const AGENTMAIL_ICON_PATH = "/icon.png";
 
 export function productPageTitle(label: string): string {
   return `${label} · ${PRODUCT_NAME}`;
 }
 
-export function agentMailIconUrl(origin: string): string {
+function agentMailIconUrl(origin: string): string {
   return `${origin}${AGENTMAIL_ICON_PATH}`;
 }
 

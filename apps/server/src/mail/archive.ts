@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { sha256Hex } from "../crypto.ts";
 
 export type InboundMessageId = `in_${string}`;
-export type InboundAttachmentId = `att_${string}`;
+type InboundAttachmentId = `att_${string}`;
 
 // The receipt id hashes this JSON, so its encoding must stay byte-for-byte stable.
 const EnvelopeIdentity = Schema.fromJsonString(

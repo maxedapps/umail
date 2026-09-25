@@ -13,9 +13,9 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { publicApprovalClient } from "./client.ts";
 
-export type ApprovalDecisionCommand = "approve" | "deny";
+type ApprovalDecisionCommand = "approve" | "deny";
 
-export type ApprovalTokenInputErrorReason = "interrupted" | "invalid" | "unreadable";
+type ApprovalTokenInputErrorReason = "interrupted" | "invalid" | "unreadable";
 
 const approvalTokenInputErrorMessages = {
   interrupted: "Approval token input was interrupted",
@@ -76,7 +76,7 @@ export class PublicApprovalRequestError extends Data.TaggedError("PublicApproval
   override readonly message = "Could not complete the approval request.";
 }
 
-export interface ApprovalDecisionOutput {
+interface ApprovalDecisionOutput {
   readonly state: ApprovalDecisionState;
 }
 

@@ -22,8 +22,8 @@ export const SchemaMigrationRow = Schema.Struct({
 });
 export type SchemaMigrationRow = typeof SchemaMigrationRow.Type;
 
-export const MessageDirection = Schema.Literals(["inbound", "outbound"]);
-export type MessageDirection = typeof MessageDirection.Type;
+const MessageDirection = Schema.Literals(["inbound", "outbound"]);
+type MessageDirection = typeof MessageDirection.Type;
 
 export type MessageAttachmentWrite = {
   readonly id: string;
@@ -78,11 +78,11 @@ export const ThreadIdRow = Schema.Struct({
   thread_id: Schema.String,
 });
 
-export const ForwardOutcome = Schema.Literals(["none", "unknown", "success", "failure"]);
-export type ForwardOutcome = typeof ForwardOutcome.Type;
+const ForwardOutcome = Schema.Literals(["none", "unknown", "success", "failure"]);
+type ForwardOutcome = typeof ForwardOutcome.Type;
 
-export const ReceiptWorkState = Schema.Literals(["ready", "indexed", "policy_failed"]);
-export type ReceiptWorkState = typeof ReceiptWorkState.Type;
+const ReceiptWorkState = Schema.Literals(["ready", "indexed", "policy_failed"]);
+type ReceiptWorkState = typeof ReceiptWorkState.Type;
 
 export const ReceiptPolicyError = Schema.Literals([
   "attachment_cap",
@@ -230,7 +230,7 @@ export type InboundMessageSummary = MessageSummaryFields & {
   readonly forwardDestination: string | null;
 };
 
-export type OutboundMessageSummary = MessageSummaryFields & {
+type OutboundMessageSummary = MessageSummaryFields & {
   readonly direction: "outbound";
   readonly outboundJob: MessageOutboundJob;
 };
@@ -433,7 +433,7 @@ export type AddressRow = typeof AddressRow.Type;
 
 export const MAX_OUTBOUND_RECIPIENTS = 50 as const;
 
-export const OutboundRequesterKind = Schema.Literals(["operator", "mcp"]);
+const OutboundRequesterKind = Schema.Literals(["operator", "mcp"]);
 
 export type OutboundRequester = {
   readonly kind: typeof OutboundRequesterKind.Type;

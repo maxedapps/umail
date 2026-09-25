@@ -18,7 +18,7 @@ export class MailContact extends Schema.Class<MailContact>("MailContact")({
   ),
 }) {}
 
-export type ExternalMailAddressParseResult =
+type ExternalMailAddressParseResult =
   | {
       readonly kind: "ok";
       readonly localPart: string;

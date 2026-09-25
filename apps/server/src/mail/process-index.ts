@@ -35,7 +35,7 @@ export const IndexReceiptWork = Schema.Struct({
 });
 export type IndexReceiptWork = typeof IndexReceiptWork.Type;
 
-export class IndexFailure extends Schema.TaggedError<IndexFailure>()("IndexFailure", {
+class IndexFailure extends Schema.TaggedError<IndexFailure>()("IndexFailure", {
   reason: Schema.String,
 }) {}
 
@@ -105,7 +105,7 @@ export const indexReceipt = <R>(
       .pipe(Effect.catchTag("MessageConflictError", () => Effect.void));
   });
 
-export type InboundTarget = {
+type InboundTarget = {
   readonly messageId: string;
   readonly mailboxId: string;
   readonly occurredAt: string;

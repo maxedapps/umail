@@ -1,6 +1,6 @@
 import * as DateTime from "effect/DateTime";
 
-export const SEND_CLAIM_TTL_MS = 15 * 60 * 1000;
+const SEND_CLAIM_TTL_MS = 15 * 60 * 1000;
 
 export function sendClaimUntilIso(nowMs: number): string {
   return DateTime.formatIso(DateTime.makeUnsafe(nowMs + SEND_CLAIM_TTL_MS));
@@ -30,7 +30,7 @@ export function rawObjectKey(digest: string): string {
   return `raw/${digest}.eml`;
 }
 
-export type AttachmentObjectKey = `attachments/${string}/${number}`;
+type AttachmentObjectKey = `attachments/${string}/${number}`;
 
 export function attachmentObjectKey(messageId: string, position: number): AttachmentObjectKey {
   return `attachments/${messageId}/${position}`;

@@ -62,19 +62,19 @@ const OAuthErrorResponse = Schema.Struct({ error: OAuthError });
 
 type OAuthError = typeof OAuthError.Type;
 
-export class OAuthLoginRequiredError extends Data.TaggedError("OAuthLoginRequiredError") {
+class OAuthLoginRequiredError extends Data.TaggedError("OAuthLoginRequiredError") {
   override readonly message = "OAuth login required. Run: umail login";
 }
-export class OAuthProtocolError extends Data.TaggedError("OAuthProtocolError") {
+class OAuthProtocolError extends Data.TaggedError("OAuthProtocolError") {
   override readonly message = "The OAuth server returned an invalid response.";
 }
-export class OAuthAccessDeniedError extends Data.TaggedError("OAuthAccessDeniedError") {
+class OAuthAccessDeniedError extends Data.TaggedError("OAuthAccessDeniedError") {
   override readonly message = "Device authorization was denied.";
 }
-export class OAuthDeviceCodeExpiredError extends Data.TaggedError("OAuthDeviceCodeExpiredError") {
+class OAuthDeviceCodeExpiredError extends Data.TaggedError("OAuthDeviceCodeExpiredError") {
   override readonly message = "The device authorization code expired. Run: umail login";
 }
-export class OAuthRevocationError extends Data.TaggedError("OAuthRevocationError") {
+class OAuthRevocationError extends Data.TaggedError("OAuthRevocationError") {
   override readonly message =
     "Could not revoke access on the server; local OAuth credentials were kept. Try again.";
 }

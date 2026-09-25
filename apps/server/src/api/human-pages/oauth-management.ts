@@ -4,7 +4,7 @@ import type { ClientGrant } from "../../auth/access.ts";
 import { productPageTitle } from "../brand/identity.ts";
 import { escapeHtmlText, renderHumanPageInternal } from "./internal/page.ts";
 
-export type DeviceAuthorizationView = {
+type DeviceAuthorizationView = {
   readonly userCode: string;
   readonly clientId: string;
   readonly scope: string;

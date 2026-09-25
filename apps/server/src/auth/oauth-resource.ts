@@ -30,7 +30,7 @@ export type OAuthAccess = {
   readonly scopes: ReadonlySet<string>;
 };
 
-export type OAuthResourceRequirements = {
+type OAuthResourceRequirements = {
   readonly issuer: string;
   readonly audience: string;
   readonly scopes: ReadonlyArray<string>;

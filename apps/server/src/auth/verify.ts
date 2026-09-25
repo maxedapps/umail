@@ -13,13 +13,13 @@ import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import { type UmailAuthInstance } from "./options.ts";
 import { verifyOAuthBearerToken } from "./oauth-resource.ts";
 
-export type OperatorAuthorizationDependencies = {
+type OperatorAuthorizationDependencies = {
   readonly auth: UmailAuthInstance;
   readonly issuer: string;
   readonly resource: string;
 };
 
-export const authenticateOperatorBearer = Effect.fn("authenticateOperatorBearer")(function* (
+const authenticateOperatorBearer = Effect.fn("authenticateOperatorBearer")(function* (
   deps: OperatorAuthorizationDependencies,
   token: string,
 ) {

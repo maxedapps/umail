@@ -8,7 +8,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ExternalMailAddress } from "../../../packages/api-contract/src/mail-contact.ts";
 import { MailDomain, parseMailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
 
-export const previewMailLocalParts = ["probe", "inbox"] as const;
+const previewMailLocalParts = ["probe", "inbox"] as const;
 
 export type StageSite =
   | {

@@ -1,6 +1,6 @@
 # Plan for 0002: Scoped thread reads, and an Effect- and Alchemy-native cleanup
 
-- **Status:** In progress
+- **Status:** Done
 - **ADR:** `adrs/0002-effect-alchemy-cleanup.md`
 
 ## Goal
@@ -294,7 +294,7 @@ Behaviour changes are limited to those the ADR lists:
 
 **Verify:** `pnpm typecheck`, `pnpm lint` (0 warnings), the full `pnpm test`, `pnpm build:clients`, `pnpm fmt` on the touched packages only, and `git status` showing no stray files.
 
-**Done:** no
+**Done:** yes. 103 exports that only their own module used lost `export`. No symbol, source file or dependency was left without a use (`bin.ts` is the CLI entry and `css-tree-subpaths.d.ts` holds ambient types). Results: `pnpm typecheck` passes, `pnpm lint` reports 0 warnings and 0 errors, and `pnpm build:clients` builds. All suites pass except the load-sensitive thread-paging spec, which times out in the full parallel server-worker run and passes alone (out of scope, see Goal).
 
 ## Open questions
 

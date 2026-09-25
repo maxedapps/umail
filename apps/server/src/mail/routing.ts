@@ -14,7 +14,7 @@ import { stageSendsMail, type StageSite } from "../site.ts";
 const EmailRoutingDomainTypeId = "uMail.Email.RoutingDomain" as const;
 type EmailRoutingDomainTypeId = typeof EmailRoutingDomainTypeId;
 
-export interface EmailRoutingDomainProps {
+interface EmailRoutingDomainProps {
   readonly zoneId: string;
   readonly name: string;
 }

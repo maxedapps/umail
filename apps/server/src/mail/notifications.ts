@@ -15,7 +15,7 @@ import { randomId } from "../crypto.ts";
 import type { NamedMailboxSender, OutboundMail } from "./email-sender.ts";
 
 export const APPROVAL_NOTIFICATION_SUBJECT = "Outbound email needs review";
-export const APPROVAL_TTL_HOURS = 24;
+const APPROVAL_TTL_HOURS = 24;
 
 const KEY_LENGTH = 32;
 
@@ -66,7 +66,7 @@ export const newApprovalCapability = Effect.fn("newApprovalCapability")(function
   } satisfies ApprovalCapabilityWrite;
 });
 
-export function approvalNotificationText(expiresAt: string, reviewUrl: string): string {
+function approvalNotificationText(expiresAt: string, reviewUrl: string): string {
   return [
     "An outbound email is waiting for review in AgentMail.",
     "Open the secure review page to inspect the message and approve or deny it.",

@@ -2,11 +2,11 @@ import { escapeHtmlText } from "./internal/page.ts";
 
 const DISPLAY_WHITESPACE = /\s+/gu;
 
-export type ApprovalDecisionMetadataDisplay = {
+type ApprovalDecisionMetadataDisplay = {
   readonly value: string;
 };
 
-export type ApprovalDecisionMetadataFragment = {
+type ApprovalDecisionMetadataFragment = {
   readonly html: string;
 };
 

@@ -1,6 +1,6 @@
 import { escapeHtmlText, renderHumanPageInternal } from "./internal/page.ts";
 
-export type HumanPageNoticeView = {
+type HumanPageNoticeView = {
   readonly status: 200 | 400 | 403 | 404 | 410 | 500;
   readonly title: string;
   readonly eyebrow: string;

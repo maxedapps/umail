@@ -16,7 +16,7 @@ import { cookieMutationAllowed } from "./runtime-surface.ts";
 
 const DeviceDecisionForm = Schema.Struct({ userCode: Schema.String });
 
-export type OAuthRouteDependencies = {
+type OAuthRouteDependencies = {
   readonly auth: UmailAuthInstance;
   readonly access: Access;
   readonly applicationUrl: URL;

@@ -4,7 +4,7 @@ export type AccountMigration = {
   readonly sql: string;
 };
 
-export const accountMigration0010Sql = `CREATE TABLE messages (
+const accountMigration0010Sql = `CREATE TABLE messages (
   id TEXT PRIMARY KEY NOT NULL,
   thread_id TEXT NOT NULL,
   mailbox_id TEXT NOT NULL,

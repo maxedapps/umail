@@ -289,11 +289,11 @@ export class AddressForwarding extends Schema.Class<AddressForwarding>("AddressF
   verified: Schema.Boolean,
 }) {}
 
-export const IdParams = Schema.Struct({
+const IdParams = Schema.Struct({
   id: Schema.String,
 });
 
-export const AttachmentParams = Schema.Struct({
+const AttachmentParams = Schema.Struct({
   id: Schema.String,
   attachmentId: Schema.String,
 });
@@ -323,7 +323,7 @@ const businessErrors = [
 ] as const;
 const scopedErrors = [...businessErrors, HttpApiError.Forbidden] as const;
 
-export class AddressesGroup extends HttpApiGroup.make("Addresses")
+class AddressesGroup extends HttpApiGroup.make("Addresses")
   .add(
     HttpApiEndpoint.post("createAddress", "/addresses", {
       payload: CreateAddressPayload,
@@ -368,14 +368,14 @@ export class AddressesGroup extends HttpApiGroup.make("Addresses")
     }),
   ) {}
 
-export class SendingIdentitiesGroup extends HttpApiGroup.make("SendingIdentities").add(
+class SendingIdentitiesGroup extends HttpApiGroup.make("SendingIdentities").add(
   HttpApiEndpoint.get("listSendingIdentities", "/sending-identities", {
     success: Schema.Array(SendingIdentity),
     error: businessErrors,
   }),
 ) {}
 
-export class ThreadsGroup extends HttpApiGroup.make("Threads")
+class ThreadsGroup extends HttpApiGroup.make("Threads")
   .add(
     HttpApiEndpoint.get("listThreads", "/threads", {
       query: ListThreadsQuery,
@@ -413,7 +413,7 @@ export class ThreadsGroup extends HttpApiGroup.make("Threads")
     }),
   ) {}
 
-export class MessagesGroup extends HttpApiGroup.make("Messages")
+class MessagesGroup extends HttpApiGroup.make("Messages")
   .add(
     HttpApiEndpoint.get("listMessages", "/messages", {
       query: ListMessagesQuery,
@@ -452,7 +452,7 @@ export class MessagesGroup extends HttpApiGroup.make("Messages")
     }),
   ) {}
 
-export class SubmissionsGroup extends HttpApiGroup.make("Submissions").add(
+class SubmissionsGroup extends HttpApiGroup.make("Submissions").add(
   HttpApiEndpoint.post("submitMessage", "/submissions", {
     payload: SubmitMessagePayload,
     success: OutboundJobStatus,
@@ -460,7 +460,7 @@ export class SubmissionsGroup extends HttpApiGroup.make("Submissions").add(
   }),
 ) {}
 
-export class JobsGroup extends HttpApiGroup.make("Jobs")
+class JobsGroup extends HttpApiGroup.make("Jobs")
   .add(
     HttpApiEndpoint.get("listJobs", "/jobs", {
       query: ListJobsQuery,
@@ -476,7 +476,7 @@ export class JobsGroup extends HttpApiGroup.make("Jobs")
     }),
   ) {}
 
-export const ApprovalTokenParams = Schema.Struct({
+const ApprovalTokenParams = Schema.Struct({
   token: Schema.String,
 });
 
@@ -511,24 +511,18 @@ export const ApprovalPreviewHeaders = Schema.Struct({
   "x-content-type-options": Schema.Literal("nosniff"),
 });
 
-export const ApprovalRedirectHeaders = Schema.Struct({
+const ApprovalRedirectHeaders = Schema.Struct({
   location: Schema.String,
   "x-umail-approval-state": ApprovalDecisionState,
   "cache-control": Schema.Literal("no-store"),
   "referrer-policy": Schema.Literal("no-referrer"),
 });
 
-export const ApprovalTrustedPage = HttpApiSchema.WithHeaders(
-  ApprovalHtmlBody,
-  ApprovalTrustedPageHeaders,
-);
+const ApprovalTrustedPage = HttpApiSchema.WithHeaders(ApprovalHtmlBody, ApprovalTrustedPageHeaders);
 
-export const ApprovalMessagePreview = HttpApiSchema.WithHeaders(
-  ApprovalHtmlBody,
-  ApprovalPreviewHeaders,
-);
+const ApprovalMessagePreview = HttpApiSchema.WithHeaders(ApprovalHtmlBody, ApprovalPreviewHeaders);
 
-export const ApprovalDecisionRedirect = HttpApiSchema.WithHeaders(
+const ApprovalDecisionRedirect = HttpApiSchema.WithHeaders(
   HttpApiSchema.Empty(303),
   ApprovalRedirectHeaders,
 );
@@ -546,7 +540,7 @@ export class ApprovalPageGone extends Schema.TaggedError<ApprovalPageGone>()("Ap
   headers: ApprovalTrustedPageHeaders,
 }) {}
 
-export const ApprovalPageNotFoundResponse = ApprovalPageNotFound.pipe(
+const ApprovalPageNotFoundResponse = ApprovalPageNotFound.pipe(
   HttpApiSchema.encodeToWithHeaders(
     {
       body: ApprovalHtmlBody.pipe(HttpApiSchema.status(404)),
@@ -559,7 +553,7 @@ export const ApprovalPageNotFoundResponse = ApprovalPageNotFound.pipe(
   ),
 );
 
-export const ApprovalPageGoneResponse = ApprovalPageGone.pipe(
+const ApprovalPageGoneResponse = ApprovalPageGone.pipe(
   HttpApiSchema.encodeToWithHeaders(
     {
       body: ApprovalHtmlBody.pipe(HttpApiSchema.status(410)),
@@ -574,7 +568,7 @@ export const ApprovalPageGoneResponse = ApprovalPageGone.pipe(
 
 const approvalErrors = [ApprovalPageNotFoundResponse, ApprovalPageGoneResponse] as const;
 
-export class PublicApprovalsGroup extends HttpApiGroup.make("PublicApprovals")
+class PublicApprovalsGroup extends HttpApiGroup.make("PublicApprovals")
   .add(
     HttpApiEndpoint.get("reviewApproval", "/approvals/:token", {
       params: ApprovalTokenParams,

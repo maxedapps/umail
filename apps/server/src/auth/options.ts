@@ -68,7 +68,7 @@ export const FIRST_PARTY_CLIENT_DISCOVERY_ID = "umail-first-party" as const;
 
 export const CURSOR_GROK_BOT_CLIENT_ID = "cursor-grok-bot" as const;
 
-export const FIRST_PARTY_CLIENT_METADATA_JSON = '{"owner":"umail-provision"}' as const;
+const FIRST_PARTY_CLIENT_METADATA_JSON = '{"owner":"umail-provision"}' as const;
 
 export type FirstPartyClient = SchemaClient<Scope[]>;
 
@@ -113,7 +113,7 @@ export function firstPartyClients(): ReadonlyArray<{
   ];
 }
 
-export function firstPartyClientExtension(): OAuthProviderExtension {
+function firstPartyClientExtension(): OAuthProviderExtension {
   const clients = new Map(firstPartyClients().map(({ client }) => [client.clientId, client]));
   const discovery: ClientDiscovery = {
     id: FIRST_PARTY_CLIENT_DISCOVERY_ID,
@@ -222,8 +222,8 @@ const saveConsentPolicy = Effect.fn("saveConsentPolicy")(function* (
   );
 });
 
-export type AuthSite = { readonly apiHostname: string };
-export type AuthRateLimitSetting = { readonly rateLimit: boolean };
+type AuthSite = { readonly apiHostname: string };
+type AuthRateLimitSetting = { readonly rateLimit: boolean };
 
 export function restResourceUrl(site: AuthSite): string {
   return `https://${site.apiHostname}`;
@@ -498,7 +498,7 @@ function oauthDevicePlugin(
 }
 
 type DeferredUmailAuth = BetterAuthInstance<ReturnType<typeof makeAuthOptions>>;
-export type UmailAuth = Effect.Success<DeferredUmailAuth["auth"]>;
+type UmailAuth = Effect.Success<DeferredUmailAuth["auth"]>;
 
 type RequiredUmailAuthApiMethod =
   | "getJwks"

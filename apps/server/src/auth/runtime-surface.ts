@@ -1,4 +1,4 @@
-export const AUTH_BASE_PATH = "/api/auth" as const;
+const AUTH_BASE_PATH = "/api/auth" as const;
 
 export const DISABLED_AUTH_PATHS = [
   "/sign-up/email",

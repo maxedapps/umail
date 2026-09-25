@@ -16,7 +16,7 @@ export interface UmailClientConfig {
   readonly accessToken: Redacted.Redacted<string>;
 }
 
-export interface PublicApprovalClientConfig {
+interface PublicApprovalClientConfig {
   readonly baseUrl: string;
 }
 
@@ -24,7 +24,7 @@ interface UmailClientConfigurationErrorFields {
   readonly message: string;
 }
 
-export class UmailClientConfigurationError extends Data.TaggedError(
+class UmailClientConfigurationError extends Data.TaggedError(
   "UmailClientConfigurationError",
 )<UmailClientConfigurationErrorFields> {}
 
@@ -76,7 +76,7 @@ export const umailBaseUrl: Effect.Effect<string, UmailClientConfigurationError> 
   ),
 );
 
-export function withUmailRequestHeaders(client: HttpClient.HttpClient, config: UmailClientConfig) {
+function withUmailRequestHeaders(client: HttpClient.HttpClient, config: UmailClientConfig) {
   return HttpClient.mapRequest(client, (request) =>
     request.pipe(
       HttpClientRequest.setHeader("content-type", "application/json"),

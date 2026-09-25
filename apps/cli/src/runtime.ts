@@ -9,7 +9,7 @@ import { OAuthCredentialStore } from "./credential-store.ts";
 import { ApprovalTokenSource } from "./approvals.ts";
 import { program } from "./main.ts";
 
-export const CliLive = Layer.mergeAll(
+const CliLive = Layer.mergeAll(
   NodeHttpClient.layerUndici,
   OAuthCredentialStore.layer,
   OAuthScheduler.layer,

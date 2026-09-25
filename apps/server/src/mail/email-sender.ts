@@ -34,7 +34,7 @@ export interface EmailSender {
   send(mail: ProviderOutboundMail): Effect.Effect<CompleteAttemptOutcome>;
 }
 
-export type ProviderSendMessage = {
+type ProviderSendMessage = {
   from: { email: string; name: string };
   replyTo: { email: string; name: string };
   to: Array<string>;
@@ -113,7 +113,7 @@ export function toSendEmailMessage(mail: ProviderOutboundMail): ProviderSendMess
   return message;
 }
 
-export function classifyProviderFailure(cause: unknown): CompleteAttemptOutcome {
+function classifyProviderFailure(cause: unknown): CompleteAttemptOutcome {
   const code = providerErrorCode(cause);
   if (code !== null && REJECTED_CODES.has(code)) {
     return { kind: "rejected", failureDetail: code };
