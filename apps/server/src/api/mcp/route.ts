@@ -62,7 +62,6 @@ const mcpPrincipalForAccess = Effect.fn("mcpPrincipalForAccess")(function* (
   return {
     authority: "mcp",
     identity: {
-      kind: "oauth",
       userId: access.subject,
       clientId: access.clientId,
       clientLabel: `OAuth client ${access.clientId.slice(0, 12)}`,

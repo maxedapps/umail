@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
-import { operatorOAuthPrincipal } from "@umail/api-contract";
+import { operatorPrincipal } from "@umail/api-contract";
 import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
@@ -86,7 +86,12 @@ const callListSendingIdentities = Effect.fn("callListSendingIdentities")(functio
             { name: "umail", version: "0.0.0" },
             { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
           );
-          registerTools(server, deps, operatorOAuthPrincipal("operator", "scope-oracle"), services);
+          registerTools(
+            server,
+            deps,
+            operatorPrincipal("operator", "scope-oracle", "AgentMail CLI"),
+            services,
+          );
           return server;
         },
         { legacy: "reject" },

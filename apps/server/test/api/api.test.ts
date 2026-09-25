@@ -1198,7 +1198,7 @@ type McpReadAccess = Pick<PrincipalPolicy, "mailboxIds" | "canRead">;
 function mcpPrincipal(world: World, clientId: string, access: McpReadAccess): McpPrincipal {
   return {
     authority: "mcp",
-    identity: { kind: "oauth", userId: world.operatorId, clientId, clientLabel: clientId },
+    identity: { userId: world.operatorId, clientId, clientLabel: clientId },
     policy: { ...access, sendMode: { kind: "deny" }, recipientAllowlist: "any" },
   };
 }

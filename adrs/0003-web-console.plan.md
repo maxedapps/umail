@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–2 done)
+- **Status:** In progress (tasks 1–3 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -235,7 +235,7 @@ Delete leftovers as each task finds them. After the last task, `rg "human-pages|
 - `principal-authorization.test.ts` and `principal-policy.test.ts` pass.
 - New case in `test/web/session.test.ts`: a message sent from the console stores the requester label "AgentMail web" and client id `umail-web`, read back through `getJob` or the stored job.
 
-**Done:** no.
+**Done:** yes. `verify.ts` keeps passing the token's own client id (only the CLI can hold a REST token) with the label "AgentMail CLI". The console-requester case needs the compose route, so it lands in task 7's `compose.test.ts`.
 
 ### 4. Mailbox operations shared by REST and the console
 

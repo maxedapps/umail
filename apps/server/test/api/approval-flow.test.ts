@@ -111,7 +111,6 @@ describe("public approval flow", () => {
       const principal = {
         authority: "mcp",
         identity: {
-          kind: "oauth",
           userId: "operator-1",
           clientId: "oauth-client-42",
           clientLabel: "OAuth client oauth-client-42",
@@ -342,7 +341,6 @@ const queueApproval = Effect.fn("queueApproval")(function* (
   const principal = {
     authority: "mcp",
     identity: {
-      kind: "oauth" as const,
       userId: "operator-1",
       clientId,
       clientLabel,

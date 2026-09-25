@@ -699,7 +699,6 @@ function approvalPrincipal(): Principal {
   return {
     authority: "mcp",
     identity: {
-      kind: "oauth",
       userId: "operator-1",
       clientId: "browser-oauth-client",
       clientLabel: HOSTILE_REQUESTER,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
-  operatorOAuthPrincipal,
+  operatorPrincipal,
   parseExternalMailAddress,
   type Principal,
   requireApprovalSendMode,
@@ -18,7 +18,6 @@ import {
 const MCP_PRINCIPAL = {
   authority: "mcp",
   identity: {
-    kind: "oauth",
     userId: "operator-1",
     clientId: "client-1",
     clientLabel: "Reader",
@@ -31,15 +30,14 @@ const MCP_PRINCIPAL = {
   },
 } as const satisfies Principal;
 
-describe("OAuth principal authorization", () => {
-  it("constructs the fixed full-authority operator policy", () => {
-    expect(operatorOAuthPrincipal("operator-1", "cli-1")).toEqual({
+describe("principal authorization", () => {
+  it("constructs the fixed full-authority operator policy for the acting client", () => {
+    expect(operatorPrincipal("operator-1", "umail-web", "AgentMail web")).toEqual({
       authority: "operator",
       identity: {
-        kind: "oauth",
         userId: "operator-1",
-        clientId: "cli-1",
-        clientLabel: "AgentMail CLI",
+        clientId: "umail-web",
+        clientLabel: "AgentMail web",
       },
       policy: {
         mailboxIds: "all",

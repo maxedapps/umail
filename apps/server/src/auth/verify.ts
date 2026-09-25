@@ -1,7 +1,7 @@
 import {
   CurrentPrincipal,
   PrincipalAuthorization,
-  operatorOAuthPrincipal,
+  operatorPrincipal,
   UMAIL_OAUTH_SCOPE,
 } from "@umail/api-contract";
 import { RuntimeContext } from "alchemy/RuntimeContext";
@@ -28,7 +28,7 @@ const authenticateOperatorBearer = Effect.fn("authenticateOperatorBearer")(funct
     audience: deps.resource,
     scopes: [UMAIL_OAUTH_SCOPE],
   }).pipe(Effect.mapError(() => new HttpApiError.Unauthorized()));
-  return operatorOAuthPrincipal(access.subject, access.clientId);
+  return operatorPrincipal(access.subject, access.clientId, "AgentMail CLI");
 });
 
 export function makePrincipalAuthorizationLive(deps: OperatorAuthorizationDependencies) {

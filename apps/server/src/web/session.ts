@@ -1,4 +1,4 @@
-import { operatorOAuthPrincipal, type Principal } from "@umail/api-contract";
+import { operatorPrincipal, type Principal } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -37,9 +37,8 @@ export function withOperator<E extends { readonly _tag: string }, R>(
     if (session.user.id !== deps.operatorId) {
       return yield* failurePage(403, "Only the AgentMail operator can use this page.");
     }
-    return yield* handler(operatorOAuthPrincipal(session.user.id, UMAIL_WEB_CLIENT_ID)).pipe(
-      Effect.catch((error: E) => failureResponse(error)),
-    );
+    const principal = operatorPrincipal(session.user.id, UMAIL_WEB_CLIENT_ID, "AgentMail web");
+    return yield* handler(principal).pipe(Effect.catch((error: E) => failureResponse(error)));
   });
 }
 

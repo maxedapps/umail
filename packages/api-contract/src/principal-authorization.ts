@@ -102,14 +102,13 @@ export const PrincipalPolicy = Schema.Struct({
 });
 export type PrincipalPolicy = typeof PrincipalPolicy.Type;
 
-type OAuthIdentity = {
-  readonly kind: "oauth";
+// Who acts: the signed-in user, and the client acting for them (the CLI, the web console, or an MCP
+// client), whose label is shown on what it submits.
+type PrincipalIdentity = {
   readonly userId: string;
   readonly clientId: string;
   readonly clientLabel: string;
 };
-
-type PrincipalIdentity = OAuthIdentity;
 
 type OperatorPrincipal = {
   readonly authority: "operator";
@@ -138,10 +137,14 @@ export const OPERATOR_POLICY = {
   recipientAllowlist: "any",
 } as const satisfies PrincipalPolicy;
 
-export function operatorOAuthPrincipal(userId: string, clientId: string): OperatorPrincipal {
+export function operatorPrincipal(
+  userId: string,
+  clientId: string,
+  clientLabel: string,
+): OperatorPrincipal {
   return {
     authority: "operator",
-    identity: { kind: "oauth", userId, clientId, clientLabel: "AgentMail CLI" },
+    identity: { userId, clientId, clientLabel },
     policy: OPERATOR_POLICY,
   };
 }
