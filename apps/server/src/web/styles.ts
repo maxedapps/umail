@@ -1606,6 +1606,10 @@ export const styles = String.raw`
     }
   }
 
+  .settings > .actions {
+    justify-content: flex-end;
+  }
+
   @container settings (inline-size < 40rem) {
     .setting {
       grid-template-columns: minmax(0, 1fr);

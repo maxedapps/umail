@@ -385,7 +385,7 @@ Then run the full `pnpm test`.
 - the `sendMode=deny` radio is reachable by keyboard;
 - the popover opens by keyboard.
 
-**Done:** no.
+**Done:** yes. The consent port from task 7 was pulled forward: once `accessFieldsets` returned settings sections, consent overflowed at 320px until they sat in its `.settings` container. The client form's save row is right-aligned (`.settings > .actions`), in the controls column as in the mockup.
 
 ### 7. Login, consent, device, notices and approval
 

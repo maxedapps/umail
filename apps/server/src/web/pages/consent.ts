@@ -110,10 +110,10 @@ export function consentPage(view: ConsentView, addresses: ReadonlyArray<Address>
           ${redirect === null ? "Not stated" : bidiAddress(`${redirect.protocol}//${redirect.host}`)}
         </dd>
       </dl>
-      ${accessFieldsets(policyFormState(null), addresses, null)}
+      <div class="settings">${accessFieldsets(policyFormState(null), addresses, null)}</div>
       <div class="actions">
-        <button id="accept" type="button">Allow access</button>
-        <button class="secondary" id="deny" type="button">Deny</button>
+        <button class="button" id="accept" type="button">Allow access</button>
+        <button class="button secondary" id="deny" type="button">Deny</button>
       </div>
       <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
     </form>`,

@@ -10,6 +10,7 @@ import { listAddresses } from "../../api/operations.ts";
 import { policyFromForm, type ClientGrant, type PolicyField } from "../../auth/access.ts";
 import { htmlResponse, redirect, type Flash, type PageView } from "../document.ts";
 import { bidiText, displayText, html, type Html } from "../html.ts";
+import { icon } from "../icons.ts";
 
 // The policy controls as the form holds them, so a rejected save re-renders what was typed.
 export type PolicyFormState = {
@@ -43,7 +44,7 @@ export function policyFormState(policy: PrincipalPolicy | null): PolicyFormState
   };
 }
 
-// The mailbox and sending controls, shared with the consent screen.
+// The mailbox and sending sections, shared with the consent screen.
 export function accessFieldsets(
   state: PolicyFormState,
   addresses: ReadonlyArray<Address>,
@@ -52,82 +53,99 @@ export function accessFieldsets(
   return html`${mailboxesFieldset(state, addresses, error)} ${sendingFieldset(state, error)}`;
 }
 
+// A settings section whose controls are one fieldset, named by the section's heading.
+function settingFieldset(id: string, title: string, hint: string, controls: Html): Html {
+  return html`<section class="setting">
+    <header>
+      <h2 id="${id}">${title}</h2>
+      <p>${hint}</p>
+    </header>
+    <fieldset aria-labelledby="${id}">${controls}</fieldset>
+  </section>`;
+}
+
 function mailboxesFieldset(
   state: PolicyFormState,
   addresses: ReadonlyArray<Address>,
   error: PolicyError | null,
 ): Html {
-  return html`<fieldset class="stack">
-    <legend>Mailboxes</legend>
-    <div class="choices">
-      ${choice("mailboxScope", "all", state.mailboxScope, "All mailboxes", "Including ones you add later.")}
-      ${choice("mailboxScope", "some", state.mailboxScope, "Only these", "Pick the mailboxes below.", true)}
-    </div>
-    <div class="revealed field">
-      <div class="checks">
+  return settingFieldset(
+    "mailboxes-title",
+    "Mailboxes",
+    "Which mailboxes it can see and send from.",
+    html`<div class="choices">
+        ${choice("mailboxScope", "all", state.mailboxScope, "All mailboxes", "Including ones you add later.")}
+        ${choice("mailboxScope", "some", state.mailboxScope, "Only these", "Pick the mailboxes below.", true)}
+      </div>
+      <ul class="checklist revealed">
         ${addresses.map(
           (address) =>
-            html`<label
-              ><input
-                type="checkbox"
-                name="mailbox"
-                value="${address.id}"
-                ${state.mailboxIds.includes(address.id) ? html`checked` : null}
-              />
-              <span class="mono">${address.address}</span></label
-            >`,
+            html`<li>
+              <label
+                ><input
+                  type="checkbox"
+                  name="mailbox"
+                  value="${address.id}"
+                  ${state.mailboxIds.includes(address.id) ? html`checked` : null}
+                /><span class="mono">${address.address}</span></label
+              >
+            </li>`,
         )}
-      </div>
-      ${fieldError(error, "mailboxes")}
-    </div>
-  </fieldset>`;
+      </ul>
+      ${fieldError(error, "mailboxes")}`,
+  );
 }
 
 function sendingFieldset(state: PolicyFormState, error: PolicyError | null): Html {
-  return html`<fieldset class="stack">
-    <legend>Sending</legend>
-    <div class="choices">
-      ${choice("sendMode", "deny", state.sendMode, "Never", "It cannot send mail.")}
-      ${choice("sendMode", "requireApproval", state.sendMode, "With my approval", "Each message waits for you.", true)}
-      ${choice("sendMode", "allow", state.sendMode, "Without approval", "Messages go out at once.")}
-    </div>
-    <div class="revealed field">
-      <label for="preapproved">Skip approval for</label>
-      <input
-        id="preapproved"
-        name="preapproved"
-        type="text"
-        value="${state.preapproved}"
-        placeholder="me@example.com, team@example.com"
-        aria-describedby="preapproved-hint"
-      />
-      <p class="hint" id="preapproved-hint">
-        Comma-separated addresses. A message skips approval only when all its recipients are listed.
-      </p>
-      ${fieldError(error, "preapproved")}
-    </div>
-  </fieldset>`;
+  return settingFieldset(
+    "sending-title",
+    "Sending",
+    "Whether its messages wait for you.",
+    html`<div class="choices">
+        ${choice("sendMode", "deny", state.sendMode, "Never", "It cannot send mail.")}
+        ${choice("sendMode", "requireApproval", state.sendMode, "With my approval", "Each message waits for you.", true)}
+        ${choice("sendMode", "allow", state.sendMode, "Without approval", "Messages go out at once.")}
+      </div>
+      <div class="revealed field">
+        <label for="preapproved">Skip approval for</label>
+        <input
+          id="preapproved"
+          name="preapproved"
+          type="text"
+          value="${state.preapproved}"
+          placeholder="me@example.com, team@example.com"
+          aria-describedby="preapproved-hint"
+        />
+        <p class="hint" id="preapproved-hint">
+          Comma-separated addresses. A message skips approval only when all its recipients are
+          listed.
+        </p>
+        ${fieldError(error, "preapproved")}
+      </div>`,
+  );
 }
 
 function recipientsFieldset(state: PolicyFormState, error: PolicyError | null): Html {
-  return html`<fieldset class="stack">
-    <legend>Recipients</legend>
-    <div class="choices">
-      ${choice("recipientScope", "any", state.recipientScope, "Anyone", "Any address it is told to write to.")}
-      ${choice("recipientScope", "some", state.recipientScope, "Only these", "List the allowed addresses below.", true)}
-    </div>
-    <div class="revealed field">
-      <label for="recipients">Allowed recipients</label>
-      <input
-        id="recipients"
-        name="recipients"
-        type="text"
-        value="${state.recipients}"
-        placeholder="anna@example.net, team@example.net"
-      />
-      ${fieldError(error, "recipients")}
-    </div>
-  </fieldset>`;
+  return settingFieldset(
+    "recipients-title",
+    "Recipients",
+    "Who it may write to.",
+    html`<div class="choices">
+        ${choice("recipientScope", "any", state.recipientScope, "Anyone", "Any address it is told to write to.")}
+        ${choice("recipientScope", "some", state.recipientScope, "Only these", "List the allowed addresses below.", true)}
+      </div>
+      <div class="revealed field">
+        <label for="recipients">Allowed recipients</label>
+        <input
+          id="recipients"
+          name="recipients"
+          type="text"
+          value="${state.recipients}"
+          placeholder="anna@example.net, team@example.net"
+        />
+        ${fieldError(error, "recipients")}
+      </div>`,
+  );
 }
 
 function choice(
@@ -145,8 +163,7 @@ function choice(
       value="${value}"
       ${value === current ? html`checked` : null}
       ${reveals ? html`data-reveal` : null}
-    />
-    <span>${label}<small>${hint}</small></span></label
+    /><b>${label}</b><small>${hint}</small></label
   >`;
 }
 
@@ -205,13 +222,13 @@ export function clientsPage(
     main:
       grants.length === 0
         ? html`<p class="empty">No client has access yet.</p>`
-        : html`<ul class="list">
+        : html`<ul class="rows">
             ${grants.map(
               (grant) =>
                 html`<li>
                   <a class="row" href="/clients/${encodeURIComponent(grant.clientId)}">
-                    <span class="primary">${grantName(grant)} ${grantBadge(grant)}</span>
-                    <span class="secondary">${grantSummary(grant, addresses)}</span>
+                    <span>${grantName(grant)} ${grantBadge(grant)}</span>
+                    <small>${grantSummary(grant, addresses)}</small>
                   </a>
                 </li>`,
             )}
@@ -234,18 +251,29 @@ export function clientPage(
       ? html`<p class="muted">
           The CLI signs in as the operator and always has full access. Revoke it to sign it out.
         </p>`
-      : html`<form class="stack" method="post" action="${path}">
+      : html`<form class="settings" method="post" action="${path}">
           ${accessFieldsets(state, addresses, error)}
-          <fieldset class="stack">
-            <legend>Reading</legend>
-            <label class="choice"
-              ><input type="checkbox" name="canRead" ${state.canRead ? html`checked` : null} />
-              <span>Read mail<small>List, open and download messages.</small></span></label
-            >
-          </fieldset>
+          <section class="setting">
+            <header>
+              <h2>Reading</h2>
+              <p>Access to received mail.</p>
+            </header>
+            <div>
+              <label class="switch-row"
+                ><span><b>Read mail</b><small>List, open and download messages.</small></span
+                ><input
+                  class="switch"
+                  type="checkbox"
+                  name="canRead"
+                  ${state.canRead ? html`checked` : null}
+              /></label>
+            </div>
+          </section>
           ${recipientsFieldset(state, error)}
           <div class="actions">
-            <button type="submit">${grant.policy === null ? "Grant access" : "Save access"}</button>
+            <button class="button" type="submit">
+              ${grant.policy === null ? "Grant access" : "Save access"}
+            </button>
           </div>
         </form>`;
   return {
@@ -255,23 +283,28 @@ export function clientPage(
     heading: name,
     lede: html`${grantBadge(grant)} <span class="mono muted">${grant.clientId}</span>`,
     flash,
+    toolbar: html`<nav class="crumbs" aria-label="Breadcrumb">
+      <a href="/clients">Clients</a>${icon("right")}<span>${name}</span>
+    </nav>`,
     main: html`${form}
-      <section class="section" aria-labelledby="revoke-title">
-        <h2 id="revoke-title">Revoke access</h2>
-        <p class="muted">
-          Revoking ends this client's tokens at once. It can ask again through the consent screen.
-        </p>
-        <div class="actions">
-          <button class="danger" type="button" popovertarget="revoke-dialog">Revoke access…</button>
+      <div class="danger-zone">
+        <div>
+          <b>Revoke access</b>
+          <p>
+            Revoking ends this client's tokens at once. It can ask again through the consent screen.
+          </p>
         </div>
-      </section>
+        <button class="button danger" type="button" popovertarget="revoke-dialog">
+          Revoke access…
+        </button>
+      </div>
       <div id="revoke-dialog" popover>
         <h2>Revoke ${name}?</h2>
         <p>Its tokens stop working at once.</p>
         <form class="actions" method="post" action="${path}/revoke">
-          <button class="danger solid" type="submit">Revoke</button>
+          <button class="button danger solid" type="submit">Revoke</button>
           <button
-            class="secondary"
+            class="button secondary"
             type="button"
             popovertarget="revoke-dialog"
             popovertargetaction="hide"
