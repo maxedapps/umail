@@ -21,6 +21,7 @@ const COMMON_IDS = [
   "MailIndex",
   "MailRouting",
   "MailRoutingDomain",
+  "NotificationKey",
 ];
 
 it("applies a new action after an unchanged database's asynchronous dependency metadata update", async () => {
@@ -98,7 +99,9 @@ describe("application resource graph", () => {
     const app = requireWorker(stack, "App");
     const env = await resolveGraphValue(app.Props.env);
     expect(env).toMatchObject({ AUTH_OPERATOR_ID: "operator-test" });
-    expect(Redacted.isRedacted(env?.UMAIL_NOTIFICATION_KEY)).toBe(true);
+    // The approval-link key is an alchemy-managed secret, bound from its resource.
+    expect(env).not.toHaveProperty("UMAIL_NOTIFICATION_KEY");
+    expect(Redacted.isRedacted(env?.NotificationKey_text)).toBe(true);
     expect(Redacted.isRedacted(env?.UMAIL_OPERATOR_EMAIL)).toBe(true);
     expect(Redacted.isRedacted(env?.CF_EMAIL_ROUTING_TOKEN)).toBe(true);
     expect(env).not.toHaveProperty("UMAIL_OPERATOR_PASSWORD");

@@ -830,7 +830,7 @@ describe("root mailbox API", () => {
       canRead: true,
     });
     await expect(
-      Effect.runPromise(readMessageSource(world.deps, outOfScope, inbound.messageId)),
+      world.run(readMessageSource(world.deps, outOfScope, inbound.messageId)),
     ).rejects.toMatchObject({ _tag: "NotFound" });
 
     const cannotRead = mcpPrincipal(world, "no-read-client", {
@@ -838,7 +838,7 @@ describe("root mailbox API", () => {
       canRead: false,
     });
     await expect(
-      Effect.runPromise(readMessageSource(world.deps, cannotRead, inbound.messageId)),
+      world.run(readMessageSource(world.deps, cannotRead, inbound.messageId)),
     ).rejects.toMatchObject({ _tag: "Forbidden" });
 
     expect(world.archive.getCalls).toEqual([]);

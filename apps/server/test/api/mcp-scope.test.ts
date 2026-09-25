@@ -2,6 +2,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { operatorOAuthPrincipal } from "@umail/api-contract";
+import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -16,6 +17,14 @@ import { webCrypto } from "../../src/crypto.ts";
 import { createWorld } from "./world.ts";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
+// The tools under test read nothing from alchemy's runtime context.
+const TEST_RUNTIME_CONTEXT = {
+  Type: "test",
+  id: "mcp-scope",
+  env: {},
+  get: () => Effect.succeed(undefined),
+  set: (id: string) => Effect.succeed(id),
+};
 
 describe("MCP tool request services", () => {
   it("runs umail_list_sending_identities with the request Scope passed to registerTools", async () => {
@@ -24,7 +33,10 @@ describe("MCP tool request services", () => {
     try {
       const result = await callListSendingIdentities(
         deps,
-        Context.make(Scope.Scope, scope).pipe(Context.add(Crypto.Crypto, webCrypto)),
+        Context.make(Scope.Scope, scope).pipe(
+          Context.add(Crypto.Crypto, webCrypto),
+          Context.add(RuntimeContext, TEST_RUNTIME_CONTEXT),
+        ),
       );
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toEqual({ sendingIdentities: [] });
@@ -43,6 +55,7 @@ describe("MCP tool request services", () => {
       deps,
       Context.make(Logger.CurrentLoggers, new Set([capture])).pipe(
         Context.add(Crypto.Crypto, webCrypto),
+        Context.add(RuntimeContext, TEST_RUNTIME_CONTEXT),
       ),
     );
     expect(result.isError).toBe(true);
@@ -63,7 +76,10 @@ async function scopeOracleDeps(): Promise<ApiDeps> {
   return world.deps;
 }
 
-async function callListSendingIdentities(deps: ApiDeps, services: Context.Context<Crypto.Crypto>) {
+async function callListSendingIdentities(
+  deps: ApiDeps,
+  services: Context.Context<Crypto.Crypto | RuntimeContext>,
+) {
   const handler = createMcpHandler(
     () => {
       const server = new McpServer(

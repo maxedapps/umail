@@ -1,20 +1,16 @@
 import { OPERATOR_POLICY, constructMailboxAddress, type MailDomain } from "@umail/api-contract";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 
-import { createMailHtmlPolicy } from "../mail/html-policy.ts";
-import { makeAccess } from "../auth/access.ts";
 import { WebCrypto, randomId } from "../crypto.ts";
 import { cloudflareEmailSender } from "../mail/email-sender.ts";
-import { notificationKeyFromSecret } from "../mail/notifications.ts";
-import { AuthDb, MailIndex } from "../resources.ts";
-import { currentSite, operatorEmail } from "../site.ts";
+import { appRuntime } from "../app-runtime.ts";
+import { MailIndex } from "../resources.ts";
+import { operatorEmail } from "../site.ts";
 import {
   createAddress,
   getAddress,
@@ -137,14 +133,13 @@ export const OPERATOR_ACCOUNT = "operator";
 export const AccountStoreLive = AccountStore.make(
   Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
-    const site = yield* currentSite;
+    const runtime = yield* appRuntime;
+    const site = runtime.site;
     const email = yield* Cloudflare.Email.Send(Cloudflare.Email.SendEmail("EMAIL"));
     const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
-    const authDb = yield* Cloudflare.D1.QueryDatabase(AuthDb);
-    const notificationSecret = yield* Config.redacted("UMAIL_NOTIFICATION_KEY");
     const approvalAdminEmail = yield* operatorEmail;
-    const htmlPolicy = createMailHtmlPolicy();
     const crypto = yield* Crypto.Crypto;
+    // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's Durable Object shape: the outer effect runs once per isolate and returns the per-instance initializer.
     return Effect.gen(function* () {
       const storage = state.raw.storage;
       const now = yield* DateTime.now;
@@ -157,23 +152,20 @@ export const AccountStoreLive = AccountStore.make(
           nowIso: DateTime.formatIso(now),
         }).pipe(Effect.orDie);
       }
-      // Read at runtime: the provisioned operator id is only in the deployed Worker's env.
-      const operatorId = yield* Config.string("AUTH_OPERATOR_ID").pipe(Effect.orDie);
-      const access = makeAccess(authDb, operatorId);
       const ports = {
         sender: yield* cloudflareEmailSender(email),
         index,
-        htmlPolicy,
-        applicationUrl: new URL(`https://${site.apiHostname}`),
+        htmlPolicy: runtime.htmlPolicy,
+        applicationUrl: runtime.applicationUrl,
         notification: {
-          key: notificationKeyFromSecret(Redacted.value(notificationSecret)),
+          key: runtime.notificationKey,
           mailDomain: site.mailDomain,
           approvalAdminEmail,
         },
         policyFor: (requester: OutboundRequester) =>
           requester.kind === "operator"
             ? Effect.succeed(OPERATOR_POLICY)
-            : access.mcpPolicy(requester.clientId),
+            : runtime.access.mcpPolicy(requester.clientId),
       };
       // Covers due work whose alarm was never set, e.g. after a deploy.
       yield* Effect.promise(() => armDueWork(storage, DateTime.toEpochMillis(now)));

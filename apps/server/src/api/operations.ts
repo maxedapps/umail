@@ -31,6 +31,7 @@ import {
   type Principal,
   type SubmitMessagePayload,
 } from "@umail/api-contract";
+import type * as Alchemy from "alchemy";
 import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -449,9 +450,9 @@ function submitPrepared(
   principal: Principal,
   requestId: SubmissionRequestId,
   nowIso: string,
-): Effect.Effect<SubmitOutboundResult, StoreHttpError, Crypto.Crypto> {
+): Effect.Effect<SubmitOutboundResult, StoreHttpError, Crypto.Crypto | Alchemy.RuntimeContext> {
   return Effect.gen(function* () {
-    const approval = yield* newApprovalCapability(deps.notificationKey, nowIso);
+    const approval = yield* newApprovalCapability(yield* deps.notificationKey, nowIso);
     return yield* deps.account
       .submitOutbound({
         requestId,

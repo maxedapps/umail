@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 
 import AppLive, { App } from "./apps/server/src/app.ts";
 import { AuthProvision } from "./apps/server/src/auth/provisioning.ts";
+import { WebCrypto, randomId } from "./apps/server/src/crypto.ts";
 import { mcpResourceUrl, restResourceUrl } from "./apps/server/src/auth/options.ts";
 import {
   configureMailRouting,
@@ -21,7 +22,7 @@ export const application = Effect.gen(function* () {
   const authDb = yield* AuthDb;
   const provision = yield* AuthProvision({
     identity: { databaseId: authDb.databaseId },
-    runNonce: crypto.randomUUID(),
+    runNonce: yield* randomId,
     operatorEmail: yield* operatorEmail,
     restResource: restResourceUrl(site),
     mcpResource: mcpResourceUrl(site),
@@ -37,8 +38,10 @@ export const application = Effect.gen(function* () {
       mailKind: site.kind,
       mailDomain: site.mailDomain,
     };
-  }).pipe(Effect.provide(AppLive), Effect.provide(Layer.succeed(ProvisionedOperator, provision)));
-});
+  }).pipe(
+    Effect.provide(AppLive.pipe(Layer.provide(Layer.succeed(ProvisionedOperator, provision)))),
+  );
+}).pipe(Effect.provide(WebCrypto));
 
 export default Alchemy.Stack(
   "uMail",

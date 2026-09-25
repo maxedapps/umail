@@ -27,7 +27,7 @@ export type DispatchPorts = {
   readonly htmlPolicy: MailHtmlPolicy;
   readonly applicationUrl: URL;
   readonly notification: {
-    readonly key: NotificationKey;
+    readonly key: Effect.Effect<NotificationKey>;
     readonly mailDomain: MailDomain;
     readonly approvalAdminEmail: ExternalMailAddress;
   };
@@ -95,7 +95,7 @@ const prepareDispatchMail = Effect.fn("prepareDispatchMail")(function* (
   if (dispatch.job.purpose === "approval_notification") {
     const approval = dispatch.approval;
     if (approval === null) return { kind: "reject", detail: "approval_unavailable" } as const;
-    const token = yield* deriveApprovalToken(ports.notification.key, approval.approvalId);
+    const token = yield* deriveApprovalToken(yield* ports.notification.key, approval.approvalId);
     return yield* materializePreparedMail(
       approvalNotificationMail({
         mailDomain: ports.notification.mailDomain,

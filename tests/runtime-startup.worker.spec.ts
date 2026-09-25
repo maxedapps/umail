@@ -1,5 +1,11 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
-import { env, SELF, runInDurableObject, evictDurableObject } from "cloudflare:test";
+import {
+  env,
+  SELF,
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 // Exercise the generated bridge and its real SQLite storage.
@@ -68,5 +74,57 @@ describe("generated application runtime", () => {
     expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).toBe(
       Date.parse(DUE_AT),
     );
+  });
+
+  it("sends an approval notification with the bound NotificationKey from the store's alarm", async () => {
+    const stub = testEnv.AccountStore.getByName("operator");
+    const now = new Date().toISOString();
+    const expires = new Date(Date.now() + 86_400_000).toISOString();
+    await runInDurableObject(stub, (_instance, state) => {
+      const sql = state.storage.sql;
+      const mailbox = sql.exec("SELECT id FROM addresses ORDER BY address LIMIT 1").one().id;
+      sql.exec(
+        `INSERT INTO messages (id, thread_id, mailbox_id, direction, occurred_at, created_at, updated_at, subject)
+         VALUES ('held', 'held', ?, 'outbound', ?, ?, ?, 'Held')`,
+        mailbox,
+        now,
+        now,
+        now,
+      );
+      for (const [id, purpose, jobState] of [
+        ["held-job", "message", "waiting_approval"],
+        ["held-notice", "approval_notification", "ready"],
+      ]) {
+        sql.exec(
+          `INSERT INTO outbound_jobs (id, requester_kind, requester_client_id, requester_label,
+             idempotency_key, intent_fingerprint, message_id, mailbox_id, purpose, state, created_at,
+             updated_at)
+           VALUES (?, 'operator', 'cli', 'CLI', ?, '', 'held', ?, ?, ?, ?, ?)`,
+          id,
+          id,
+          mailbox,
+          purpose,
+          jobState,
+          now,
+          now,
+        );
+      }
+      sql.exec(
+        `INSERT INTO approval_requests (id, job_id, notification_job_id, token_hash, state,
+           requester_client_id, requester_label, created_at, expires_at)
+         VALUES ('held-approval', 'held-job', 'held-notice', ?, 'pending', 'cli', 'CLI', ?, ?)`,
+        "0".repeat(64),
+        now,
+        expires,
+      );
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const notice = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec("SELECT state FROM outbound_jobs WHERE id = 'held-notice'").one(),
+    );
+    // Deriving the link reads the key; a missing or malformed binding would leave the job ready.
+    expect(notice.state).not.toBe("ready");
+    expect(notice).toEqual({ state: "accepted" });
   });
 });

@@ -19,13 +19,14 @@ export const APPROVAL_TTL_HOURS = 24;
 
 const KEY_LENGTH = 32;
 
-// The raw `UMAIL_NOTIFICATION_KEY` bytes, shared by the API and the store that sends notifications.
+// The HMAC key behind approval links, shared by the API and the store that sends notifications.
 export type NotificationKey = Uint8Array<ArrayBuffer>;
 
-export function notificationKeyFromSecret(secret: string): NotificationKey {
-  const decoded = Encoding.decodeBase64Url(secret);
+// The `NotificationKey` resource holds 32 random bytes as hex.
+export function notificationKeyFromHex(secret: string): NotificationKey {
+  const decoded = Encoding.decodeHex(secret);
   if (Result.isFailure(decoded) || decoded.success.byteLength !== KEY_LENGTH) {
-    throw new Error("UMAIL_NOTIFICATION_KEY is not valid base64url");
+    throw new Error("The notification key is not 32 bytes of hex");
   }
   return new Uint8Array(decoded.success);
 }

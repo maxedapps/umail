@@ -11,6 +11,9 @@ export const MailArchive = Cloudflare.R2.Bucket("MailArchive").pipe(Alchemy.Remo
 
 export const MailIndex = Cloudflare.Queues.Queue("MailIndex");
 
+// The HMAC key behind approval links: minted once, kept in alchemy's encrypted state.
+export const NotificationKey = Alchemy.Random("NotificationKey");
+
 export class ProvisionedOperator extends Context.Service<
   ProvisionedOperator,
   {

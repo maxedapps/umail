@@ -15,6 +15,7 @@ import {
 } from "@umail/api-contract";
 import type { CallToolResult, McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as Cause from "effect/Cause";
+import type * as Alchemy from "alchemy";
 import type * as Crypto from "effect/Crypto";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -91,7 +92,7 @@ export function registerTools(
   server: McpServer,
   deps: ApiDeps,
   principal: Principal,
-  services: Context.Context<Crypto.Crypto>,
+  services: Context.Context<Crypto.Crypto | Alchemy.RuntimeContext>,
 ) {
   const run = Effect.runPromiseWith(services);
 
@@ -103,7 +104,9 @@ export function registerTools(
       readonly input: Schema.ConstraintDecoder<In>;
       readonly output: Schema.ConstraintDecoder<Out>;
     },
-    handler: (input: In) => Effect.Effect<Out, { readonly _tag: string }, Crypto.Crypto>,
+    handler: (
+      input: In,
+    ) => Effect.Effect<Out, { readonly _tag: string }, Crypto.Crypto | Alchemy.RuntimeContext>,
   ) {
     server.registerTool(
       name,

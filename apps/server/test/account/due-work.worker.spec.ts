@@ -35,7 +35,7 @@ describe("account-store alarm", () => {
         htmlPolicy: new FakeMailHtmlPolicy(),
         applicationUrl: new URL("https://umail.example.com"),
         notification: {
-          key: crypto.getRandomValues(new Uint8Array(32)),
+          key: Effect.succeed(crypto.getRandomValues(new Uint8Array(32))),
           mailDomain: requireMailDomain(),
           approvalAdminEmail: requireExternal("operator@example.net"),
         },

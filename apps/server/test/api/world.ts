@@ -139,7 +139,7 @@ export async function createWorld(
         access,
         applicationUrl: APPLICATION_URL,
         operatorId: provision.operatorId,
-        notificationKey,
+        notificationKey: Effect.succeed(notificationKey),
       } satisfies ApiDeps;
       const handler = HttpEffect.toWebHandler(
         (yield* makeApiHttpEffect(deps)).pipe(Effect.provide(Alchemy.RuntimeContext.phantom)),
@@ -327,7 +327,7 @@ export async function runDueWorkPass(
         htmlPolicy: world.htmlPolicy,
         applicationUrl: APPLICATION_URL,
         notification: {
-          key: world.notificationKey,
+          key: Effect.succeed(world.notificationKey),
           mailDomain: MAIL_DOMAIN,
           approvalAdminEmail: world.operatorEmail,
         },

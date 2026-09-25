@@ -32,17 +32,10 @@ Edit `.env`. Replace example domains with your own; keep credentials private.
 | `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                                 |
 | `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox outside `UMAIL_DOMAIN`, since it approves sends; the only operator allowed to sign in. |
 | `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                            |
-| `UMAIL_NOTIFICATION_KEY`  | Deployment            | 32 random bytes encoded as base64url; keep stable across deployments.                                 |
 | `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                                          |
 | `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.            |
 | `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                                  |
 | `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                            |
-
-Generate the notification key and copy the output into `.env`:
-
-```sh
-node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
-```
 
 Set up deployment authentication:
 
@@ -50,7 +43,7 @@ Set up deployment authentication:
 pnpm exec alchemy profile edit
 ```
 
-Configure the `default` profile, select your account, and choose **OAuth → All Scopes**. Leave `CLOUDFLARE_API_TOKEN` commented out in `.env` and run `unset CLOUDFLARE_API_TOKEN` to remove any shell override. Alchemy generates the application signing secret.
+Configure the `default` profile, select your account, and choose **OAuth → All Scopes**. Leave `CLOUDFLARE_API_TOKEN` commented out in `.env` and run `unset CLOUDFLARE_API_TOKEN` to remove any shell override. Alchemy generates the application signing secret and the approval-link key.
 
 For automated/token deployment, set both Cloudflare variables instead. The deployment token needs Workers, D1, R2, Queues, Secrets Store, DNS/custom domains, zone Email Routing settings/rules, and Email Sending access. It is separate from `CF_EMAIL_ROUTING_TOKEN`. With `CI=true`, Alchemy uses token authentication and ignores profiles.
 

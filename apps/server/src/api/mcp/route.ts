@@ -1,6 +1,7 @@
 import { type McpPrincipal, type Principal } from "@umail/api-contract";
 import { createMcpHandler, McpServer, type AuthInfo } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
+import type * as Alchemy from "alchemy";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
@@ -77,7 +78,7 @@ const serveAuthenticatedMcp = Effect.fn("serveAuthenticatedMcp")(function* (
   access: OAuthAccess,
   request: Request,
 ) {
-  const services = yield* Effect.context<Crypto.Crypto>();
+  const services = yield* Effect.context<Crypto.Crypto | Alchemy.RuntimeContext>();
   const handler = createMcpHandler(
     () => {
       const server = new McpServer(agentMailMcpServerInfo(deps.applicationUrl.origin), {

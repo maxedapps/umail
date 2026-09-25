@@ -52,6 +52,7 @@ export async function evaluateApplication(stage: string) {
             get: () => undefined,
             providers: {},
           }),
+          Alchemy.RandomProvider(),
           Provider.succeed(EmailRoutingDomain, {
             read: () => Effect.die("Unexpected provider read"),
             reconcile: () => Effect.die("Unexpected cloud write"),
@@ -71,9 +72,6 @@ export async function evaluateApplication(stage: string) {
             ConfigProvider.fromUnknown({
               UMAIL_DOMAIN: "umail.example.com",
               UMAIL_OPERATOR_EMAIL: "operator@example.net",
-              UMAIL_NOTIFICATION_KEY: Encoding.encodeBase64Url(
-                Uint8Array.from({ length: 32 }, (_, index) => index),
-              ),
               CF_EMAIL_ROUTING_TOKEN: "unused-runtime-test-token",
             }),
           ),
@@ -92,6 +90,9 @@ export const testOutputs = {
   MailArchive: { bucketName: "archive-test", jurisdiction: "default" },
   AuthDb: { databaseId: "auth-test" },
   BetterAuthSecret: { text: Redacted.make("test-signing-secret-01234567890123456789") },
+  NotificationKey: {
+    text: Redacted.make(Encoding.encodeHex(Uint8Array.from({ length: 32 }, (_, index) => index))),
+  },
   MailRouting: { zoneId: "test-zone" },
   MailRoutingDomain: { zoneId: "test-zone" },
 };

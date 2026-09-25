@@ -176,7 +176,12 @@ Behaviour changes are limited to those the ADR lists:
 - `queue-handler.worker.spec.ts` passes.
 - **Manual, by the owner after deploy:** an approval-required send produces a notification whose link opens and decides.
 
-**Done:** no
+**Done:** yes, with deviations:
+
+- **Router built on the first request, not in the constructor.** The Worker constructor also runs at plan time, where `yield* AccountStore` is undefined, so it cannot build there. The build is wrapped in `Effect.cached` + `Effect.suspend`, and every later request in the isolate reuses the router.
+- **The notification key is read lazily.** `appRuntime.notificationKey` is an `Effect` over the `Random` accessor, because the binding exists only at runtime.
+- **Only the store's side of the round trip runs in workerd.** `tests/runtime-startup.worker.spec.ts` sends a queued approval notification through the real bundle's alarm with the bound `NotificationKey`, and it fails when the key is malformed. The API side cannot run there, because that bundle has no provisioned auth. It is covered by the Node round trip in `approval-flow.test.ts`, and both sides read the key from the one `appRuntime`.
+- **Email validation error.** An invalid `UMAIL_OPERATOR_EMAIL` now fails with the schema's `ConfigError` rather than the old "not a valid email address" text.
 
 ### 6. Server simplifications
 

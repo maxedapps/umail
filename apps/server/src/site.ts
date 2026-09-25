@@ -1,15 +1,12 @@
 import * as Alchemy from "alchemy";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import {
-  type ExternalMailAddress,
-  parseExternalMailAddress,
-} from "../../../packages/api-contract/src/mail-contact.ts";
-import {
-  type MailDomain,
-  parseMailDomain,
-} from "../../../packages/api-contract/src/mailbox-address.ts";
+import { ExternalMailAddress } from "../../../packages/api-contract/src/mail-contact.ts";
+import { MailDomain, parseMailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
 
 export const previewMailLocalParts = ["probe", "inbox"] as const;
 
@@ -26,33 +23,46 @@ export type StageSite =
       readonly testLocalParts: typeof previewMailLocalParts;
     };
 
-export const rootDomain: Config.Config<MailDomain> = Config.string("UMAIL_DOMAIN").pipe(
-  Config.mapOrFail((raw) => {
-    const parsed = parseMailDomain(raw);
-    if (parsed.kind === "invalid") {
-      return Effect.die(new Error("UMAIL_DOMAIN is not a valid mail domain."));
-    }
-    return Effect.succeed(parsed.domain);
-  }),
+// Trims and lower-cases the domain, as `parseMailDomain` does.
+const ConfiguredMailDomain = Schema.String.pipe(
+  Schema.decode(SchemaTransformation.trim().compose(SchemaTransformation.toLowerCase())),
+  Schema.decodeTo(MailDomain),
 );
+
+// Trims the address and lower-cases its domain, as `parseExternalMailAddress` does.
+const ConfiguredMailAddress = Schema.String.pipe(
+  Schema.decode(
+    SchemaTransformation.transform({
+      decode: (raw: string) => {
+        const trimmed = raw.trim();
+        const at = trimmed.lastIndexOf("@");
+        return at < 0 ? trimmed : `${trimmed.slice(0, at)}@${trimmed.slice(at + 1).toLowerCase()}`;
+      },
+      encode: (address: string) => address,
+    }),
+  ),
+  Schema.decodeTo(ExternalMailAddress),
+);
+
+export const rootDomain = Config.schema(ConfiguredMailDomain, "UMAIL_DOMAIN");
 
 // The operator inbox receives send approvals, so it must not be a mailbox umail hosts: a client that
 // can read it could approve its own sends. Every stage's mail domain is the root or a subdomain.
-export const operatorEmail: Config.Config<ExternalMailAddress> = Config.all([
+export const operatorEmail = Config.all([
   rootDomain,
-  Config.string("UMAIL_OPERATOR_EMAIL"),
+  Config.schema(ConfiguredMailAddress, "UMAIL_OPERATOR_EMAIL"),
 ]).pipe(
-  Config.mapOrFail(([root, raw]) => {
-    const parsed = parseExternalMailAddress(raw);
-    if (parsed.kind === "invalid") {
-      return Effect.die(new Error("UMAIL_OPERATOR_EMAIL is not a valid email address."));
-    }
-    if (parsed.domain === root || parsed.domain.endsWith(`.${root}`)) {
-      return Effect.die(
-        new Error(`UMAIL_OPERATOR_EMAIL must be an inbox outside UMAIL_DOMAIN (${root}).`),
-      );
-    }
-    return Effect.succeed(parsed.address);
+  Config.mapOrFail(([root, address]) => {
+    const domain = address.slice(address.lastIndexOf("@") + 1);
+    return domain === root || domain.endsWith(`.${root}`)
+      ? Effect.fail(
+          new Config.ConfigError(
+            new ConfigProvider.SourceError({
+              message: `UMAIL_OPERATOR_EMAIL must be an inbox outside UMAIL_DOMAIN (${root}).`,
+            }),
+          ),
+        )
+      : Effect.succeed(address);
   }),
 );
 

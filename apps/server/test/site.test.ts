@@ -112,7 +112,7 @@ describe("operatorEmail", () => {
 
   it("parses an inbox outside UMAIL_DOMAIN and rejects an invalid address", () => {
     expect(read(" Operator@Example.NET ")).toStrictEqual(Exit.succeed("Operator@example.net"));
-    expect(failureMessage(read("not-an-address"))).toContain("not a valid email address");
+    expect(failureMessage(read("not-an-address"))).toContain("ConfigError");
   });
 
   // An inbox umail hosts would let a client that reads it approve its own sends.

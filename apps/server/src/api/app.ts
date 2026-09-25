@@ -80,7 +80,7 @@ export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportEr
 ) {}
 
 export type MailArchiveReader = {
-  get(key: string): Effect.Effect<Uint8Array | null, ArchiveTransportError>;
+  get(key: string): Effect.Effect<Uint8Array | null, ArchiveTransportError, Alchemy.RuntimeContext>;
 };
 
 export type ApiDeps = {
@@ -93,7 +93,7 @@ export type ApiDeps = {
   readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
-  readonly notificationKey: NotificationKey;
+  readonly notificationKey: Effect.Effect<NotificationKey>;
 };
 
 const HttpPlatformStub = Layer.succeed(HttpPlatform.HttpPlatform, {

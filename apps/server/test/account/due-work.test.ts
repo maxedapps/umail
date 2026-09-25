@@ -333,7 +333,11 @@ async function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()
         sender,
         htmlPolicy,
         applicationUrl: new URL("https://umail.example.com"),
-        notification: { key, mailDomain: MAIL_DOMAIN, approvalAdminEmail: OPERATOR_EMAIL },
+        notification: {
+          key: Effect.succeed(key),
+          mailDomain: MAIL_DOMAIN,
+          approvalAdminEmail: OPERATOR_EMAIL,
+        },
         policyFor: (requester) => world.policyFor(requester),
         index: {
           send: (body) =>
