@@ -503,6 +503,7 @@ type UmailAuth = Effect.Success<DeferredUmailAuth["auth"]>;
 type RequiredUmailAuthApiMethod =
   | "getJwks"
   | "getSession"
+  | "signOut"
   | "deviceVerify"
   | "deviceApprove"
   | "deviceDeny";

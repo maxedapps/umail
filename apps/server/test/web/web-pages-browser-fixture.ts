@@ -110,6 +110,8 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
   }
   const previewResponse =
     previewResponsePromise === null ? null : yield* Effect.promise(() => previewResponsePromise);
+  // Read before the fixture is exercised: signing in navigates away from the page.
+  const scriptNonce = yield* Effect.promise(() => page.evaluate(pageOwnedScriptNonce));
   const focus = yield* exerciseFixture(page, visit);
   const buttons = yield* buttonObservations(page);
   const form = page.locator("form").first();
@@ -124,8 +126,7 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
   const clientId = yield* optionalText(page.locator("#client-id"));
   const scope = yield* optionalText(page.locator("#scope"));
   const redirectHost = yield* optionalText(page.locator("#redirect-host"));
-  const scriptNonce = yield* Effect.promise(() => page.evaluate(pageOwnedScriptNonce));
-  const heading = (yield* Effect.promise(() => page.locator("h1").textContent())) ?? "";
+  const heading = (yield* optionalText(page.locator("h1"))) ?? "";
   const title = yield* Effect.promise(() => page.title());
   const bodyText = yield* Effect.promise(() => page.locator("body").innerText());
   const hostileElementCount = yield* Effect.promise(() =>
@@ -198,7 +199,6 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
     authRequestBody: consentAuth?.authRequestBody ?? focus.authRequestBody,
     finalPath: new URL(page.url()).pathname,
-    secretValue: focus.secretValue,
     hostileElementCount,
     metadataText,
     metadataBidiControlCount: metadataText?.match(BIDI_CONTROL)?.length ?? 0,
@@ -284,7 +284,6 @@ type BrowserFocusObservation = {
   readonly authRequestPath: string | null;
   readonly authRequestMethod: string | null;
   readonly authRequestBody: string | null;
-  readonly secretValue: string | null;
 };
 
 const exerciseFixture = Effect.fn("exerciseFixture")(function* (
@@ -308,42 +307,11 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
     const authRequestBody = authRequest.postData();
     const authRequestPath = new URL(authRequest.url()).pathname;
     const authRequestMethod = authRequest.method();
-    if (visit.search === "next=/clients") {
-      yield* Effect.promise(() => page.waitForURL((url) => new URL(url).pathname === "/clients"));
-      return {
-        ...focus,
-        statusText: null,
-        authRequestPath,
-        authRequestMethod,
-        authRequestBody,
-        secretValue: null,
-      };
+    // An OAuth continuation is handed to Better Auth's redirect; every other sign-in navigates.
+    if (visit.search === undefined || !visit.search.includes("sig=")) {
+      yield* Effect.promise(() => page.waitForURL((url) => new URL(url).pathname !== "/login"));
     }
-    if (visit.search !== undefined && visit.search.includes("sig=")) {
-      return {
-        ...focus,
-        statusText: null,
-        authRequestPath,
-        authRequestMethod,
-        authRequestBody,
-        secretValue: null,
-      };
-    }
-    yield* Effect.promise(() =>
-      page.waitForFunction(
-        () =>
-          document.getElementById("status")?.textContent ===
-          "Signed in. Continue to the authorization request or use umail login.",
-      ),
-    );
-    return {
-      ...focus,
-      statusText: yield* optionalText(page.locator("#status")),
-      authRequestPath: new URL(authRequest.url()).pathname,
-      authRequestMethod: authRequest.method(),
-      authRequestBody: authRequest.postData(),
-      secretValue: yield* Effect.promise(() => secret.inputValue()),
-    };
+    return { ...focus, statusText: null, authRequestPath, authRequestMethod, authRequestBody };
   }
   if (visit.fixture === "consent") {
     const accept = page.getByRole("button", { name: "Allow access" });
@@ -355,7 +323,6 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
       authRequestPath: null,
       authRequestMethod: null,
       authRequestBody: null,
-      secretValue: null,
     };
   }
   if (visit.fixture === "pending") {
@@ -367,7 +334,6 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
       authRequestPath: null,
       authRequestMethod: null,
       authRequestBody: null,
-      secretValue: null,
     };
   }
   return {
@@ -380,7 +346,6 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
     authRequestPath: null,
     authRequestMethod: null,
     authRequestBody: null,
-    secretValue: null,
   };
 });
 
@@ -489,6 +454,11 @@ function shouldProxy(pathname: string): boolean {
   return (
     pathname.startsWith(`${FIXTURE_PREFIX}/`) ||
     pathname === "/login" ||
+    pathname === "/logout" ||
+    pathname === "/mail" ||
+    pathname.startsWith("/mail/") ||
+    pathname === "/mailboxes" ||
+    pathname.startsWith("/mailboxes/") ||
     pathname === "/consent" ||
     pathname === "/clients" ||
     pathname.startsWith("/clients/") ||

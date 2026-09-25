@@ -35,21 +35,12 @@ export function agentMailMcpServerInfo(origin: string) {
   };
 }
 
-export function isAgentMailIconPath(pathname: string): boolean {
-  return pathname === AGENTMAIL_ICON_PATH || pathname === "/favicon.png";
-}
-
-export function serveAgentMailIcon(method: string) {
-  if (method !== "GET") {
-    return HttpServerResponse.empty({ status: 405, headers: { allow: "GET" } });
-  }
-  return HttpServerResponse.uint8Array(AGENTMAIL_ICON_PNG, {
-    status: 200,
-    contentType: "image/png",
-    headers: {
-      "cache-control": "public, max-age=86400",
-      "x-content-type-options": "nosniff",
-      "access-control-allow-origin": "*",
-    },
-  });
-}
+export const agentMailIconResponse = HttpServerResponse.uint8Array(AGENTMAIL_ICON_PNG, {
+  status: 200,
+  contentType: "image/png",
+  headers: {
+    "cache-control": "public, max-age=86400",
+    "x-content-type-options": "nosniff",
+    "access-control-allow-origin": "*",
+  },
+});

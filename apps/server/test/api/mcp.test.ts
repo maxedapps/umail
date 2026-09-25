@@ -98,8 +98,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       );
       expect((yield* world.request("http://umail.test/favicon.png")).status).toBe(200);
+      // The icon is a GET route; the router answers any other method with 404.
       expect((yield* world.request("http://umail.test/icon.png", { method: "POST" })).status).toBe(
-        405,
+        404,
       );
     }),
   );

@@ -3,14 +3,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { HttpServerError } from "effect/unstable/http/HttpServerError";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
@@ -35,27 +31,21 @@ import { decideApproval, reviewApproval } from "./approval-http.ts";
 import { attachmentResponseHeaders, rfc6266ContentDisposition } from "./attachments.ts";
 import type { Access } from "../auth/access.ts";
 import type { UmailAuthInstance } from "../auth/options.ts";
-import { isOAuthRoute, serveOAuthRoute } from "../auth/oauth-routes.ts";
-import { isAgentMailIconPath, serveAgentMailIcon } from "./brand/identity.ts";
-import { blockedAuthSurfaceResponse } from "../auth/runtime-surface.ts";
 import { makePrincipalAuthorizationLive } from "../auth/verify.ts";
 import type { DestinationsClient } from "./destinations.ts";
 import { WebCrypto } from "../crypto.ts";
+import { webRoutes } from "../web/routes.ts";
 import {
   APPROVAL_PREVIEW_CSP,
   approvalHttpApiBody,
   bodyDocument,
   bodyFrameHeaders,
-  htmlResponse,
 } from "../web/document.ts";
 import {
   approvalGonePage,
   approvalNotFoundPage,
   approvalReviewPage,
 } from "../web/pages/approval.ts";
-import { consentPage } from "../web/pages/consent.ts";
-import { loginPage } from "../web/pages/login.ts";
-import { serveMcpRequest } from "./mcp/route.ts";
 import { approvalReviewUrl, type NotificationKey } from "../mail/notifications.ts";
 import {
   currentIso,
@@ -122,12 +112,15 @@ function apiLayers(deps: ApiDeps) {
   );
 }
 
-function makeRestHttpEffect(deps: ApiDeps) {
-  const apiLayer = Layer.merge(
+// One router serves the REST API, the public approval pages, and every other route; it is built per
+// request (see app.ts).
+export function makeApiHttpEffect(deps: ApiDeps) {
+  const appLayer = Layer.mergeAll(
     HttpApiBuilder.layer(UmailApi),
     HttpApiBuilder.layer(PublicApprovalApi),
+    webRoutes(deps),
   );
-  return HttpRouter.toHttpEffect(apiLayer.pipe(Layer.provide(apiLayers(deps)))).pipe(
+  return HttpRouter.toHttpEffect(appLayer.pipe(Layer.provide(apiLayers(deps)))).pipe(
     Effect.provide(
       makePrincipalAuthorizationLive({
         auth: deps.auth,
@@ -135,64 +128,9 @@ function makeRestHttpEffect(deps: ApiDeps) {
         resource: deps.applicationUrl.origin,
       }),
     ),
+    Effect.map((handler) => handler.pipe(Effect.provide(WebCrypto))),
   );
 }
-
-export function makeApiHttpEffect(deps: ApiDeps) {
-  return Effect.map(makeRestHttpEffect(deps), (restHandler) =>
-    Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      const pathname = new URL(request.url, "https://umail.invalid").pathname;
-      if (isAgentMailIconPath(pathname)) {
-        return serveAgentMailIcon(request.method);
-      }
-      if (pathname === "/mcp") {
-        return yield* serveMcpRequest(deps);
-      }
-      if (pathname === "/login" && request.method === "GET") {
-        return yield* htmlResponse(200, loginPage());
-      }
-      if (pathname === "/consent" && request.method === "GET") {
-        return yield* htmlResponse(200, consentPage());
-      }
-      if (isOAuthRoute(pathname)) {
-        return yield* serveOAuthManagement(deps);
-      }
-      if (
-        pathname === "/jwks" ||
-        pathname.startsWith("/api/auth/") ||
-        pathname.startsWith("/.well-known/")
-      ) {
-        return yield* serveBetterAuth(deps);
-      }
-      return yield* restHandler;
-    }).pipe(Effect.provide(WebCrypto)),
-  );
-}
-
-const serveBetterAuth = Effect.fn("serveBetterAuth")(function* (deps: ApiDeps) {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const webRequest = HttpServerRequest.toWebResult(request);
-  if (Result.isFailure(webRequest)) {
-    return yield* new HttpServerError({ reason: webRequest.failure });
-  }
-  const blocked = blockedAuthSurfaceResponse(webRequest.success);
-  if (blocked !== null) {
-    return HttpServerResponse.fromWeb(blocked);
-  }
-  const auth = yield* deps.auth.auth;
-  const response = yield* Effect.promise(() => auth.handler(webRequest.success));
-  return HttpServerResponse.fromWeb(response);
-});
-
-const serveOAuthManagement = Effect.fn("serveOAuthManagement")(function* (deps: ApiDeps) {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const webRequest = HttpServerRequest.toWebResult(request);
-  if (Result.isFailure(webRequest)) {
-    return yield* new HttpServerError({ reason: webRequest.failure });
-  }
-  return HttpServerResponse.fromWeb(yield* serveOAuthRoute(deps, webRequest.success));
-});
 
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>

@@ -1,7 +1,13 @@
 import type { PrincipalPolicy } from "@umail/api-contract";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
-import type { ClientGrant } from "../../auth/access.ts";
-import type { PageView } from "../document.ts";
+import type { ApiDeps } from "../../api/app.ts";
+import { policyFromForm, type ClientGrant } from "../../auth/access.ts";
+import { htmlResponse, redirect, type PageView } from "../document.ts";
+import { failurePage } from "../session.ts";
 import { bidiAddress, html, type Html } from "../html.ts";
 
 export function clientsPage(grants: ReadonlyArray<ClientGrant>): PageView {
@@ -101,3 +107,37 @@ function policyFields(clientId: string, policy: PrincipalPolicy | null): Html {
       ><input id="recipients-${id}" name="recipients" type="text" value="${recipients}" required />
     </div>`;
 }
+
+type ClientsDeps = Pick<ApiDeps, "access">;
+
+const ClientParams = Schema.Struct({ clientId: Schema.String });
+const ConsentParams = Schema.Struct({ consentId: Schema.String });
+const PolicyForm = Schema.Struct({
+  mailboxes: Schema.optionalKey(Schema.String),
+  sendMode: Schema.optionalKey(Schema.String),
+  canRead: Schema.optionalKey(Schema.String),
+  recipients: Schema.optionalKey(Schema.String),
+  preapproved: Schema.optionalKey(Schema.String),
+});
+
+export const clientsRoute = Effect.fn("clientsRoute")(function* (deps: ClientsDeps) {
+  return yield* htmlResponse(200, clientsPage(yield* deps.access.list()));
+});
+
+export const updateClientPolicyRoute = Effect.fn("updateClientPolicyRoute")(function* (
+  deps: ClientsDeps,
+) {
+  const { consentId } = yield* HttpRouter.schemaPathParams(ConsentParams);
+  const form = yield* HttpServerRequest.schemaBodyUrlParams(PolicyForm);
+  const policy = policyFromForm({ ...form, canRead: form.canRead !== undefined });
+  if (policy === null) return yield* failurePage(400, "Could not read that policy.");
+  const updated = yield* deps.access.setPolicy(consentId, policy);
+  if (!updated) return yield* failurePage(404, "That client has no consent to update.");
+  return redirect("/clients?updated=1");
+});
+
+export const revokeClientRoute = Effect.fn("revokeClientRoute")(function* (deps: ClientsDeps) {
+  const { clientId } = yield* HttpRouter.schemaPathParams(ClientParams);
+  yield* deps.access.revoke(clientId);
+  return redirect("/clients?revoked=1");
+});

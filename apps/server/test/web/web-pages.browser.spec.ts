@@ -31,10 +31,7 @@ describe("web pages in Chromium", () => {
         expect(login.controlHeight).toBeGreaterThanOrEqual(44);
         expect(login.authRequestPath).toBe("/api/auth/sign-in/email");
         expect(login.authRequestMethod).toBe("POST");
-        expect(login.statusText).toBe(
-          "Signed in. Continue to the authorization request or use umail login.",
-        );
-        expect(login.secretValue).toBe("");
+        expect(login.finalPath).toBe("/mail");
         expect(login.bodyText).not.toContain("First time here");
         expect(login.authRequestBody).not.toContain("oauth_query");
         expect(cspViolations(login)).toEqual([]);
@@ -133,23 +130,28 @@ describe("web pages in Chromium", () => {
     }),
   );
 
-  it.effect("keeps ordinary next returns out of oauth_query and ignores hostile destinations", () =>
+  it.effect("returns to console paths after sign-in and ignores hostile destinations", () =>
     Effect.gen(function* () {
-      const clients = yield* observe("login", {
-        width: 1280,
-        height: 900,
-        colorScheme: "light",
-        search: "next=/clients",
-      });
-      expect(clients.authRequestPath).toBe("/api/auth/sign-in/email");
-      expect(clients.authRequestBody).not.toContain("oauth_query");
-      expect(clients.authRequestBody).toContain("approver@example.com");
+      for (const next of ["/clients", "/mail/threads/x?open=m1", "/mailboxes/box-1", "/device"]) {
+        const returned = yield* observe("login", {
+          width: 1280,
+          height: 900,
+          colorScheme: "light",
+          search: new URLSearchParams({ next }).toString(),
+        });
+        expect(returned.authRequestPath).toBe("/api/auth/sign-in/email");
+        expect(returned.authRequestBody).not.toContain("oauth_query");
+        expect(returned.authRequestBody).toContain("approver@example.com");
+        expect(returned.finalPath).toBe(new URL(next, "https://umail.test").pathname);
+      }
 
       for (const next of [
         "https://evil.example/callback",
         "//evil.example",
         "/\\evil.example",
         "/login",
+        "/mailbox",
+        "/mail.evil",
       ]) {
         const hostile = yield* observe("login", {
           width: 1280,
@@ -157,10 +159,7 @@ describe("web pages in Chromium", () => {
           colorScheme: "light",
           search: new URLSearchParams({ next }).toString(),
         });
-        expect(hostile.finalPath).toContain("/login");
-        expect(hostile.statusText).toBe(
-          "Signed in. Continue to the authorization request or use umail login.",
-        );
+        expect(hostile.finalPath).toBe("/mail");
         expect(hostile.authRequestBody).not.toContain("oauth_query");
       }
     }),

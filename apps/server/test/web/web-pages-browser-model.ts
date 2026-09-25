@@ -56,7 +56,6 @@ export const WebPageBrowserObservation = Schema.Struct({
   authRequestMethod: Schema.NullOr(Schema.String),
   authRequestBody: Schema.NullOr(Schema.String),
   finalPath: Schema.String,
-  secretValue: Schema.NullOr(Schema.String),
   hostileElementCount: Schema.Finite,
   metadataText: Schema.NullOr(Schema.String),
   metadataBidiControlCount: Schema.Finite,

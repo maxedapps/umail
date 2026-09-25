@@ -52,7 +52,10 @@ function sameOriginReturnPath(next) {
     if (returned !== next) {
       return null;
     }
-    if (parsed.pathname !== "/clients" && parsed.pathname !== "/device") {
+    const allowed = ["/device", "/clients", "/mail", "/mailboxes"].some(
+      (path) => parsed.pathname === path || parsed.pathname.startsWith(path + "/"),
+    );
+    if (!allowed) {
       return null;
     }
     return returned;
@@ -124,12 +127,7 @@ form.addEventListener("submit", async (event) => {
       return;
     }
     const next = sameOriginReturnPath(new URLSearchParams(location.search).get("next"));
-    if (next !== null) {
-      location.assign(next);
-      return;
-    }
-    secretField.value = "";
-    showStatus("Signed in. Continue to the authorization request or use umail login.", "success");
+    location.assign(next ?? "/mail");
   } catch {
     showStatus("Could not sign in. Try again.", "error");
   } finally {

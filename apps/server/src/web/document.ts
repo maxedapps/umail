@@ -29,7 +29,7 @@ export type PageView = {
   readonly aside?: Html | undefined;
 };
 
-type PageStatus = 200 | 400 | 403 | 404 | 410 | 500;
+type PageStatus = 200 | 400 | 403 | 404 | 409 | 410 | 500;
 
 type KindPolicy = {
   readonly script: boolean;

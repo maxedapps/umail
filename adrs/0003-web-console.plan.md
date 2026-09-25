@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (task 1 done)
+- **Status:** In progress (tasks 1–2 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -218,7 +218,7 @@ Delete leftovers as each task finds them. After the last task, `rg "human-pages|
   - `POST /logout` clears the session, so the next `/mail` redirects.
 - **Browser spec:** login with `next=/mail/threads/x` lands there; with no `next` it lands on `/mail`; hostile `next` values are still ignored (existing cases, with the allowlist extended).
 
-**Done:** no.
+**Done:** yes. One planned-unchanged assertion changed: `POST /icon.png` now gets the router's 404 instead of the hand-written 405, because the icon routes are `GET` routes (`mcp.test.ts`). Routes are registered as one `HttpRouter.add` layer each: `HttpRouter.addAll` widened the handler's error and requirement types to `any`.
 
 ### 3. Operator principal for the browser session
 
