@@ -16,6 +16,13 @@ import { consentRoute } from "./pages/consent.ts";
 import { deviceDecisionRoute, deviceRoute } from "./pages/device.ts";
 import { loginPage } from "./pages/login.ts";
 import {
+  createMailboxRoute,
+  forwardingRoute,
+  mailboxesRoute,
+  mailboxRoute,
+  saveMailboxRoute,
+} from "./pages/mailboxes.ts";
+import {
   attachmentRoute,
   deleteThreadRoute,
   mailListRoute,
@@ -60,6 +67,11 @@ export function webRoutes(deps: ApiDeps) {
     HttpRouter.add("POST", "/clients/:clientId", operator(saveClientRoute)),
     HttpRouter.add("POST", "/clients/:clientId/revoke", operator(revokeClientRoute)),
     HttpRouter.add("GET", "/mail", operator(mailListRoute)),
+    HttpRouter.add("GET", "/mailboxes", operator(mailboxesRoute)),
+    HttpRouter.add("POST", "/mailboxes", operator(createMailboxRoute)),
+    HttpRouter.add("GET", "/mailboxes/:id", operator(mailboxRoute)),
+    HttpRouter.add("POST", "/mailboxes/:id", operator(saveMailboxRoute)),
+    HttpRouter.add("POST", "/mailboxes/:id/forwarding", operator(forwardingRoute)),
     HttpRouter.add("GET", "/mail/compose", operator(composeRoute)),
     HttpRouter.add("POST", "/mail/compose", operator(sendRoute)),
     HttpRouter.add("GET", "/mail/sent/:jobId", operator(sentRoute)),

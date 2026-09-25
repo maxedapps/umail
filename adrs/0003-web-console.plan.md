@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–7 done)
+- **Status:** In progress (tasks 1–8 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -420,7 +420,7 @@ The consent script shrinks to building the `mailboxes` string from the checked b
 - removing forwarding clears `forwardTo`;
 - a duplicate local part re-renders with an error.
 
-**Done:** no.
+**Done:** yes. "Stop forwarding" posts to the same `/mailboxes/:id/forwarding` route with `remove=1`. The verification state is known only when forwarding is set, so it is shown as the flash after that save.
 
 ### 9. Docs and final sweep
 
