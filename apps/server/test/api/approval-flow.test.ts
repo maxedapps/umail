@@ -201,7 +201,7 @@ describe("public approval flow", () => {
         expect(job?.state).toBe("rejected");
         expect(job?.failureClass).toBe("denied");
         const terminal = yield* world.request(queued.reviewUrl);
-        expect(yield* readText(terminal)).toContain("No provider call was made");
+        expect(yield* readText(terminal)).toContain("The email was not sent");
       }),
   );
 
@@ -288,7 +288,7 @@ describe("public approval flow", () => {
       });
       const plain = yield* queueApproval(yield* createWorld());
 
-      expect(remote.reviewHtml).toContain(`<div class="notice-panel" role="note"><p>${notice}`);
+      expect(remote.reviewHtml).toMatch(/role="note">\s*This message contains remote images\./u);
       expect(plain.reviewHtml).not.toContain(notice);
     }),
   );

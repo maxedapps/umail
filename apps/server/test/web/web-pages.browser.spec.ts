@@ -4,16 +4,16 @@ import * as Schema from "effect/Schema";
 import { commands } from "vitest/browser";
 
 import {
-  HumanPageBrowserObservation as HumanPageBrowserObservationSchema,
-  HumanPageBrowserVisit,
-  type HumanPageBrowserFixture,
-  type HumanPageBrowserObservation,
-} from "./human-pages-browser-model.ts";
+  WebPageBrowserObservation as WebPageBrowserObservationSchema,
+  WebPageBrowserVisit,
+  type WebPageBrowserFixture,
+  type WebPageBrowserObservation,
+} from "./web-pages-browser-model.ts";
 
 const PREVIEW_CSP =
   "default-src 'none'; sandbox; frame-ancestors 'self'; script-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; style-src-elem 'none'; style-src-attr 'unsafe-inline'";
 
-describe("human pages in Chromium", () => {
+describe("web pages in Chromium", () => {
   it.effect(
     "executes the nonce-authorized login and consent scripts through their first-party endpoints",
     () =>
@@ -118,7 +118,7 @@ describe("human pages in Chromium", () => {
     ["accepted", 200, "accepted by Cloudflare for delivery"],
     ["failed", 200, "Cloudflare rejected it (E_RECIPIENT_SUPPRESSED)"],
     ["queued", 200, "AgentMail is sending this email now"],
-    ["denied", 200, "No provider call was made"],
+    ["denied", 200, "The email was not sent"],
     ["expired", 410, "no longer available"],
     ["unknown", 404, "was not found"],
   ] as const)("renders %s as an action-free terminal page", ([fixture, status, expectedMeaning]) =>
@@ -223,26 +223,26 @@ type BrowserVisitOptions = {
 };
 
 const observe = Effect.fn("observe")(function* (
-  fixture: HumanPageBrowserFixture,
+  fixture: WebPageBrowserFixture,
   options: BrowserVisitOptions = { width: 1280, height: 900, colorScheme: "light" },
 ) {
   const visit =
     options.search === undefined
-      ? new HumanPageBrowserVisit({
+      ? new WebPageBrowserVisit({
           fixture,
           colorScheme: options.colorScheme,
           viewportWidth: options.width,
           viewportHeight: options.height,
         })
-      : new HumanPageBrowserVisit({
+      : new WebPageBrowserVisit({
           fixture,
           colorScheme: options.colorScheme,
           viewportWidth: options.width,
           viewportHeight: options.height,
           search: options.search,
         });
-  const raw = yield* Effect.promise(() => commands.observeHumanPage(visit));
-  return yield* Schema.decodeEffect(HumanPageBrowserObservationSchema)(raw);
+  const raw = yield* Effect.promise(() => commands.observeWebPage(visit));
+  return yield* Schema.decodeEffect(WebPageBrowserObservationSchema)(raw);
 });
 
 function cspScriptNonce(contentSecurityPolicy: string | null): string | null {
@@ -252,7 +252,7 @@ function cspScriptNonce(contentSecurityPolicy: string | null): string | null {
   return /script-src 'nonce-([0-9a-f]{32})'/u.exec(contentSecurityPolicy)?.[1] ?? null;
 }
 
-function cspViolations(observation: HumanPageBrowserObservation) {
+function cspViolations(observation: WebPageBrowserObservation) {
   return observation.consoleMessages.filter(isCspViolation);
 }
 

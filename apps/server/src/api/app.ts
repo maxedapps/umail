@@ -37,21 +37,24 @@ import type { Access } from "../auth/access.ts";
 import type { UmailAuthInstance } from "../auth/options.ts";
 import { isOAuthRoute, serveOAuthRoute } from "../auth/oauth-routes.ts";
 import { isAgentMailIconPath, serveAgentMailIcon } from "./brand/identity.ts";
-import { consentPageResponse, loginPageResponse } from "./human-pages/auth.ts";
 import { blockedAuthSurfaceResponse } from "../auth/runtime-surface.ts";
 import { makePrincipalAuthorizationLive } from "../auth/verify.ts";
 import type { DestinationsClient } from "./destinations.ts";
-import {
-  renderApprovalGonePage,
-  renderApprovalMessagePreview,
-  renderApprovalNotFoundPage,
-  renderApprovalReviewPage,
-} from "./human-pages/approvals.ts";
-import {
-  approvalMessagePreviewHttpApiResponse,
-  humanPageHttpApiResponse,
-} from "./human-pages/response.ts";
 import { WebCrypto } from "../crypto.ts";
+import {
+  APPROVAL_PREVIEW_CSP,
+  approvalHttpApiBody,
+  bodyDocument,
+  bodyFrameHeaders,
+  htmlResponse,
+} from "../web/document.ts";
+import {
+  approvalGonePage,
+  approvalNotFoundPage,
+  approvalReviewPage,
+} from "../web/pages/approval.ts";
+import { consentPage } from "../web/pages/consent.ts";
+import { loginPage } from "../web/pages/login.ts";
 import { serveMcpRequest } from "./mcp/route.ts";
 import { approvalReviewUrl, type NotificationKey } from "../mail/notifications.ts";
 import {
@@ -147,10 +150,10 @@ export function makeApiHttpEffect(deps: ApiDeps) {
         return yield* serveMcpRequest(deps);
       }
       if (pathname === "/login" && request.method === "GET") {
-        return loginPageResponse();
+        return yield* htmlResponse(200, loginPage());
       }
       if (pathname === "/consent" && request.method === "GET") {
-        return consentPageResponse();
+        return yield* htmlResponse(200, consentPage());
       }
       if (isOAuthRoute(pathname)) {
         return yield* serveOAuthManagement(deps);
@@ -392,13 +395,16 @@ const showApproval = Effect.fn("showApproval")(function* (deps: ApiDeps, rawToke
   const token = yield* decodeApprovalToken(rawToken);
   const outcome = yield* reviewApproval(deps, token);
   if (outcome.kind === "notFound") {
-    return yield* approvalNotFoundError();
+    return yield* approvalNotFound;
   }
   if (outcome.kind === "gone") {
-    return yield* approvalGoneError();
+    return yield* approvalGone;
   }
-  return humanPageHttpApiResponse(
-    renderApprovalReviewPage(token, outcome.approval, outcome.message, outcome.job),
+  const now = yield* currentIso;
+  return HttpApiSchema.withHeaders(
+    yield* approvalHttpApiBody(
+      approvalReviewPage(token, outcome.approval, outcome.message, outcome.job, now),
+    ),
   );
 });
 
@@ -409,14 +415,15 @@ const showApprovalMessagePreview = Effect.fn("showApprovalMessagePreview")(funct
   const token = yield* decodeApprovalToken(rawToken);
   const outcome = yield* reviewApproval(deps, token);
   if (outcome.kind === "notFound") {
-    return yield* approvalNotFoundError();
+    return yield* approvalNotFound;
   }
   if (outcome.kind === "gone" || outcome.message.htmlBody === null) {
-    return yield* approvalGoneError();
+    return yield* approvalGone;
   }
-  return approvalMessagePreviewHttpApiResponse(
-    renderApprovalMessagePreview(outcome.message.htmlBody),
-  );
+  return HttpApiSchema.withHeaders({
+    body: bodyDocument(outcome.message.htmlBody),
+    headers: bodyFrameHeaders(APPROVAL_PREVIEW_CSP),
+  });
 });
 
 const decideApprovalRoute = Effect.fn("decideApprovalRoute")(function* (
@@ -427,10 +434,10 @@ const decideApprovalRoute = Effect.fn("decideApprovalRoute")(function* (
   const token = yield* decodeApprovalToken(rawToken);
   const outcome = yield* decideApproval(deps, token, decision);
   if (outcome.kind === "notFound") {
-    return yield* approvalNotFoundError();
+    return yield* approvalNotFound;
   }
   if (outcome.kind === "gone") {
-    return yield* approvalGoneError();
+    return yield* approvalGone;
   }
   const headers = {
     location: approvalReviewUrl(deps.applicationUrl, token),
@@ -445,26 +452,16 @@ const decideApprovalRoute = Effect.fn("decideApprovalRoute")(function* (
 });
 
 function decodeApprovalToken(rawToken: string) {
-  return Schema.decodeEffect(ApprovalToken)(rawToken).pipe(
-    Effect.mapError(() => approvalNotFoundError()),
-  );
+  return Schema.decodeEffect(ApprovalToken)(rawToken).pipe(Effect.catch(() => approvalNotFound));
 }
 
-function approvalNotFoundError(): ApprovalPageNotFound {
-  const response = humanPageHttpApiResponse(renderApprovalNotFoundPage());
-  return new ApprovalPageNotFound({
-    html: response.body,
-    headers: response.headers,
-  });
-}
+const approvalNotFound = Effect.flatMap(approvalHttpApiBody(approvalNotFoundPage()), (page) =>
+  Effect.fail(new ApprovalPageNotFound({ html: page.body, headers: page.headers })),
+);
 
-function approvalGoneError(): ApprovalPageGone {
-  const response = humanPageHttpApiResponse(renderApprovalGonePage());
-  return new ApprovalPageGone({
-    html: response.body,
-    headers: response.headers,
-  });
-}
+const approvalGone = Effect.flatMap(approvalHttpApiBody(approvalGonePage()), (page) =>
+  Effect.fail(new ApprovalPageGone({ html: page.body, headers: page.headers })),
+);
 
 function serveAttachment(
   deps: ApiDeps,

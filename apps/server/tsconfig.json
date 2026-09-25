@@ -5,8 +5,8 @@
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "vitest.worker.config.ts"],
   "exclude": [
-    "test/api/human-pages.browser.spec.ts",
-    "test/api/human-pages-browser-fixture.ts",
+    "test/web/web-pages.browser.spec.ts",
+    "test/web/web-pages-browser-fixture.ts",
     "test/mail/html-semantics.browser.spec.ts"
   ]
 }

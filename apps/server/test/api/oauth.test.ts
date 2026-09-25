@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { verifyOAuthBearerToken } from "../../src/auth/oauth-resource.ts";
-import { asUmailBetterAuth, type UmailBetterAuth } from "../../src/auth/options.ts";
+import {
+  asUmailBetterAuth,
+  makeAuthOptions,
+  type UmailBetterAuth,
+} from "../../src/auth/options.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
 import {
   APPLICATION_ORIGIN,
@@ -14,6 +18,7 @@ import {
   operatorCookieHeaders,
   readJson,
   readText,
+  TEST_SITE,
   type World,
 } from "./world.ts";
 
@@ -506,6 +511,13 @@ describe("OAuth-only operator and client lifecycle", () => {
       expect(yield* listMcpPolicyRows(world)).toEqual([]);
     }),
   );
+
+  it("keeps the production Better Auth rate limiter enabled", () => {
+    const options = makeAuthOptions(TEST_SITE, "operator-id", { rateLimit: true });
+
+    expect(options.rateLimit).toEqual({ enabled: true, storage: "database" });
+    expect(options.basePath).toBe("/api/auth");
+  });
 
   it.effect(
     "isolates the DCR limit by Cloudflare client IP and ignores forwarded-header spoofing",

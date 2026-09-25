@@ -18,8 +18,8 @@ import type { Vite } from "vitest/node";
 
 import { randomId, webCrypto } from "../../src/crypto.ts";
 import { submitMessage } from "../../src/api/operations.ts";
-import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "./fakes.ts";
-import { registerMcpClient } from "./oauth-flow.ts";
+import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "../api/fakes.ts";
+import { registerMcpClient } from "../api/oauth-flow.ts";
 import {
   APPLICATION_ORIGIN,
   APPLICATION_URL,
@@ -30,14 +30,14 @@ import {
   runDueWorkPass,
   seedMailbox,
   type World,
-} from "./world.ts";
+} from "../api/world.ts";
 import {
-  HumanPageBrowserFixture,
-  HumanPageBrowserVisit,
-  type HumanPageBrowserObservation,
-} from "./human-pages-browser-model.ts";
+  WebPageBrowserFixture,
+  WebPageBrowserVisit,
+  type WebPageBrowserObservation,
+} from "./web-pages-browser-model.ts";
 
-const FIXTURE_PREFIX = "/__human-pages__";
+const FIXTURE_PREFIX = "/__web-pages__";
 const BIDI_CONTROL = /[؜‎‏‪-‮⁦-⁩]/gu;
 const NOW = "2026-08-28T10:00:00.000Z";
 // The "expired" approval is submitted a day early, so a pass at its deadline leaves the rest open.
@@ -49,31 +49,31 @@ const HOSTILE_FROM = "Sender ⁦<script data-hostile-from>name</script>";
 const HOSTILE_RECIPIENT = "Recipient ‪<svg data-hostile-recipient>name</svg>";
 const HOSTILE_REQUESTER = "Reviewer\r\n‮<script data-hostile-requester>requester</script>";
 
-type HumanPageFixtureRequest = Parameters<Vite.Connect.NextHandleFunction>[0];
-type HumanPageFixtureResponse = Parameters<Vite.Connect.NextHandleFunction>[1];
-type HumanPageFixtureNext = Parameters<Vite.Connect.NextHandleFunction>[2];
+type WebPageFixtureRequest = Parameters<Vite.Connect.NextHandleFunction>[0];
+type WebPageFixtureResponse = Parameters<Vite.Connect.NextHandleFunction>[1];
+type WebPageFixtureNext = Parameters<Vite.Connect.NextHandleFunction>[2];
 
 type PreparedBrowserWorld = {
   readonly world: World;
-  readonly paths: Record<HumanPageBrowserFixture, string>;
+  readonly paths: Record<WebPageBrowserFixture, string>;
 };
 
-export const humanPageBrowserCommands = {
-  observeHumanPage: defineBrowserCommand(
+export const webPageBrowserCommands = {
+  observeWebPage: defineBrowserCommand(
     (
       { context, page: runnerPage },
-      input: HumanPageBrowserVisit,
-    ): Promise<HumanPageBrowserObservation> =>
+      input: WebPageBrowserVisit,
+    ): Promise<WebPageBrowserObservation> =>
       Effect.runPromise(
-        observeHumanPage(context, runnerPage, Schema.decodeSync(HumanPageBrowserVisit)(input)),
+        observeWebPage(context, runnerPage, Schema.decodeSync(WebPageBrowserVisit)(input)),
       ),
   ),
 };
 
-const observeHumanPage = Effect.fn("observeHumanPage")(function* (
+const observeWebPage = Effect.fn("observeWebPage")(function* (
   context: BrowserContext,
   runnerPage: Page,
-  visit: HumanPageBrowserVisit,
+  visit: WebPageBrowserVisit,
 ) {
   const existingPages = new Set(context.pages());
   const page = yield* Effect.acquireRelease(
@@ -106,7 +106,7 @@ const observeHumanPage = Effect.fn("observeHumanPage")(function* (
     page.goto(fixtureUrl.href, { waitUntil: "load" }),
   );
   if (navigationResponse === null) {
-    return yield* Effect.die("Human-page browser fixture navigation returned no response.");
+    return yield* Effect.die("Web-page browser fixture navigation returned no response.");
   }
   const previewResponse =
     previewResponsePromise === null ? null : yield* Effect.promise(() => previewResponsePromise);
@@ -118,9 +118,9 @@ const observeHumanPage = Effect.fn("observeHumanPage")(function* (
     formCount === 0 ? null : yield* Effect.promise(() => form.getAttribute("method"));
   const formAction =
     formCount === 0 ? null : yield* Effect.promise(() => form.getAttribute("action"));
-  const metadataText = yield* optionalText(page.locator(".message-details"));
-  const messageBodyBox = yield* optionalBoundingBox(page.locator(".message-preview"));
-  const decisionBox = yield* optionalBoundingBox(page.locator(".decision-panel"));
+  const metadataText = yield* optionalText(page.locator(".meta"));
+  const messageBodyBox = yield* optionalBoundingBox(page.locator("#message-body"));
+  const decisionBox = yield* optionalBoundingBox(page.locator("#decision"));
   const clientId = yield* optionalText(page.locator("#client-id"));
   const scope = yield* optionalText(page.locator("#scope"));
   const redirectHost = yield* optionalText(page.locator("#redirect-host"));
@@ -167,10 +167,10 @@ const observeHumanPage = Effect.fn("observeHumanPage")(function* (
   }
 
   const automaticIsolationCount = yield* Effect.promise(() =>
-    page.locator('.message-details bdi[dir="auto"]').count(),
+    page.locator('.meta bdi[dir="auto"]').count(),
   );
   const addressIsolationCount = yield* Effect.promise(() =>
-    page.locator('.message-details bdi[dir="ltr"]').count(),
+    page.locator('.meta bdi[dir="ltr"]').count(),
   );
   return {
     status: navigationResponse.status(),
@@ -232,9 +232,9 @@ const closeNewPages = Effect.fn("closeNewPages")(function* (
   }
 });
 
-export function humanPageBrowserFixture(): Plugin {
+export function webPageBrowserFixture(): Plugin {
   return {
-    name: "human-page-browser-fixture",
+    name: "web-page-browser-fixture",
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         void Effect.runPromise(serveFixtureRequest(request, response, next));
@@ -244,9 +244,9 @@ export function humanPageBrowserFixture(): Plugin {
 }
 
 const serveFixtureRequest = Effect.fn("serveFixtureRequest")(function* (
-  request: HumanPageFixtureRequest,
-  response: HumanPageFixtureResponse,
-  next: HumanPageFixtureNext,
+  request: WebPageFixtureRequest,
+  response: WebPageFixtureResponse,
+  next: WebPageFixtureNext,
 ) {
   const url = requestUrl(request);
   if (url === null) {
@@ -289,11 +289,11 @@ type BrowserFocusObservation = {
 
 const exerciseFixture = Effect.fn("exerciseFixture")(function* (
   page: Page,
-  visit: HumanPageBrowserVisit,
+  visit: WebPageBrowserVisit,
 ): Effect.fn.Return<BrowserFocusObservation> {
   if (visit.fixture === "login") {
-    const email = page.getByLabel("Operator email");
-    const secret = page.getByLabel("Operator secret");
+    const email = page.getByLabel("Email");
+    const secret = page.getByLabel("Password");
     yield* Effect.promise(() => email.focus());
     yield* Effect.promise(() => page.keyboard.press("Tab"));
     const focus = yield* focusedControl(page);
@@ -405,7 +405,7 @@ const submitConsent = Effect.fn("submitConsent")(function* (page: Page) {
       page.waitForURL(
         (url) => {
           const path = new URL(url).pathname;
-          return path !== "/consent" && !path.startsWith("/__human-pages__/");
+          return path !== "/consent" && !path.startsWith("/__web-pages__/");
         },
         { timeout: 2000, waitUntil: "commit" },
       ),
@@ -470,18 +470,18 @@ const optionalBoundingBox = Effect.fn("optionalBoundingBox")(function* (locator:
     : yield* Effect.promise(() => locator.first().boundingBox());
 });
 
-function fixturePath(fixture: HumanPageBrowserFixture, search: string | undefined): string {
+function fixturePath(fixture: WebPageBrowserFixture, search: string | undefined): string {
   const path = `${FIXTURE_PREFIX}/${fixture}`;
   if (search === undefined || search.length === 0) return path;
   const query = search.startsWith("?") ? search.slice(1) : search;
   return `${path}?${query}`;
 }
 
-function fixtureFromPath(pathname: string): HumanPageBrowserFixture | null {
+function fixtureFromPath(pathname: string): WebPageBrowserFixture | null {
   const value = pathname.startsWith(`${FIXTURE_PREFIX}/`)
     ? pathname.slice(FIXTURE_PREFIX.length + 1)
     : "";
-  const decoded = Schema.decodeUnknownResult(HumanPageBrowserFixture)(value);
+  const decoded = Schema.decodeUnknownResult(WebPageBrowserFixture)(value);
   return decoded._tag === "Failure" ? null : decoded.success;
 }
 
@@ -525,7 +525,7 @@ function worldUrl(url: URL): URL {
 
 // Rewrites the browser's request for the world: its origin, referer and session cookie.
 const worldRequestInit = Effect.fn("worldRequestInit")(function* (
-  request: HumanPageFixtureRequest,
+  request: WebPageFixtureRequest,
   url: URL,
   world: World,
 ) {
@@ -564,13 +564,13 @@ const worldRequestInit = Effect.fn("worldRequestInit")(function* (
   return init;
 });
 
-function requestUrl(request: HumanPageFixtureRequest): URL | null {
+function requestUrl(request: WebPageFixtureRequest): URL | null {
   const host = request.headers.host;
   return host === undefined ? null : new URL(request.url ?? "/", `http://${host}`);
 }
 
 const writeWorldResponse = Effect.fn("writeWorldResponse")(function* (
-  response: HumanPageFixtureResponse,
+  response: WebPageFixtureResponse,
   webResponse: Response,
   browserOrigin: string,
 ) {
@@ -660,7 +660,7 @@ function rewriteSetCookie(cookie: string): string {
   return parts.join("; ");
 }
 
-function writeStatus(response: HumanPageFixtureResponse, status: number): void {
+function writeStatus(response: WebPageFixtureResponse, status: number): void {
   response.statusCode = status;
   response.end();
 }

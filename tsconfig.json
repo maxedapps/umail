@@ -45,8 +45,8 @@
     "apps/server/test/**/*.worker.spec.ts",
     "apps/server/test/**/worker-host.ts",
     "apps/server/test/account/harness.ts",
-    "apps/server/test/api/human-pages.browser.spec.ts",
+    "apps/server/test/web/web-pages.browser.spec.ts",
     "apps/server/test/mail/html-semantics.browser.spec.ts",
-    "apps/server/test/api/human-pages-browser-fixture.ts"
+    "apps/server/test/web/web-pages-browser-fixture.ts"
   ]
 }

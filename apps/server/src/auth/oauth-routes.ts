@@ -2,14 +2,12 @@ import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { productPageTitle } from "../api/brand/identity.ts";
-import { renderHumanPageNotice } from "../api/human-pages/notices.ts";
-import {
-  renderClientsPage,
-  renderDeviceAuthorizationPage,
-  renderDeviceDecisionPage,
-} from "../api/human-pages/oauth-management.ts";
-import { humanPageHeaders } from "../api/human-pages/response.ts";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+
+import { htmlResponse, type PageView } from "../web/document.ts";
+import { clientsPage } from "../web/pages/clients.ts";
+import { deviceAuthorizationPage, deviceDecisionPage } from "../web/pages/device.ts";
+import { noticePage } from "../web/pages/notice.ts";
 import { policyFromForm, type Access } from "./access.ts";
 import { type UmailAuthInstance } from "./options.ts";
 import { cookieMutationAllowed } from "./runtime-surface.ts";
@@ -59,7 +57,7 @@ export const serveOAuthRoute = Effect.fn("serveOAuthRoute")(function* (
     return new Response(null, { status: 405 });
   }
   if (mutation && !cookieMutationAllowed(request, deps.applicationUrl.origin)) {
-    return humanError("Forbidden.", 403);
+    return yield* humanError("Forbidden.", 403);
   }
   const session = yield* operatorSession(deps, request);
   if (session.kind !== "authorized") return session.response;
@@ -77,7 +75,7 @@ const operatorSession = Effect.fn("operatorSession")(function* (
     return { kind: "redirect", response: loginRedirect(request) } as const;
   }
   if (session.user.id !== deps.operatorId) {
-    return { kind: "forbidden", response: humanError("Forbidden.", 403) } as const;
+    return { kind: "forbidden", response: yield* humanError("Forbidden.", 403) } as const;
   }
   return { kind: "authorized" } as const;
 });
@@ -88,7 +86,7 @@ const deviceRoute = Effect.fn("deviceRoute")(function* (
 ) {
   const userCode = new URL(request.url).searchParams.get("user_code");
   if (userCode === null || userCode.length === 0) {
-    return humanError("Enter the complete verification URL shown by the CLI.", 400);
+    return yield* humanError("Enter the complete verification URL shown by the CLI.", 400);
   }
   const auth = yield* deps.auth.auth;
   const resource = deps.applicationUrl.origin;
@@ -96,9 +94,9 @@ const deviceRoute = Effect.fn("deviceRoute")(function* (
     auth.api.deviceVerify({ headers: request.headers, query: { user_code: userCode } }),
   ).pipe(
     Effect.filterOrFail((verified) => deviceRequestAdmitted(verified, resource)),
-    Effect.map((verified) =>
+    Effect.flatMap((verified) =>
       humanResponse(
-        renderDeviceAuthorizationPage({
+        deviceAuthorizationPage({
           userCode: verified.user_code,
           clientId: verified.client_id,
           scope: verified.scope ?? "",
@@ -106,7 +104,7 @@ const deviceRoute = Effect.fn("deviceRoute")(function* (
         }),
       ),
     ),
-    Effect.orElseSucceed(() =>
+    Effect.catch(() =>
       humanError("This device code is invalid, expired, or requests unsupported access.", 400),
     ),
   );
@@ -133,16 +131,16 @@ const deviceDecisionRoute = Effect.fn("deviceDecisionRoute")(function* (
         ? auth.api.deviceApprove({ headers: request.headers, body: { userCode: form.userCode } })
         : auth.api.deviceDeny({ headers: request.headers, body: { userCode: form.userCode } }),
     );
-    return humanResponse(renderDeviceDecisionPage(decision));
+    return yield* humanResponse(deviceDecisionPage(decision));
   }).pipe(
-    Effect.orElseSucceed(() =>
+    Effect.catch(() =>
       humanError("This device code is invalid, expired, or already processed.", 400),
     ),
   );
 });
 
 const clientsRoute = Effect.fn("clientsRoute")(function* (deps: OAuthRouteDependencies) {
-  return humanResponse(renderClientsPage(yield* deps.access.list()));
+  return yield* humanResponse(clientsPage(yield* deps.access.list()));
 });
 
 const updateClientPolicyRoute = Effect.fn("updateClientPolicyRoute")(function* (
@@ -158,9 +156,9 @@ const updateClientPolicyRoute = Effect.fn("updateClientPolicyRoute")(function* (
     recipients: form.get("recipients"),
     preapproved: form.get("preapproved"),
   });
-  if (policy === null) return humanError("Could not read that policy.", 400);
+  if (policy === null) return yield* humanError("Could not read that policy.", 400);
   const updated = yield* deps.access.setPolicy(consentId, policy);
-  if (!updated) return humanError("That client has no consent to update.", 404);
+  if (!updated) return yield* humanError("That client has no consent to update.", 404);
   return redirectResponse("/clients?updated=1");
 });
 
@@ -201,19 +199,16 @@ function redirectResponse(location: string): Response {
   });
 }
 
-function humanResponse(page: ReturnType<typeof renderClientsPage>): Response {
-  return new Response(page.html, { status: page.status, headers: humanPageHeaders(page) });
+function humanResponse(view: PageView) {
+  return Effect.map(htmlResponse(200, view), HttpServerResponse.toWeb);
 }
 
-function humanError(message: string, status: 400 | 403 | 404): Response {
-  const page = renderHumanPageNotice({
-    status,
-    title: productPageTitle("OAuth request failed"),
-    eyebrow: "OAuth",
+function humanError(message: string, status: 400 | 403 | 404) {
+  const view = noticePage({
+    title: "Request failed",
     heading: "The request could not be completed",
-    description: "AgentMail stopped before granting or changing access.",
     message,
     tone: "error",
   });
-  return new Response(page.html, { status, headers: humanPageHeaders(page) });
+  return Effect.map(htmlResponse(status, view), HttpServerResponse.toWeb);
 }

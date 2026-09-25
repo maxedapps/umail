@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-export const HumanPageBrowserFixture = Schema.Literals([
+export const WebPageBrowserFixture = Schema.Literals([
   "login",
   "consent",
   "pending",
@@ -11,16 +11,14 @@ export const HumanPageBrowserFixture = Schema.Literals([
   "expired",
   "unknown",
 ]);
-export type HumanPageBrowserFixture = typeof HumanPageBrowserFixture.Type;
+export type WebPageBrowserFixture = typeof WebPageBrowserFixture.Type;
 
-export const HumanPageBrowserColorScheme = Schema.Literals(["light", "dark"]);
-export type HumanPageBrowserColorScheme = typeof HumanPageBrowserColorScheme.Type;
+export const WebPageBrowserColorScheme = Schema.Literals(["light", "dark"]);
+export type WebPageBrowserColorScheme = typeof WebPageBrowserColorScheme.Type;
 
-export class HumanPageBrowserVisit extends Schema.Class<HumanPageBrowserVisit>(
-  "HumanPageBrowserVisit",
-)({
-  fixture: HumanPageBrowserFixture,
-  colorScheme: HumanPageBrowserColorScheme,
+export class WebPageBrowserVisit extends Schema.Class<WebPageBrowserVisit>("WebPageBrowserVisit")({
+  fixture: WebPageBrowserFixture,
+  colorScheme: WebPageBrowserColorScheme,
   viewportWidth: Schema.Finite,
   viewportHeight: Schema.Finite,
   search: Schema.optionalKey(Schema.String),
@@ -32,7 +30,7 @@ const BrowserFormButtonObservation = Schema.Struct({
   formAction: Schema.String,
 });
 
-export const HumanPageBrowserObservation = Schema.Struct({
+export const WebPageBrowserObservation = Schema.Struct({
   status: Schema.Finite,
   contentType: Schema.NullOr(Schema.String),
   contentSecurityPolicy: Schema.NullOr(Schema.String),
@@ -80,10 +78,10 @@ export const HumanPageBrowserObservation = Schema.Struct({
   openedPageCount: Schema.Finite,
   consoleMessages: Schema.Array(Schema.String),
 });
-export type HumanPageBrowserObservation = typeof HumanPageBrowserObservation.Type;
+export type WebPageBrowserObservation = typeof WebPageBrowserObservation.Type;
 
 declare module "vitest/browser" {
   interface BrowserCommands {
-    observeHumanPage(visit: HumanPageBrowserVisit): Promise<HumanPageBrowserObservation>;
+    observeWebPage(visit: WebPageBrowserVisit): Promise<WebPageBrowserObservation>;
   }
 }
