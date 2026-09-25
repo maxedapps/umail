@@ -307,9 +307,11 @@ export const threadRoute = Effect.fn("threadRoute")(function* (
   principal: Principal,
 ) {
   const params = yield* HttpRouter.schemaParams(ThreadParams);
-  let thread = yield* getThread(deps, principal, params.threadId);
+  // The store's largest page, so the newest message of any but a huge conversation is on it.
+  let thread = yield* getThread(deps, principal, params.threadId, { limit: 200 });
   if (thread.messages.some((message) => message.direction === "inbound" && !message.isRead)) {
-    thread = yield* setThreadReadState(deps, principal, params.threadId, true);
+    yield* setThreadReadState(deps, principal, params.threadId, true);
+    thread = yield* getThread(deps, principal, params.threadId, { limit: 200 });
   }
   const openId = params.open ?? thread.messages.at(-1)?.id;
   if (openId === undefined || !thread.messages.some((message) => message.id === openId)) {

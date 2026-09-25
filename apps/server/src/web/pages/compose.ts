@@ -337,8 +337,20 @@ export const sendRoute = Effect.fn("sendRoute")(function* (deps: ApiDeps, princi
           text: state.text,
         },
   );
-  const job = yield* submitMessage(deps, principal, payload);
-  return redirect(`/mail/sent/${encodeURIComponent(job.jobId)}`);
+  // The store can still refuse the send, e.g. from a mailbox deactivated since; keep what was typed.
+  return yield* submitMessage(deps, principal, payload).pipe(
+    Effect.map((job) => redirect(`/mail/sent/${encodeURIComponent(job.jobId)}`)),
+    Effect.catchTag("ApiProblem", (problem) =>
+      Effect.flatMap(listSendingIdentities(deps, principal), (identities) =>
+        Effect.flatMap(composeAside(deps), (aside) =>
+          htmlResponse(400, {
+            ...composePage(identities, aside, state, reply?.context ?? null, {}),
+            flash: { tone: "error", message: `Nothing was sent. ${problem.message}` },
+          }),
+        ),
+      ),
+    ),
+  );
 });
 
 const JobParams = Schema.Struct({ jobId: Schema.String });

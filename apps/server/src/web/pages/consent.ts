@@ -6,7 +6,7 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import type { ApiDeps } from "../../api/app.ts";
 import { listAddresses } from "../../api/operations.ts";
 import { htmlResponse, type PageView } from "../document.ts";
-import { bidiAddress, bidiText, html } from "../html.ts";
+import { bidiAddress, bidiText, displayText, html } from "../html.ts";
 import { accessFieldsets, policyFormState } from "./clients.ts";
 import { AUTH_CONTINUATION_SCRIPT } from "./login.ts";
 
@@ -94,7 +94,7 @@ export function consentPage(view: ConsentView, addresses: ReadonlyArray<Address>
   return {
     kind: "auth",
     title: "Authorize mailbox access",
-    heading: `Allow ${view.clientName ?? "this client"} to use AgentMail?`,
+    heading: `Allow ${view.clientName === null ? "this client" : displayText(view.clientName)} to use AgentMail?`,
     lede: "Choose what it may do. You can change this later under Clients.",
     main: html`<form class="stack" id="consent-form" aria-busy="false">
       <dl class="meta">

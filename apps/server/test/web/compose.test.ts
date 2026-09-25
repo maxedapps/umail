@@ -96,6 +96,28 @@ describe("compose pages", () => {
     }),
   );
 
+  it.effect("keeps the typed reply when the store refuses the send", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      yield* seedInboundMessage(world, inbox.id, { id: "m-parent", subject: "Plans" });
+      yield* world.account.patchAddress(inbox.id, { active: false }, "2026-01-03T00:00:00.000Z");
+
+      const response = yield* send(world, {
+        requestId: REQUEST_ID,
+        reply: "m-parent",
+        mode: "reply",
+        subject: "Re: Plans",
+        text: "Typed reply",
+      });
+      const body = yield* readText(response);
+
+      expect(response.status).toBe(400);
+      expect(body).toContain("Nothing was sent. The from address is unknown or inactive.");
+      expect(body).toContain(">Typed reply</textarea>");
+    }),
+  );
+
   it.effect("replies to all from the parent's mailbox with the recipients MCP would use", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();

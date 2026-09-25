@@ -2,7 +2,7 @@
 
 Self-hosted email for one operator on Cloudflare. Receive, archive, forward, and send mail through a CLI or an AI assistant connected over remote MCP.
 
-There is no IMAP/SMTP server or browser mailbox. The browser handles login, client permissions, and send approvals. Inbound attachments can be downloaded; outbound messages support text/HTML bodies without attachments.
+There is no IMAP/SMTP server. The browser handles login, client permissions and send approvals, and a small [web console](#web-console) reads and sends mail. Inbound attachments can be downloaded; outbound messages support text/HTML bodies without attachments.
 
 Limits include 20 MiB raw inbound mail, 50 inbound attachments, and 50 recipients per outgoing message.
 
@@ -56,7 +56,7 @@ pnpm exec alchemy deploy --stage prod --profile default
 
 Review the plan before confirming. The first deployment may also prompt to create Alchemy's shared state store. For a named profile, replace `default` consistently.
 
-Open `https://mail.example.com/login` and sign in. Check Cloudflare's domain/DNS readiness if the hostname is unavailable. **Create a mailbox next:** production deployment alone creates no inbox.
+Open `https://mail.example.com/login` and sign in; you land on `/mail`. Check Cloudflare's domain/DNS readiness if the hostname is unavailable. **Create a mailbox next,** on `/mailboxes` or with the CLI below: production deployment alone creates no inbox.
 
 ## First mailbox
 
@@ -89,6 +89,16 @@ To forward a mailbox's inbound mail, run `pnpm umail forwarding set --address-id
 Run `pnpm umail --help` or `pnpm umail <command> --help` for more commands. Credentials live in `$XDG_STATE_HOME/umail/oauth.json` (default `~/.local/state/umail/oauth.json`); keep that file private. `pnpm umail logout` revokes the CLI's access on the server first and removes the local credentials only if that worked.
 
 For another machine, run `pnpm build:clients`, copy `dist/clients/umail.mjs`, and use `node umail.mjs login` with Node.js 22.18+ and `UMAIL_URL` exported.
+
+## Web console
+
+After signing in at `/login`, the browser is a second operator surface next to the CLI:
+
+- **Mail** (`/mail`): read conversations across all mailboxes or one, open messages, download attachments, mark conversations read or unread, delete them, and write new messages, replies and reply-alls. Opening a conversation marks it read. Each send shows its status.
+- **Mailboxes** (`/mailboxes`): create mailboxes, rename or pause them, and set or stop forwarding.
+- **Clients** (`/clients`): see every client with access, change what it may do, or revoke it.
+
+It is not an everyday mail client: there is no search, no drafts, no attachments or HTML on outgoing mail, and no live updates. HTML bodies render in a sandboxed frame that loads no images, remote or inline; inline images are listed as attachments. Send approvals still happen from the approval email's link.
 
 ## Connect an AI assistant
 

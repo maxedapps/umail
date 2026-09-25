@@ -74,6 +74,7 @@ export const pageNonce = Effect.gen(function* () {
 export function renderDocument(view: PageView, nonce: string): string {
   const policy = KIND_POLICIES[view.kind];
   const script = view.kind === "console" ? TIME_SCRIPT : view.script;
+  const scriptHtml = policy.script && script !== undefined ? scriptElement(nonce, script) : null;
   const head = html`<div class="page-head">
       <h1>${view.heading}</h1>
       ${view.lede === undefined ? null : html`<p class="lede">${view.lede}</p>`}
@@ -104,24 +105,26 @@ export function renderDocument(view: PageView, nonce: string): string {
               <main>${head}</main>
             </div>
           </div>
+          ${scriptHtml}
         </body>`
       : html`<body class="focus">
           <header><span class="wordmark">${PRODUCT_NAME}</span></header>
           <main>${head}</main>
+          ${scriptHtml}
         </body>`;
   return htmlText(html`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow,noarchive">
-  <title>${productPageTitle(view.title)}</title>
-  <style nonce="${nonce}">${trustedHtml(styles)}</style>
-</head>
-${body}
-  ${policy.script && script !== undefined ? scriptElement(nonce, script) : null}
-</body>
-</html>`);
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="robots" content="noindex,nofollow,noarchive" />
+        <title>${productPageTitle(view.title)}</title>
+        <style nonce="${nonce}">
+          ${trustedHtml(styles)}
+        </style>
+      </head>
+      ${body}
+    </html>`);
 }
 
 // A plain template: Oxc rewrites a tagged template that contains a closing script tag into a helper

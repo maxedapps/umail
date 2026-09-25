@@ -137,6 +137,24 @@ describe("clients pages", () => {
     }),
   );
 
+  it.effect("projects a client's self-chosen name before showing it", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const client = yield* registerMcpClient(world, { label: "\u202eedoC edualC\nOfficial" });
+      yield* issueMcpAccessToken(world, client);
+
+      for (const path of [
+        `/consent?client_id=${encodeURIComponent(client.clientId)}`,
+        "/clients",
+        `/clients/${encodeURIComponent(client.clientId)}`,
+      ]) {
+        const { body } = yield* page(world, path);
+        expect(body, path).toContain("edoC edualC ⏎ Official");
+        expect(body, path).not.toContain("\u202e");
+      }
+    }),
+  );
+
   it.effect("renders consent with the client's name, the scope in words and real mailboxes", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();

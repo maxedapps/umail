@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–8 done)
+- **Status:** Done (2026-09-25). Awaiting the owner's manual QA after deploy.
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -435,7 +435,11 @@ The consent script shrinks to building the `mailboxes` string from the checked b
 
 **Verify:** `pnpm fmt` on the touched packages, `pnpm lint`, `pnpm typecheck` and `pnpm test`.
 
-**Done:** no.
+**Done:** yes. Notes:
+
+- The `rg` sweep finds the old names only in the ADRs, which record history. No `style="` attributes in `web/`, and `pnpm lint` reports no unused exports.
+- The full-diff review found two low-severity defects, both fixed here: the thread page now reads up to the store's maximum page (200 messages), so a long conversation still opens its newest message; and a send the store refuses (for example from a mailbox deactivated since) re-renders the compose form with the typed text and the reason. It also moved the page script inside `<body>`: the formatter had closed `<body>` inside the layout templates. A final check found that an MCP client's self-chosen name (dynamic registration needs no sign-in) reached the consent heading, the clients list and the client page without the bidi and control-character projection; it now goes through `displayText`/`bidiText` like mail metadata.
+- `pnpm test`: the root, worker and browser suites pass. In the server's worker suite one account-store spec timed out at 5 s on each full run (`queries` or `receipts`, a different one each time). Both pass when run alone, and this branch changes nothing under `src/account` or `test/account`, so this is load flakiness on this machine.
 
 ## Security invariants (checked in tasks 1, 5, 6 and 7)
 

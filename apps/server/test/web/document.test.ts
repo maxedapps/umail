@@ -66,6 +66,8 @@ describe("document renderer", () => {
       }
       expect(body).toContain(`<style nonce="${nonce}">`);
       expect(body.includes(`<script nonce="${nonce}">`)).toBe(script === "nonce");
+      expect(body.match(/<\/body>/gu)).toHaveLength(1);
+      if (script === "nonce") expect(body.indexOf("<script")).toBeLessThan(body.indexOf("</body>"));
       expect(body).toContain("<title>Page &lt;title&gt; · AgentMail</title>");
     }),
   );

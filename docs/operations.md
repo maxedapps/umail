@@ -25,6 +25,7 @@ Access lives in the auth database, next to the OAuth grants.
 
 - **MCP clients** get access through the consent screen, which records the mailboxes they may use and their send mode as the consent's policy. A consent without a policy grants nothing. `/clients` shows every client with access and edits a client's mailboxes, reading, recipients, and send mode.
 - **The CLI** is the static `umail-cli` client and the only way to operator (REST) access; dynamic registration only admits MCP clients. It appears on `/clients` while it holds a refresh token.
+- **The web console** is the second operator surface (ADR 0003). The operator's signed-in browser session reads and sends mail and manages mailboxes and clients in its pages, acting as client `umail-web` ("AgentMail web"); REST stays bearer-only. Every console POST must come from the site's own origin. Signing out (the console's Sign out button, `POST /logout`) ends the session.
 - **Revoking** a client on `/clients` deletes its consent, policy, and tokens. MCP access ends with the next request; a CLI access token lasts at most its remaining 5 minutes. The client's registration stays, so it can ask again, and you see the consent screen again.
 
 ## Troubleshooting

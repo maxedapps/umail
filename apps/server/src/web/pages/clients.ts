@@ -9,7 +9,7 @@ import type { ApiDeps } from "../../api/app.ts";
 import { listAddresses } from "../../api/operations.ts";
 import { policyFromForm, type ClientGrant, type PolicyField } from "../../auth/access.ts";
 import { htmlResponse, redirect, type Flash, type PageView } from "../document.ts";
-import { html, type Html } from "../html.ts";
+import { bidiText, displayText, html, type Html } from "../html.ts";
 
 // The policy controls as the form holds them, so a rejected save re-renders what was typed.
 export type PolicyFormState = {
@@ -163,7 +163,7 @@ function grantBadge(grant: ClientGrant): Html {
 function grantName(grant: ClientGrant): Html {
   return grant.name === null
     ? html`<span class="mono">${grant.clientId}</span>`
-    : html`${grant.name}`;
+    : bidiText(grant.name);
 }
 
 function grantSummary(grant: ClientGrant, addresses: ReadonlyArray<Address>): string {
@@ -226,6 +226,8 @@ export function clientPage(
   error: PolicyError | null,
   flash: Flash | undefined,
 ): PageView {
+  // A client names itself at registration, so its name is projected like mail metadata.
+  const name = displayText(grant.name ?? grant.clientId);
   const path = `/clients/${encodeURIComponent(grant.clientId)}`;
   const form =
     grant.consentId === null
@@ -249,8 +251,8 @@ export function clientPage(
   return {
     kind: "console",
     section: "clients",
-    title: grant.name ?? grant.clientId,
-    heading: grant.name ?? grant.clientId,
+    title: name,
+    heading: name,
     lede: html`${grantBadge(grant)} <span class="mono muted">${grant.clientId}</span>`,
     flash,
     main: html`${form}
@@ -264,7 +266,7 @@ export function clientPage(
         </div>
       </section>
       <div id="revoke-dialog" popover>
-        <h2>Revoke ${grant.name ?? grant.clientId}?</h2>
+        <h2>Revoke ${name}?</h2>
         <p>Its tokens stop working at once.</p>
         <form class="actions" method="post" action="${path}/revoke">
           <button class="danger solid" type="submit">Revoke</button>
