@@ -4,6 +4,7 @@ import { type AccountSqlRow, type AccountSqlValue } from "../../src/account/sqli
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 import { makeAccountStoreRpc, type AccountStoreRpc } from "../../src/account/worker.ts";
+import { webCrypto } from "../../src/crypto.ts";
 
 const TEST_NOW = "2026-01-01T00:00:00.000Z";
 
@@ -82,7 +83,7 @@ export function createMemoryAccount(): MemoryAccount {
   applyAccountSchema(storage, TEST_NOW);
   return {
     storage,
-    account: makeAccountStoreRpc(storage),
+    account: makeAccountStoreRpc(storage, webCrypto),
   };
 }
 

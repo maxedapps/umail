@@ -15,6 +15,7 @@ import {
 } from "@umail/api-contract";
 import type { CallToolResult, McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as Cause from "effect/Cause";
+import type * as Crypto from "effect/Crypto";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -90,7 +91,7 @@ export function registerTools(
   server: McpServer,
   deps: ApiDeps,
   principal: Principal,
-  services: Context.Context<never>,
+  services: Context.Context<Crypto.Crypto>,
 ) {
   const run = Effect.runPromiseWith(services);
 
@@ -102,7 +103,7 @@ export function registerTools(
       readonly input: Schema.ConstraintDecoder<In>;
       readonly output: Schema.ConstraintDecoder<Out>;
     },
-    handler: (input: In) => Effect.Effect<Out, { readonly _tag: string }>,
+    handler: (input: In) => Effect.Effect<Out, { readonly _tag: string }, Crypto.Crypto>,
   ) {
     server.registerTool(
       name,

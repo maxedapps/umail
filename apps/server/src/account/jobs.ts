@@ -31,6 +31,7 @@ import {
   type DecideApprovalInput,
   type JobViewer,
   type ListOutboundJobsQuery,
+  type NewSubmissionIds,
   type OutboundDispatch,
   type OutboundJob,
   type OutboundJobPage,
@@ -71,6 +72,7 @@ const JOB_SELECT = `j.id AS id,
 export function submitOutbound(
   storage: AccountSqliteStorage,
   input: SubmitOutboundInput,
+  ids: NewSubmissionIds,
 ): SubmitOutboundResult {
   const to = dedupeAccountMailContacts(input.to);
   const cc = dedupeAccountMailContacts(input.cc);
@@ -119,7 +121,7 @@ export function submitOutbound(
         approval: readApproval(storage, "job_id", existing.id),
       };
     }
-    const messageId = crypto.randomUUID();
+    const { messageId, jobId, notificationJobId } = ids;
     const fromContact = {
       address: fromAddress.address,
       displayName: identity.displayName,
@@ -144,7 +146,6 @@ export function submitOutbound(
         cc,
       },
     });
-    const jobId = crypto.randomUUID();
     const needsApproval = authorization.kind === "require_approval";
     insertJobRow(
       storage,
@@ -159,7 +160,6 @@ export function submitOutbound(
       input.nowIso,
     );
     if (needsApproval) {
-      const notificationJobId = crypto.randomUUID();
       insertJobRow(
         storage,
         notificationJobId,
@@ -272,13 +272,12 @@ export function claimJob(storage: AccountSqliteStorage, input: ClaimJobInput): C
       );
       return { kind: "rejected", job: toOutboundJob(requireJob(storage, current.id)) };
     }
-    const attemptId = crypto.randomUUID();
     storage.sql.exec(
       `UPDATE outbound_jobs
        SET state = ?, attempt_id = ?, attempt_claimed_at = ?, claim_expires_at = ?, updated_at = ?
        WHERE id = ? AND state = 'ready'`,
       "in_flight",
-      attemptId,
+      input.attemptId,
       input.nowIso,
       input.claimExpiresAt,
       input.nowIso,
@@ -286,7 +285,7 @@ export function claimJob(storage: AccountSqliteStorage, input: ClaimJobInput): C
     );
     return {
       kind: "claimed",
-      attemptId,
+      attemptId: input.attemptId,
       job: toOutboundJob(requireJob(storage, current.id)),
     };
   });

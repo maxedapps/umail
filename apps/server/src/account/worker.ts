@@ -2,6 +2,7 @@ import { OPERATOR_POLICY, constructMailboxAddress, type MailDomain } from "@umai
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,6 +10,7 @@ import * as Redacted from "effect/Redacted";
 
 import { createMailHtmlPolicy } from "../mail/html-policy.ts";
 import { makeAccess, type AccessDatabase } from "../auth/access.ts";
+import { WebCrypto, randomId } from "../crypto.ts";
 import { cloudflareEmailSender } from "../mail/email-sender.ts";
 import { notificationKeyFromSecret } from "../mail/notifications.ts";
 import { AuthDb, MailIndex } from "../resources.ts";
@@ -31,7 +33,7 @@ import {
   observeInboundForward,
   registerInboundReceipt,
 } from "./commands.ts";
-import type { OutboundRequester } from "./domain.ts";
+import type { OutboundRequester, SubmitOutboundInput } from "./domain.ts";
 import { armDueWork, runDueWork, type AccountStorage } from "./due-work.ts";
 import { isExpectedStoreFailure, type AccountStoreError } from "./errors.ts";
 import {
@@ -62,22 +64,20 @@ const runStore = <A>(run: () => A): Effect.Effect<A, AccountStoreError> =>
     Effect.tapDefect((defect) => Effect.logError("AccountStore call failed", defect)),
   );
 
-export function makeAccountStoreRpc(storage: AccountStorage) {
+export function makeAccountStoreRpc(storage: AccountStorage, crypto: Crypto.Crypto) {
   const call =
     <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
     (...args: Args) =>
       runStore(() => fn(storage, ...args));
+  const arm = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Effect.promise(() => armDueWork(storage, now)),
+  );
   // Calls that can create due work arm the alarm for it.
   const callAndArm =
     <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
     (...args: Args) =>
-      call(fn)(...args).pipe(
-        Effect.tap(() =>
-          Effect.flatMap(Clock.currentTimeMillis, (now) =>
-            Effect.promise(() => armDueWork(storage, now)),
-          ),
-        ),
-      );
+      call(fn)(...args).pipe(Effect.tap(() => arm));
+  const newId = randomId.pipe(Effect.provideService(Crypto.Crypto, crypto));
   return {
     acceptInbound: call(acceptInbound),
     registerInboundReceipt: callAndArm(registerInboundReceipt),
@@ -96,12 +96,28 @@ export function makeAccountStoreRpc(storage: AccountStorage) {
     listAddresses: call(listAddresses),
     getAddress: call(getAddress),
     getAddressByMailbox: call(getAddressByMailbox),
-    createAddress: call(createAddress),
+    createAddress: (
+      localPart: string,
+      mailDomain: MailDomain,
+      displayName: string | undefined,
+      nowIso: string,
+    ) =>
+      Effect.flatMap(newId, (id) =>
+        call(createAddress)(id, localPart, mailDomain, displayName, nowIso),
+      ),
     patchAddress: call(patchAddress),
     listSendingIdentities: call(listSendingIdentities),
     resolveSendingIdentity: call(resolveSendingIdentity),
     setAddressForwarding: call(setAddressForwarding),
-    submitOutbound: callAndArm(submitOutbound),
+    submitOutbound: (input: SubmitOutboundInput) =>
+      Effect.gen(function* () {
+        const ids = {
+          messageId: yield* newId,
+          jobId: yield* newId,
+          notificationJobId: yield* newId,
+        };
+        return yield* callAndArm(submitOutbound)(input, ids);
+      }),
     lookupApprovalByTokenHash: call(lookupApprovalByTokenHash),
     decideApproval: callAndArm(decideApproval),
     getOutboundJob: call(getOutboundJob),
@@ -128,11 +144,12 @@ export const AccountStoreLive = AccountStore.make(
     const notificationSecret = yield* Config.redacted("UMAIL_NOTIFICATION_KEY");
     const approvalAdminEmail = yield* operatorEmail;
     const htmlPolicy = createMailHtmlPolicy();
+    const crypto = yield* Crypto.Crypto;
     return Effect.gen(function* () {
       const storage = state.raw.storage;
       const now = yield* DateTime.now;
       applyAccountSchema(storage, DateTime.formatIso(now));
-      const rpc = makeAccountStoreRpc(storage);
+      const rpc = makeAccountStoreRpc(storage, crypto);
       if (site.kind === "preview") {
         yield* seedDevelopmentAddresses(rpc, {
           mailDomain: site.mailDomain,
@@ -163,7 +180,9 @@ export const AccountStoreLive = AccountStore.make(
       return {
         ...rpc,
         alarm: () =>
-          Effect.flatMap(Clock.currentTimeMillis, (nowMs) => runDueWork(storage, ports, nowMs)),
+          Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+            runDueWork(storage, ports, nowMs),
+          ).pipe(Effect.provideService(Crypto.Crypto, crypto)),
       };
     });
   }).pipe(
@@ -173,6 +192,7 @@ export const AccountStoreLive = AccountStore.make(
         Cloudflare.Email.SendBinding,
         Cloudflare.Queues.WriteQueueBinding,
         Cloudflare.D1.QueryDatabaseBinding,
+        WebCrypto,
       ),
     ),
   ),

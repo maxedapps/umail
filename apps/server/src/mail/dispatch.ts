@@ -18,6 +18,7 @@ import {
   deriveApprovalToken,
   type NotificationKey,
 } from "./notifications.ts";
+import { randomId } from "../crypto.ts";
 import { sendClaimUntilIso } from "./policy.ts";
 
 export type DispatchPorts = {
@@ -35,43 +36,48 @@ export type DispatchPorts = {
 
 // Sends one ready job. At-most-once: the provider is called only after `claimJob` moves the job out
 // of `ready`; a job interrupted after its claim settles `unknown` and is never sent again.
-export function dispatchJob(
+export const dispatchJob = Effect.fn("dispatchJob")(function* (
   storage: AccountSqliteStorage,
   jobId: string,
   ports: DispatchPorts,
   nowMs: number,
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
-    const dispatch = yield* Effect.sync(() => readDispatch(storage, jobId));
-    if (dispatch === null || dispatch.job.state !== "ready") {
-      return;
-    }
-    const prepared = yield* prepareDispatchMail(dispatch, ports);
-    if (prepared.kind === "reject") {
-      yield* Effect.sync(() =>
-        rejectUndispatched(
-          storage,
-          [dispatch.job.messageId],
-          { failureClass: "policy", failureDetail: prepared.detail },
-          nowIso,
-        ),
-      );
-      return;
-    }
-    const policy = yield* ports.policyFor(dispatch.job.requester);
-    const claimed = yield* Effect.sync(() =>
-      claimJob(storage, { jobId, nowIso, claimExpiresAt: sendClaimUntilIso(nowMs), policy }),
-    );
-    if (claimed.kind !== "claimed") {
-      return;
-    }
-    const outcome = yield* ports.sender.send(prepared.mail);
+) {
+  const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+  const dispatch = yield* Effect.sync(() => readDispatch(storage, jobId));
+  if (dispatch === null || dispatch.job.state !== "ready") {
+    return;
+  }
+  const prepared = yield* prepareDispatchMail(dispatch, ports);
+  if (prepared.kind === "reject") {
     yield* Effect.sync(() =>
-      completeAttempt(storage, { jobId, attemptId: claimed.attemptId, nowIso, outcome }),
+      rejectUndispatched(
+        storage,
+        [dispatch.job.messageId],
+        { failureClass: "policy", failureDetail: prepared.detail },
+        nowIso,
+      ),
     );
-  });
-}
+    return;
+  }
+  const policy = yield* ports.policyFor(dispatch.job.requester);
+  const attemptId = yield* randomId;
+  const claimed = yield* Effect.sync(() =>
+    claimJob(storage, {
+      jobId,
+      attemptId,
+      nowIso,
+      claimExpiresAt: sendClaimUntilIso(nowMs),
+      policy,
+    }),
+  );
+  if (claimed.kind !== "claimed") {
+    return;
+  }
+  const outcome = yield* ports.sender.send(prepared.mail);
+  yield* Effect.sync(() =>
+    completeAttempt(storage, { jobId, attemptId: claimed.attemptId, nowIso, outcome }),
+  );
+});
 
 type PreparedMail =
   | { readonly kind: "ready"; readonly mail: ProviderOutboundMail }
@@ -79,32 +85,28 @@ type PreparedMail =
 
 // Builds the exact provider mail before the claim, so mail that can never be sent is rejected
 // without an attempt.
-function prepareDispatchMail(
+const prepareDispatchMail = Effect.fn("prepareDispatchMail")(function* (
   dispatch: OutboundDispatch,
   ports: DispatchPorts,
-): Effect.Effect<PreparedMail> {
-  return Effect.gen(function* () {
-    if (dispatch.job.purpose === "approval_notification") {
-      const approval = dispatch.approval;
-      if (approval === null) return { kind: "reject", detail: "approval_unavailable" };
-      const token = yield* Effect.promise(() =>
-        deriveApprovalToken(ports.notification.key, approval.approvalId),
-      );
-      return yield* materializePreparedMail(
-        approvalNotificationMail({
-          mailDomain: ports.notification.mailDomain,
-          approvalAdminEmail: ports.notification.approvalAdminEmail,
-          expiresAt: approval.expiresAt,
-          reviewUrl: approvalReviewUrl(ports.applicationUrl, token),
-        }),
-        ports,
-      );
-    }
-    const mail = messageMailFromDispatch(dispatch);
-    if (mail === null) return { kind: "reject", detail: "missing_sender" };
-    return yield* materializePreparedMail(mail, ports);
-  });
-}
+) {
+  if (dispatch.job.purpose === "approval_notification") {
+    const approval = dispatch.approval;
+    if (approval === null) return { kind: "reject", detail: "approval_unavailable" } as const;
+    const token = yield* deriveApprovalToken(ports.notification.key, approval.approvalId);
+    return yield* materializePreparedMail(
+      approvalNotificationMail({
+        mailDomain: ports.notification.mailDomain,
+        approvalAdminEmail: ports.notification.approvalAdminEmail,
+        expiresAt: approval.expiresAt,
+        reviewUrl: approvalReviewUrl(ports.applicationUrl, token),
+      }),
+      ports,
+    );
+  }
+  const mail = messageMailFromDispatch(dispatch);
+  if (mail === null) return { kind: "reject", detail: "missing_sender" } as const;
+  return yield* materializePreparedMail(mail, ports);
+});
 
 function materializePreparedMail(
   mail: OutboundMail,

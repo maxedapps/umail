@@ -3,6 +3,7 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { operatorOAuthPrincipal } from "@umail/api-contract";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Logger from "effect/Logger";
@@ -11,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ApiDeps } from "../../src/api/app.ts";
 import { registerTools } from "../../src/api/mcp/tools.ts";
+import { webCrypto } from "../../src/crypto.ts";
 import { createWorld } from "./world.ts";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
@@ -20,7 +22,10 @@ describe("MCP tool request services", () => {
     const deps = await scopeOracleDeps();
     const scope = await Effect.runPromise(Scope.make());
     try {
-      const result = await callListSendingIdentities(deps, Context.make(Scope.Scope, scope));
+      const result = await callListSendingIdentities(
+        deps,
+        Context.make(Scope.Scope, scope).pipe(Context.add(Crypto.Crypto, webCrypto)),
+      );
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toEqual({ sendingIdentities: [] });
     } finally {
@@ -36,7 +41,9 @@ describe("MCP tool request services", () => {
     });
     const result = await callListSendingIdentities(
       deps,
-      Context.make(Logger.CurrentLoggers, new Set([capture])),
+      Context.make(Logger.CurrentLoggers, new Set([capture])).pipe(
+        Context.add(Crypto.Crypto, webCrypto),
+      ),
     );
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("The AgentMail API request failed.");
@@ -56,7 +63,7 @@ async function scopeOracleDeps(): Promise<ApiDeps> {
   return world.deps;
 }
 
-async function callListSendingIdentities(deps: ApiDeps, services: Context.Context<never>) {
+async function callListSendingIdentities(deps: ApiDeps, services: Context.Context<Crypto.Crypto>) {
   const handler = createMcpHandler(
     () => {
       const server = new McpServer(

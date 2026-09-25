@@ -31,6 +31,7 @@ import {
   type Principal,
   type SubmitMessagePayload,
 } from "@umail/api-contract";
+import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -38,6 +39,7 @@ import * as Result from "effect/Result";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import type { ApiDeps } from "./app.ts";
+import { randomId } from "../crypto.ts";
 import { newApprovalCapability } from "../mail/notifications.ts";
 import {
   projectJobStatus,
@@ -142,7 +144,7 @@ export function setThreadReadState(
 ) {
   return Effect.gen(function* () {
     yield* requireRead(principal);
-    const now = yield* currentIso(deps);
+    const now = yield* currentIso;
     yield* deps.account
       .markThreadRead(threadId, isRead, mailboxScopeOf(principal), now)
       .pipe(storeCall);
@@ -152,7 +154,7 @@ export function setThreadReadState(
 
 export function softDeleteVisibleThread(deps: ApiDeps, principal: Principal, threadId: string) {
   return Effect.gen(function* () {
-    const now = yield* currentIso(deps);
+    const now = yield* currentIso;
     yield* deps.account.softDeleteThread(threadId, mailboxScopeOf(principal), now).pipe(storeCall);
   });
 }
@@ -258,8 +260,8 @@ export function submitMessage(deps: ApiDeps, principal: Principal, payload: Subm
   return Effect.gen(function* () {
     yield* requireSend(principal);
     const prepared = yield* prepareOutbound(deps, principal, payload);
-    const now = yield* currentIso(deps);
-    const requestId = payload.requestId ?? SubmissionRequestId.make(crypto.randomUUID());
+    const now = yield* currentIso;
+    const requestId = payload.requestId ?? SubmissionRequestId.make(yield* randomId);
     const submitted = yield* submitPrepared(deps, prepared, principal, requestId, now);
     return projectJobStatus(submitted.job);
   });
@@ -447,11 +449,9 @@ function submitPrepared(
   principal: Principal,
   requestId: SubmissionRequestId,
   nowIso: string,
-): Effect.Effect<SubmitOutboundResult, StoreHttpError> {
+): Effect.Effect<SubmitOutboundResult, StoreHttpError, Crypto.Crypto> {
   return Effect.gen(function* () {
-    const approval = yield* Effect.promise(() =>
-      newApprovalCapability(deps.notificationKey, nowIso),
-    );
+    const approval = yield* newApprovalCapability(deps.notificationKey, nowIso);
     return yield* deps.account
       .submitOutbound({
         requestId,
@@ -473,12 +473,13 @@ function submitPrepared(
   });
 }
 
+// Outbound mail has no attachments, so no `cid:` image resolves and the message id is never used.
 function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {
   if (suppliedHtml === null) {
     return Effect.succeed(null);
   }
   return deps.htmlPolicy
-    .sanitizeForStorage(suppliedHtml, { messageId: crypto.randomUUID(), attachments: [] })
+    .sanitizeForStorage(suppliedHtml, { messageId: "outbound", attachments: [] })
     .pipe(Effect.mapError(() => new ApiProblem({ message: HTML_BODY_VALIDATION_PROBLEM })));
 }
 
@@ -497,9 +498,7 @@ function jobViewer(principal: Principal): JobViewer {
   return { kind: "mcp", clientId: principal.identity.clientId };
 }
 
-export function currentIso(deps: ApiDeps) {
-  return Effect.map(deps.approvalClock.now, DateTime.formatIso);
-}
+export const currentIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 function toMailContact(contact: { address: MailContact["address"]; displayName: string | null }) {
   return new MailContact({ address: contact.address, displayName: contact.displayName });

@@ -82,7 +82,7 @@ Behaviour changes are limited to those the ADR lists:
 - `approval-flow.test.ts` (expiry and decisions under TestClock), `submissions.worker.spec.ts`, `jobs.worker.spec.ts`, `notifications.test.ts`, `prepare-inbound.test.ts` and `receipts.worker.spec.ts` pass.
 - Approval tokens derived before and after the change are equal for the same key and id, checked with a fixed-vector test in `notifications.test.ts`.
 
-**Done:** no
+**Done:** yes. Deviation: the store's RPC layer (`makeAccountStoreRpc`, which receives the `Crypto` service at Durable Object construction) draws the address and submission ids, and `dispatchJob` draws the attempt id, so the RPC surface did not change for its callers. The outbound HTML sanitizer's message id is a fixed placeholder, since outbound mail has no attachments to resolve. The test Durable Object host supplies counter ids. The test world's `TestClock` is passed in each request's context, and `world.run` runs operations directly with that clock and `WebCrypto`.
 
 ### 3. D1 through Alchemy's `QueryDatabase` client
 

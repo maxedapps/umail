@@ -1,16 +1,18 @@
 import type { MailboxAddress } from "@umail/api-contract";
-import { sha256Hex } from "./policy.ts";
+import * as Effect from "effect/Effect";
+
+import { sha256Hex } from "../crypto.ts";
 
 export type InboundMessageId = `in_${string}`;
 export type InboundAttachmentId = `att_${string}`;
 
-export function inboundMessageId(
+export const inboundMessageId = Effect.fn("inboundMessageId")(function* (
   digest: string,
   envelope: { readonly from: string; readonly to: MailboxAddress },
-): Promise<InboundMessageId> {
+) {
   const identity = JSON.stringify([digest, envelope.from, envelope.to] as const);
-  return sha256Hex(new TextEncoder().encode(identity)).then(formatInboundMessageId);
-}
+  return formatInboundMessageId(yield* sha256Hex(new TextEncoder().encode(identity)));
+});
 
 export function inboundAttachmentId(
   messageId: InboundMessageId,

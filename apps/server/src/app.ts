@@ -13,6 +13,7 @@ import { createMailHtmlPolicy } from "./mail/html-policy.ts";
 import { AccountStore, AccountStoreLive, OPERATOR_ACCOUNT } from "./account/worker.ts";
 import { ArchiveTransportError, makeApiHttpEffect } from "./api/app.ts";
 import { cloudflareDestinations } from "./api/destinations.ts";
+import { WebCrypto } from "./crypto.ts";
 import { makeAccess, type AccessDatabase } from "./auth/access.ts";
 import { asUmailBetterAuth, makeAuthOptions } from "./auth/options.ts";
 import { receiveInbound } from "./mail/inbound.ts";
@@ -77,7 +78,6 @@ export default App.make(
       mailDomain: site.mailDomain,
       applicationUrl: new URL(`https://${site.apiHostname}`),
       operatorId,
-      approvalClock: { now: DateTime.now },
       notificationKey: notificationKeyFromSecret(Redacted.value(notificationSecret)),
     };
 
@@ -87,7 +87,7 @@ export default App.make(
         const nowIso = DateTime.formatIso(yield* DateTime.now);
         const account = accounts.getByName(OPERATOR_ACCOUNT);
         yield* receiveInbound(message, { archive, index, account, nowIso });
-      }),
+      }).pipe(Effect.provide(WebCrypto)),
     );
 
     // One receipt per batch: alchemy acks it on success, and on failure logs the cause and retries.

@@ -26,17 +26,6 @@ export const MAX_ATTACHMENTS = 50;
 
 export const MAX_PERSISTED_MESSAGE_BYTES = 1_750_000;
 
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // The DOM lib types only accept ArrayBuffer-backed views; nothing here is shared memory.
-  const view = bytes as Uint8Array<ArrayBuffer>;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", view));
-  let hex = "";
-  for (const byte of digest) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
-}
-
 export function rawObjectKey(digest: string): string {
   return `raw/${digest}.eml`;
 }

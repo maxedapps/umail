@@ -8,8 +8,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { inboundMessageId } from "../../src/mail/archive.ts";
 import { receiveInbound, type InboundDeps } from "../../src/mail/inbound.ts";
 import type { IndexReceiptWork } from "../../src/mail/process-index.ts";
-import { DEFAULT_MAX_RAW_BYTES, rawObjectKey, sha256Hex } from "../../src/mail/policy.ts";
-import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";
+import { sha256Hex } from "../../src/crypto.ts";
+import { DEFAULT_MAX_RAW_BYTES, rawObjectKey } from "../../src/mail/policy.ts";
+import { effectAccount, effectBucket, FakeEmail, runWithCrypto } from "./fakes.ts";
 import type { AccountStoreTestHost } from "../account/worker-host.ts";
 
 type TestEnv = {
@@ -44,7 +45,7 @@ describe("inbound receipts", () => {
     expect(email.rejectReason).toBeNull();
     expect(email.forwards).toEqual([FORWARD_DEST]);
     expect(world.published).toEqual([{ version: 1, receiptId }]);
-    const rawKey = rawObjectKey(await sha256Hex(raw));
+    const rawKey = rawObjectKey(await runWithCrypto(sha256Hex(raw)));
     expect(await listArchiveKeys()).toEqual([rawKey]);
     const stored = await testEnv.ARCHIVE.get(rawKey);
     expect(new Uint8Array((await stored?.arrayBuffer()) ?? new ArrayBuffer(0))).toEqual(raw);
@@ -113,7 +114,7 @@ describe("inbound receipts", () => {
     await expect(world.receive(email)).rejects.toThrow("register failed");
     expect(email.rejectReason).toBeNull();
     expect(world.published).toEqual([]);
-    expect(await listArchiveKeys()).toEqual([rawObjectKey(await sha256Hex(raw))]);
+    expect(await listArchiveKeys()).toEqual([rawObjectKey(await runWithCrypto(sha256Hex(raw)))]);
     expect(await world.stub.getInboundReceipt(await identityFor(raw, INBOX))).toBeNull();
   });
 
@@ -292,7 +293,7 @@ function createWorld(accountName: string, options: WorldOptions = {}) {
   return {
     stub,
     published,
-    receive: (email: FakeEmail) => Effect.runPromise(receiveInbound(email, deps)),
+    receive: (email: FakeEmail) => runWithCrypto(receiveInbound(email, deps)),
   };
 }
 
@@ -331,7 +332,8 @@ async function listArchiveKeys(): Promise<string[]> {
 }
 
 async function identityFor(raw: Uint8Array, to: string): Promise<string> {
-  return inboundMessageId(await sha256Hex(raw), { from: SENDER, to: parseOk(to).address });
+  const digest = await runWithCrypto(sha256Hex(raw));
+  return runWithCrypto(inboundMessageId(digest, { from: SENDER, to: parseOk(to).address }));
 }
 
 function parseOk(address: string) {

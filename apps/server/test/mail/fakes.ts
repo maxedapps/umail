@@ -1,3 +1,4 @@
+import type * as Crypto from "effect/Crypto";
 import type { RpcAsync } from "alchemy/Cloudflare/Bridge";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
 import {
@@ -11,6 +12,12 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
 import type { InboundMessage } from "../../src/mail/inbound.ts";
+import { WebCrypto } from "../../src/crypto.ts";
+
+// Runs an Effect that needs Crypto, as the Worker would, for Promise-based specs.
+export function runWithCrypto<A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Promise<A> {
+  return Effect.runPromise(effect.pipe(Effect.provide(WebCrypto)));
+}
 
 export type MailHtmlSanitizeCall = {
   readonly html: string;

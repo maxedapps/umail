@@ -63,6 +63,7 @@ export function getAddressByMailbox(
 
 export function createAddress(
   storage: AccountSqliteStorage,
+  id: string,
   localPart: string,
   mailDomain: MailDomain,
   displayName: string | undefined,
@@ -72,7 +73,6 @@ export function createAddress(
   if (normalized.kind !== "ok") {
     return null;
   }
-  const id = crypto.randomUUID();
   const name = displayName === undefined ? null : displayName;
   return storage.transactionSync(() => {
     const inserted = storage.sql

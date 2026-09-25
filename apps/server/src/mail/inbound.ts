@@ -1,10 +1,12 @@
 import { parseMailboxAddress } from "@umail/api-contract";
 import type * as Cloudflare from "alchemy/Cloudflare";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type { AccountStoreError } from "../account/errors.ts";
 import type { AccountStoreRpc } from "../account/worker.ts";
 import { inboundMessageId } from "./archive.ts";
-import { DEFAULT_MAX_RAW_BYTES, rawObjectKey, sha256Hex } from "./policy.ts";
+import { sha256Hex } from "../crypto.ts";
+import { DEFAULT_MAX_RAW_BYTES, rawObjectKey } from "./policy.ts";
 import type { IndexReceiptWork } from "./process-index.ts";
 
 // The slice of alchemy's email message, R2 bucket and queue clients that reception uses.
@@ -32,7 +34,7 @@ export type InboundDeps<R> = {
 export const receiveInbound = <R>(
   message: InboundMessage,
   deps: InboundDeps<R>,
-): Effect.Effect<void, Error | AccountStoreError, R> =>
+): Effect.Effect<void, Error | AccountStoreError, R | Crypto.Crypto> =>
   Effect.gen(function* () {
     if (message.bodySize > DEFAULT_MAX_RAW_BYTES) {
       return yield* message.setReject("message too large");
@@ -52,9 +54,9 @@ export const receiveInbound = <R>(
       return yield* message.setReject("message too large");
     }
 
-    const digest = yield* Effect.promise(() => sha256Hex(bytes));
+    const digest = yield* sha256Hex(bytes);
     const envelope = { from: message.from, to: recipient.address };
-    const receiptId = yield* Effect.promise(() => inboundMessageId(digest, envelope));
+    const receiptId = yield* inboundMessageId(digest, envelope);
     const rawKey = rawObjectKey(digest);
     yield* deps.archive.put(rawKey, bytes);
     yield* deps.account.registerInboundReceipt({

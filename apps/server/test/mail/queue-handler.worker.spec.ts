@@ -8,9 +8,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 import type { MessageConflictError } from "../../src/account/errors.ts";
 import { inboundMessageId } from "../../src/mail/archive.ts";
-import { INBOUND_MIME_LIMITS, rawObjectKey, sha256Hex } from "../../src/mail/policy.ts";
+import { sha256Hex } from "../../src/crypto.ts";
+import { INBOUND_MIME_LIMITS, rawObjectKey } from "../../src/mail/policy.ts";
 import { indexReceipt, type IndexDeps } from "../../src/mail/process-index.ts";
-import { effectAccount, effectBucket } from "./fakes.ts";
+import { effectAccount, effectBucket, runWithCrypto } from "./fakes.ts";
 import { foldedBase64Fixture } from "./mail-capacity-fixtures.ts";
 import type { AccountStoreTestHost } from "../account/worker-host.ts";
 
@@ -48,7 +49,7 @@ describe("index consumer", () => {
     const stored = await testEnv.ARCHIVE.get(`attachments/${receiptId}/0`);
     const bytes = new Uint8Array((await stored?.arrayBuffer()) ?? new ArrayBuffer(0));
     expect(bytes.byteLength).toBe(expectedAttachment?.byteLength);
-    expect(await sha256Hex(bytes)).toBe(expectedAttachment?.sha256);
+    expect(await runWithCrypto(sha256Hex(bytes))).toBe(expectedAttachment?.sha256);
   });
 
   it("acks a duplicate delivery without storing a second message", async () => {
@@ -139,8 +140,10 @@ async function createWorld(accountName: string): Promise<World> {
 }
 
 async function archiveRegistered(world: World, raw: Uint8Array): Promise<string> {
-  const digest = await sha256Hex(raw);
-  const receiptId = await inboundMessageId(digest, { from: SENDER, to: parsedInbox().address });
+  const digest = await runWithCrypto(sha256Hex(raw));
+  const receiptId = await runWithCrypto(
+    inboundMessageId(digest, { from: SENDER, to: parsedInbox().address }),
+  );
   await testEnv.ARCHIVE.put(rawObjectKey(digest), raw);
   await world.stub.registerInboundReceipt({
     receiptId,

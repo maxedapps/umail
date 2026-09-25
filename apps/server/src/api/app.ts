@@ -1,4 +1,3 @@
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -51,6 +50,7 @@ import {
   approvalMessagePreviewHttpApiResponse,
   humanPageHttpApiResponse,
 } from "./human-pages/response.ts";
+import { WebCrypto } from "../crypto.ts";
 import { serveMcpRequest } from "./mcp/route.ts";
 import { approvalReviewUrl, type NotificationKey } from "../mail/notifications.ts";
 import {
@@ -81,10 +81,6 @@ export type MailArchiveReader = {
   get(key: string): Effect.Effect<Uint8Array | null, ArchiveTransportError>;
 };
 
-export type InstantClock = {
-  readonly now: Effect.Effect<DateTime.Utc>;
-};
-
 export type ApiDeps = {
   readonly account: AccountStoreRpc;
   readonly archive: MailArchiveReader;
@@ -95,7 +91,6 @@ export type ApiDeps = {
   readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
-  readonly approvalClock: InstantClock;
   readonly notificationKey: NotificationKey;
 };
 
@@ -169,7 +164,7 @@ export function makeApiHttpEffect(deps: ApiDeps) {
         return yield* serveBetterAuth(deps);
       }
       return yield* restHandler;
-    }),
+    }).pipe(Effect.provide(WebCrypto)),
   );
 }
 
@@ -207,7 +202,7 @@ function addressesGroup(deps: ApiDeps) {
     handlers
       .handle("createAddress", ({ payload }) =>
         Effect.gen(function* () {
-          const now = yield* currentIso(deps);
+          const now = yield* currentIso;
           const address = yield* deps.account
             .createAddress(payload.localPart, deps.mailDomain, payload.displayName, now)
             .pipe(storeCall);
@@ -234,7 +229,7 @@ function addressesGroup(deps: ApiDeps) {
       )
       .handle("patchAddress", ({ params, payload }) =>
         Effect.gen(function* () {
-          const now = yield* currentIso(deps);
+          const now = yield* currentIso;
           const address = yield* deps.account.patchAddress(params.id, payload, now).pipe(storeCall);
           if (address === null) {
             return yield* new HttpApiError.NotFound();
@@ -251,7 +246,7 @@ function addressesGroup(deps: ApiDeps) {
           const destination = yield* deps.destinations
             .ensure(payload.email)
             .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
-          const now = yield* currentIso(deps);
+          const now = yield* currentIso;
           const updated = yield* deps.account
             .setAddressForwarding(address.id, destination.email, now)
             .pipe(storeCall);
@@ -266,7 +261,7 @@ function addressesGroup(deps: ApiDeps) {
       )
       .handle("removeForwarding", ({ params }) =>
         Effect.gen(function* () {
-          const now = yield* currentIso(deps);
+          const now = yield* currentIso;
           const address = yield* deps.account
             .setAddressForwarding(params.id, null, now)
             .pipe(storeCall);

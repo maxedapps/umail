@@ -1,9 +1,12 @@
 import { betterAuth } from "better-auth";
-import type * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as TestClock from "effect/testing/TestClock";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 
 import {
@@ -27,14 +30,10 @@ import {
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
 import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
+import { WebCrypto } from "../../src/crypto.ts";
 import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
-import {
-  FaithfulMailHtmlPolicy,
-  MemoryArchive,
-  MemoryApprovalClock,
-  MemoryDestinations,
-} from "./fakes.ts";
+import { FaithfulMailHtmlPolicy, MemoryArchive, MemoryDestinations } from "./fakes.ts";
 import { createMemoryAccount, type MemoryAccountSqliteStorage } from "./memory-account-store.ts";
 import { MemoryD1 } from "./memory-d1.ts";
 
@@ -47,6 +46,7 @@ export const APPLICATION_URL = new URL("https://umail.test");
 export const APPLICATION_ORIGIN = APPLICATION_URL.origin;
 export const TEST_SITE = { apiHostname: "umail.test" } as const;
 export const AUTH_SECRET = "umail-test-better-auth-secret";
+export const WORLD_START = DateTime.makeUnsafe("2026-08-28T10:00:00.000Z");
 export { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 
 export type World = {
@@ -57,7 +57,11 @@ export type World = {
   readonly archive: MemoryArchive;
   readonly destinations: MemoryDestinations;
   readonly htmlPolicy: FaithfulMailHtmlPolicy;
-  readonly approvalClock: MemoryApprovalClock;
+  // Every request's Clock. It starts at WORLD_START; tests move it with `setTime`.
+  readonly clock: TestClock.TestClock;
+  readonly setTime: (iso: string) => Promise<void>;
+  // Runs an API operation directly, with the world's clock and crypto.
+  readonly run: <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) => Promise<A>;
   readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
   readonly auth: UmailBetterAuth;
@@ -105,7 +109,6 @@ export async function createWorld(
   const archive = new MemoryArchive();
   const destinations = new MemoryDestinations();
   const htmlPolicy = new FaithfulMailHtmlPolicy();
-  const approvalClock = new MemoryApprovalClock();
   const notificationKey = crypto.getRandomValues(new Uint8Array(32));
   const access = makeAccess(db as AccessDatabase, provision.operatorId);
   const runtime = await Effect.runPromise(
@@ -120,15 +123,28 @@ export async function createWorld(
         access,
         applicationUrl: APPLICATION_URL,
         operatorId: provision.operatorId,
-        approvalClock,
         notificationKey,
       } satisfies ApiDeps;
       const handler = HttpEffect.toWebHandler(yield* makeApiHttpEffect(deps));
-      return { deps, handler };
+      const clock = yield* TestClock.make();
+      yield* clock.setTime(DateTime.toEpochMillis(WORLD_START));
+      return { deps, handler, clock };
     }).pipe(Effect.provide(Reactivity.layer), Effect.scoped),
   );
+  const clock = runtime.clock;
+  const setTime = (iso: string) =>
+    Effect.runPromise(clock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(iso))));
+  const run = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
+    Effect.runPromise(
+      effect.pipe(Effect.provideService(Clock.Clock, clock), Effect.provide(WebCrypto)),
+    );
+  const requestContext = Context.add(
+    settings.requestContext ?? Context.empty(),
+    Clock.Clock,
+    clock,
+  );
 
-  const dispatch = (request: Request) => runtime.handler(request, settings.requestContext);
+  const dispatch = (request: Request) => runtime.handler(request, requestContext);
   const fetchWorld = (input: string, init?: RequestInit) => dispatch(new Request(input, init));
 
   const operator = await bootstrapOperator(fetchWorld, operatorEmail);
@@ -141,7 +157,9 @@ export async function createWorld(
     archive,
     destinations,
     htmlPolicy,
-    approvalClock,
+    clock,
+    setTime,
+    run,
     notificationKey,
     deps: runtime.deps,
     auth,
@@ -269,9 +287,10 @@ export async function runDueWorkPass(
   } = {},
 ): Promise<ReadonlyArray<ProviderOutboundMail>> {
   const mails: Array<ProviderOutboundMail> = [];
-  const now =
-    options.at === undefined ? await Effect.runPromise(world.approvalClock.now) : undefined;
-  const nowMs = now === undefined ? Date.parse(options.at ?? "") : DateTime.toEpochMillis(now);
+  const nowMs =
+    options.at === undefined
+      ? Effect.runSync(world.clock.currentTimeMillis)
+      : DateTime.toEpochMillis(DateTime.makeUnsafe(options.at));
   await Effect.runPromise(
     runDueWork(
       world.accountStorage,
@@ -305,7 +324,7 @@ export async function runDueWorkPass(
         index: { send: () => Effect.void },
       },
       nowMs,
-    ),
+    ).pipe(Effect.provide(WebCrypto)),
   );
   return mails;
 }

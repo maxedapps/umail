@@ -471,6 +471,14 @@ export type SubmitOutboundInput = {
   readonly approval: ApprovalCapabilityWrite;
 };
 
+// Fresh ids for a submit, drawn by the store's RPC layer; the transaction uses them only when it
+// creates the job.
+export type NewSubmissionIds = {
+  readonly messageId: string;
+  readonly jobId: string;
+  readonly notificationJobId: string;
+};
+
 export type OutboundJob = {
   readonly jobId: string;
   readonly requestId: string;
@@ -522,6 +530,7 @@ export type ApprovalDecisionResult =
 
 export type ClaimJobInput = {
   readonly jobId: string;
+  readonly attemptId: string;
   readonly nowIso: string;
   readonly claimExpiresAt: string;
   // The requester's policy at claim time; null when the requester no longer has access.

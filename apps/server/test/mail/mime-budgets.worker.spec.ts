@@ -9,9 +9,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 import { receiveInbound } from "../../src/mail/inbound.ts";
 import type { IndexReceiptWork } from "../../src/mail/process-index.ts";
-import { DEFAULT_MAX_RAW_BYTES, INBOUND_MIME_LIMITS, sha256Hex } from "../../src/mail/policy.ts";
+import { sha256Hex } from "../../src/crypto.ts";
+import { DEFAULT_MAX_RAW_BYTES, INBOUND_MIME_LIMITS } from "../../src/mail/policy.ts";
 import { indexReceipt } from "../../src/mail/process-index.ts";
-import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";
+import { effectAccount, effectBucket, FakeEmail, runWithCrypto } from "./fakes.ts";
 import {
   MAIL_CAPACITY_INBOX,
   MAIL_CAPACITY_SUPPORTED_FIXTURES,
@@ -198,7 +199,7 @@ async function createWorld(accountName: string): Promise<World> {
 
 async function receive(world: World, raw: Uint8Array): Promise<void> {
   const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
-  await Effect.runPromise(
+  await runWithCrypto(
     receiveInbound(email, {
       archive: effectBucket(testEnv.ARCHIVE),
       index: {
@@ -298,7 +299,7 @@ async function expectIndexedFixture(world: World, fixture: MailCapacityFixture):
     }
     const bytes = new Uint8Array(await object.arrayBuffer());
     expect(bytes.byteLength).toBe(expected.byteLength);
-    expect(await sha256Hex(bytes)).toBe(expected.sha256);
+    expect(await runWithCrypto(sha256Hex(bytes))).toBe(expected.sha256);
   }
 }
 

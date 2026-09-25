@@ -117,7 +117,7 @@ describe("public approval flow", () => {
       },
       policy: APPROVAL_POLICY,
     } as const satisfies Principal;
-    const job = await Effect.runPromise(
+    const job = await world.run(
       submitMessage(
         world.deps,
         principal,
@@ -142,7 +142,7 @@ describe("public approval flow", () => {
   it("answers a due approval with 410 and leaves its expiry to the store's pass", async () => {
     const world = await createWorld();
     const queued = await queueApproval(world);
-    world.approvalClock.set("2026-08-29T10:00:00.000Z");
+    await world.setTime("2026-08-29T10:00:00.000Z");
     const writesBefore = world.accountStorage.writeCount;
 
     const gone = await world.fetch(queued.reviewUrl);
@@ -168,7 +168,7 @@ describe("public approval flow", () => {
     const world = await createWorld();
     const queued = await queueApproval(world);
     expect((await world.fetch(queued.denyUrl, { method: "POST" })).status).toBe(303);
-    world.approvalClock.set("2026-08-29T10:00:00.000Z");
+    await world.setTime("2026-08-29T10:00:00.000Z");
 
     const replay = await world.fetch(queued.denyUrl, { method: "POST", redirect: "manual" });
     expect(replay.status).toBe(410);
@@ -352,7 +352,7 @@ async function queueApproval(
   if (input.html !== undefined) {
     body.html = input.html;
   }
-  const job = await Effect.runPromise(
+  const job = await world.run(
     submitMessage(world.deps, principal, Schema.decodeSync(SubmitMessagePayload)(body)),
   );
   const reviewUrl = new URL(`/approvals/${await sentApprovalToken(world)}`, APPLICATION_URL).href;

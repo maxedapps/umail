@@ -625,9 +625,9 @@ async function createPreparedBrowserWorld(): Promise<PreparedBrowserWorld> {
   const failed = await submitApproval(world, principal, mailbox.id, { subject: "Failed" });
   const queued = await submitApproval(world, principal, mailbox.id, { subject: "Queued" });
   const denied = await submitApproval(world, principal, mailbox.id, { subject: "Denied" });
-  world.approvalClock.set(EXPIRED_SUBMITTED_AT);
+  await world.setTime(EXPIRED_SUBMITTED_AT);
   const expired = await submitApproval(world, principal, mailbox.id, { subject: "Expired" });
-  world.approvalClock.set(NOW);
+  await world.setTime(NOW);
   await approveAndAccept(world, accepted);
   await approveAndFail(world, failed);
   await decide(world, denied.token, "denied");
@@ -709,7 +709,7 @@ async function submitApproval(
   if (input.html !== undefined) {
     draft.html = input.html;
   }
-  const job = await Effect.runPromise(
+  const job = await world.run(
     submitMessage(world.deps, principal, Schema.decodeSync(SubmitMessagePayload)(draft)),
   );
   if (job.state !== "waiting_approval") {
@@ -730,7 +730,7 @@ async function notifiedApprovalToken(world: World): Promise<string> {
 }
 
 async function decide(world: World, token: string, decision: "approved" | "denied") {
-  const tokenHash = await hashApprovalToken(Schema.decodeSync(ApprovalToken)(token));
+  const tokenHash = await world.run(hashApprovalToken(Schema.decodeSync(ApprovalToken)(token)));
   const claimed = await Effect.runPromise(
     world.account.decideApproval({ tokenHash, decision, nowIso: NOW }),
   );
@@ -760,7 +760,7 @@ async function approveAndFail(world: World, submitted: { readonly token: string 
 }
 
 async function expire(world: World, token: string) {
-  const tokenHash = await hashApprovalToken(Schema.decodeSync(ApprovalToken)(token));
+  const tokenHash = await world.run(hashApprovalToken(Schema.decodeSync(ApprovalToken)(token)));
   await runDueWorkPass(world, { at: EXPIRE_AT, mcpPolicy: APPROVAL_POLICY });
   const expired = await Effect.runPromise(world.account.lookupApprovalByTokenHash(tokenHash));
   if (expired.kind !== "found" || expired.approval.state !== "expired") {

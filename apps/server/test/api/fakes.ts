@@ -1,5 +1,4 @@
 import * as Effect from "effect/Effect";
-import * as DateTime from "effect/DateTime";
 
 import {
   MailHtmlPolicyError,
@@ -8,11 +7,7 @@ import {
   type MailHtmlSanitization,
   type StoredMailHtml,
 } from "../../src/mail/html-policy.ts";
-import {
-  ArchiveTransportError,
-  type MailArchiveReader,
-  type InstantClock,
-} from "../../src/api/app.ts";
+import { ArchiveTransportError, type MailArchiveReader } from "../../src/api/app.ts";
 import {
   DestinationError,
   type DestinationsClient,
@@ -41,18 +36,6 @@ export class MemoryArchive implements MailArchiveReader {
       }
       return Effect.succeed(this.objects.get(key) ?? null);
     });
-  }
-}
-
-export class MemoryApprovalClock implements InstantClock {
-  #current = DateTime.makeUnsafe("2026-08-28T10:00:00.000Z");
-
-  get now() {
-    return Effect.sync(() => this.#current);
-  }
-
-  set(iso: string): void {
-    this.#current = DateTime.makeUnsafe(iso);
   }
 }
 

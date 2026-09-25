@@ -69,6 +69,8 @@ import {
   type SubmitOutboundInput,
 } from "../../src/account/domain.ts";
 
+import { WebCrypto } from "../../src/crypto.ts";
+
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
 
 const NameRow = Schema.Struct({
@@ -93,6 +95,13 @@ INSERT INTO fail_marker (id) VALUES ('x');
 export class AccountStoreTestHost extends DurableObject {
   #activationError: unknown;
   #ready = false;
+  #lastId = 0;
+
+  // Deterministic ids stand in for the ids production draws from Crypto.
+  #nextId(prefix: string): string {
+    this.#lastId += 1;
+    return `${prefix}-${String(this.#lastId)}`;
+  }
 
   acceptInbound(input: AcceptInboundInput) {
     this.#ensureReady();
@@ -125,7 +134,7 @@ export class AccountStoreTestHost extends DurableObject {
            id, requester_kind, requester_client_id, requester_label, idempotency_key,
            intent_fingerprint, message_id, mailbox_id, purpose, state, created_at, updated_at
          ) VALUES (?, 'operator', 'cli', 'AgentMail CLI', ?, '', ?, ?, 'message', 'accepted', ?, ?)`,
-        crypto.randomUUID(),
+        this.#nextId("job"),
         input.messageId,
         input.messageId,
         input.mailboxId,
@@ -233,7 +242,14 @@ export class AccountStoreTestHost extends DurableObject {
     nowIso: string,
   ) {
     this.#ensureReady();
-    return createAddress(this.ctx.storage, localPart, mailDomain, displayName, nowIso);
+    return createAddress(
+      this.ctx.storage,
+      this.#nextId("address"),
+      localPart,
+      mailDomain,
+      displayName,
+      nowIso,
+    );
   }
 
   patchAddress(id: string, payload: PatchAddressInput, nowIso: string) {
@@ -258,7 +274,11 @@ export class AccountStoreTestHost extends DurableObject {
 
   submitOutbound(input: SubmitOutboundInput) {
     this.#ensureReady();
-    return submitOutbound(this.ctx.storage, input);
+    return submitOutbound(this.ctx.storage, input, {
+      messageId: this.#nextId("message"),
+      jobId: this.#nextId("job"),
+      notificationJobId: this.#nextId("job"),
+    });
   }
 
   lookupApprovalByTokenHash(tokenHash: ApprovalTokenHash) {
@@ -271,9 +291,9 @@ export class AccountStoreTestHost extends DurableObject {
     return decideApproval(this.ctx.storage, input);
   }
 
-  claimJob(input: ClaimJobInput) {
+  claimJob(input: Omit<ClaimJobInput, "attemptId">) {
     this.#ensureReady();
-    return claimJob(this.ctx.storage, input);
+    return claimJob(this.ctx.storage, { ...input, attemptId: this.#nextId("attempt") });
   }
 
   completeAttempt(input: CompleteAttemptInput) {
@@ -302,7 +322,9 @@ export class AccountStoreTestHost extends DurableObject {
   override async alarm() {
     this.#ensureReady();
     if (this.dueWorkPorts === undefined) throw new Error("dueWorkPorts not installed");
-    await Effect.runPromise(runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()));
+    await Effect.runPromise(
+      runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()).pipe(Effect.provide(WebCrypto)),
+    );
   }
 
   getOutboundJob(jobId: string, viewer: JobViewer) {

@@ -15,6 +15,7 @@ import { createMailHtmlPolicy, type MailHtmlPolicy } from "../../src/mail/html-p
 import type { CompleteAttemptOutcome, OutboundRequester } from "../../src/account/domain.ts";
 import { FAILED_STEP_RETRY_MS, runDueWork, type DueWorkPorts } from "../../src/account/due-work.ts";
 import { claimJob } from "../../src/account/jobs.ts";
+import { WebCrypto } from "../../src/crypto.ts";
 import type { EmailSender, ProviderOutboundMail } from "../../src/mail/email-sender.ts";
 import {
   APPROVAL_NOTIFICATION_SUBJECT,
@@ -65,7 +66,7 @@ describe("store due-work pass", () => {
     expect(notice).toMatchObject({ to: [OPERATOR_EMAIL], subject: APPROVAL_NOTIFICATION_SUBJECT });
     // Canned copy: the requester's subject and body never reach the operator's inbox.
     expect(notice?.text).not.toContain("Hello");
-    const token = await deriveApprovalToken(world.key, world.lastApprovalId);
+    const token = await Effect.runPromise(deriveApprovalToken(world.key, world.lastApprovalId));
     expect(notice?.text).toContain(`https://umail.example.com/approvals/${token}`);
     // The pending approval's deadline keeps the alarm set.
     expect(world.storage.alarm).toBe(Date.parse(world.lastExpiresAt));
@@ -109,6 +110,7 @@ describe("store due-work pass", () => {
     // A pass that crashed between its claim and the provider call.
     claimJob(world.storage, {
       jobId: job.jobId,
+      attemptId: "crashed-attempt",
       nowIso: NOW,
       claimExpiresAt: iso(NOW_MS + 15 * MINUTE),
       policy: OPERATOR_POLICY,
@@ -244,6 +246,7 @@ describe("store due-work pass", () => {
     const job = await claims.submit({ requester: OPERATOR, policy: OPERATOR_POLICY });
     claimJob(claims.storage, {
       jobId: job.jobId,
+      attemptId: "crashed-attempt",
       nowIso: NOW,
       claimExpiresAt: iso(NOW_MS + 15 * MINUTE),
       policy: OPERATOR_POLICY,
@@ -278,7 +281,9 @@ async function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()
       readonly policy: PrincipalPolicy;
       readonly htmlBody?: string;
     }) {
-      const approval = await newApprovalCapability(key, NOW);
+      const approval = await Effect.runPromise(
+        newApprovalCapability(key, NOW).pipe(Effect.provide(WebCrypto)),
+      );
       world.lastApprovalId = approval.approvalId;
       world.lastTokenHash = approval.tokenHash;
       world.lastExpiresAt = approval.expiresAt;
@@ -338,7 +343,7 @@ async function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()
                 }),
         },
       };
-      return Effect.runPromise(runDueWork(storage, ports, nowMs));
+      return Effect.runPromise(runDueWork(storage, ports, nowMs).pipe(Effect.provide(WebCrypto)));
     },
   };
   return world;

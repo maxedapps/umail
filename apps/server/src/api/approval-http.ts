@@ -4,6 +4,7 @@ import {
   type ApprovalToken,
   type OutboundThreadMessage,
 } from "@umail/api-contract";
+import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
@@ -12,9 +13,6 @@ import { projectThreadMessage } from "./projection.ts";
 
 export type ApprovalHttpDeps = {
   readonly account: AccountStoreRpc;
-  readonly approvalClock: {
-    readonly now: Effect.Effect<DateTime.Utc>;
-  };
 };
 
 export type ApprovalReviewOutcome =
@@ -35,13 +33,13 @@ export type ApprovalDecisionOutcome =
 export function reviewApproval(
   deps: ApprovalHttpDeps,
   token: ApprovalToken,
-): Effect.Effect<ApprovalReviewOutcome> {
+): Effect.Effect<ApprovalReviewOutcome, never, Crypto.Crypto> {
   return Effect.gen(function* () {
     const lookup = yield* lookupApproval(deps, token);
     if (lookup.kind === "missing") {
       return { kind: "notFound" };
     }
-    const now = DateTime.formatIso(yield* deps.approvalClock.now);
+    const now = DateTime.formatIso(yield* DateTime.now);
     if (lookup.approval.expiresAt <= now || isUnavailableState(lookup.approval.state)) {
       return { kind: "gone" };
     }
@@ -62,13 +60,13 @@ export function decideApproval(
   deps: ApprovalHttpDeps,
   token: ApprovalToken,
   decision: "approved" | "denied",
-): Effect.Effect<ApprovalDecisionOutcome> {
+): Effect.Effect<ApprovalDecisionOutcome, never, Crypto.Crypto> {
   return Effect.gen(function* () {
     const lookup = yield* lookupApproval(deps, token);
     if (lookup.kind === "missing") {
       return { kind: "notFound" };
     }
-    const now = DateTime.formatIso(yield* deps.approvalClock.now);
+    const now = DateTime.formatIso(yield* DateTime.now);
     if (lookup.approval.state !== "pending") {
       if (lookup.approval.expiresAt <= now) {
         return { kind: "gone" };
@@ -95,7 +93,7 @@ export function decideApproval(
 
 function lookupApproval(deps: ApprovalHttpDeps, token: ApprovalToken) {
   return Effect.gen(function* () {
-    const tokenHash = yield* Effect.promise(() => hashApprovalToken(token));
+    const tokenHash = yield* hashApprovalToken(token);
     return yield* deps.account.lookupApprovalByTokenHash(tokenHash);
   }).pipe(Effect.orDie);
 }

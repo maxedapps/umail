@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -40,7 +41,7 @@ export const runDueWork = <R>(
   storage: AccountStorage,
   ports: DueWorkPorts<R>,
   nowMs: number,
-): Effect.Effect<void, never, R> =>
+): Effect.Effect<void, never, R | Crypto.Crypto> =>
   Effect.gen(function* () {
     const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const failed = {
@@ -92,7 +93,7 @@ function sendReadyJobs<R>(
   storage: AccountStorage,
   ports: DueWorkPorts<R>,
   nowMs: number,
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, never, Crypto.Crypto> {
   return Effect.suspend(() =>
     Effect.forEach(readyJobIds(storage, SEND_BATCH_SIZE), (jobId) =>
       attempt({ step: "send", jobId }, dispatchJob(storage, jobId, ports, nowMs)),
