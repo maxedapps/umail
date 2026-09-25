@@ -13,7 +13,7 @@ The pages ADR 0003 built work, but they look dated. The CSS already uses modern 
 - A border on every block, and flash messages with a thick left border.
 - Navigation in two places: a top nav, and a separate mailbox sidebar on mail pages.
 
-The owner wants a slick, minimal, clean look across every user-facing page, built with modern vanilla CSS. They approved a mockup (version 2) on 2026-09-25: https://claude.ai/artifact/XMd6W4PyEwaqC3VJBUXSH8. A copy is kept at `adrs/0004-minimal-web-ui.mockup.html` until the implementation lands.
+The owner wants a slick, minimal, clean look across every user-facing page, built with modern vanilla CSS. They approved a mockup (version 2) on 2026-09-25: https://claude.ai/artifact/XMd6W4PyEwaqC3VJBUXSH8. A local copy was kept beside this ADR until the implementation landed.
 
 **Constraints that stay:**
 

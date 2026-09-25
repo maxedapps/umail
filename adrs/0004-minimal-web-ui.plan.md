@@ -1,8 +1,8 @@
 # Plan for 0004: A minimal visual design for every browser page
 
-- **Status:** In progress
+- **Status:** Done
 - **ADR:** `adrs/0004-minimal-web-ui.md`
-- **Visual spec:** the approved mockup, version 2: https://claude.ai/artifact/XMd6W4PyEwaqC3VJBUXSH8. A local copy is at `adrs/0004-minimal-web-ui.mockup.html`, and task 8 deletes it.
+- **Visual spec:** the approved mockup, version 2: https://claude.ai/artifact/XMd6W4PyEwaqC3VJBUXSH8. The local copy that sat at `adrs/0004-minimal-web-ui.mockup.html` was deleted in task 8.
 
 ## Goal
 
@@ -434,7 +434,7 @@ Then run the full `pnpm test`.
   - no CSP violations;
   - 320px.
 
-**Done:** yes. Consent was ported in task 6. Two changes from the plan:
+**Done:** yes. Consent was ported in task 6. Changes from the plan:
 
 - `approval-flow.test.ts` could not stay unchanged: its remote-images check expected the note's text right after `role="note">`, and the plan puts the alert icon there. The regex now allows that one icon before the text.
 - A notice's message is `<p class="lede" role="alert|status">` with the icon inside it, so the icon sits beside the text rather than on its own row in the card.
@@ -455,7 +455,12 @@ Then run the full `pnpm test`.
 
 **Verify:** `pnpm fmt` on `apps/server`, `pnpm lint`, `pnpm typecheck` and the full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- The class check found no difference either way. The script can't see through the `badge ${tone}` template in `compose.ts`; its tones come from `JOB_STATES` (warning, accent, success, danger), all defined. `details` in the vocabulary table names the element, not a class.
+- The old-names search matches only `class="section-label"`, a vocabulary class that the `class="section` pattern also catches.
+- No `style="` in `web/`. All 17 icons are used. Lint reports nothing.
+- The mockup copy is deleted; the ADR keeps the artifact link.
 
 ## Owner's manual QA after deploy
 
