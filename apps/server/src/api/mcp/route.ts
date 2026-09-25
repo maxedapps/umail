@@ -20,99 +20,86 @@ import { registerTools } from "./tools.ts";
 
 const LEGACY_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18"] as const;
 
-export function serveMcpRequest(deps: ApiDeps) {
-  return Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const webRequestResult = HttpServerRequest.toWebResult(request);
-    if (Result.isFailure(webRequestResult)) {
-      return yield* new HttpServerError({ reason: webRequestResult.failure });
-    }
-    const webRequest = webRequestResult.success;
-    if (webRequest.method !== "POST") {
-      return HttpServerResponse.fromWeb(new Response(null, { status: 405 }));
-    }
+export const serveMcpRequest = Effect.fn("serveMcpRequest")(function* (deps: ApiDeps) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const webRequestResult = HttpServerRequest.toWebResult(request);
+  if (Result.isFailure(webRequestResult)) {
+    return yield* new HttpServerError({ reason: webRequestResult.failure });
+  }
+  const webRequest = webRequestResult.success;
+  if (webRequest.method !== "POST") {
+    return HttpServerResponse.fromWeb(new Response(null, { status: 405 }));
+  }
 
-    const resource = `${deps.applicationUrl.origin}/mcp`;
-    const accessResult = yield* Effect.promise(async () => {
-      try {
-        const access = await verifyOAuthResourceRequest(deps.auth, webRequest, {
-          issuer: `${deps.applicationUrl.origin}/api/auth`,
-          audience: resource,
-          scopes: [UMAIL_OAUTH_SCOPE],
-        });
-        return { kind: "verified", access } as const;
-      } catch (error) {
-        return { kind: "rejected", response: mcpChallengeResponse(error, resource) } as const;
-      }
-    });
-    if (accessResult.kind === "rejected") {
-      return HttpServerResponse.fromWeb(accessResult.response);
-    }
+  const resource = `${deps.applicationUrl.origin}/mcp`;
+  const verified = yield* Effect.result(
+    verifyOAuthResourceRequest(deps.auth, webRequest, {
+      issuer: `${deps.applicationUrl.origin}/api/auth`,
+      audience: resource,
+      scopes: [UMAIL_OAUTH_SCOPE],
+    }),
+  );
+  if (Result.isFailure(verified)) {
+    return HttpServerResponse.fromWeb(mcpChallengeResponse(verified.failure, resource));
+  }
 
-    const principalResult = yield* Effect.result(mcpPrincipalForAccess(deps, accessResult.access));
-    if (Result.isFailure(principalResult)) {
-      return HttpServerResponse.fromWeb(jsonRpcError(403, "Forbidden"));
-    }
-    return yield* serveAuthenticatedMcp(
-      deps,
-      principalResult.success,
-      accessResult.access,
-      webRequest,
-    );
-  });
-}
+  const principal = yield* mcpPrincipalForAccess(deps, verified.success);
+  if (principal === null) {
+    return HttpServerResponse.fromWeb(jsonRpcError(403, "Forbidden"));
+  }
+  return yield* serveAuthenticatedMcp(deps, principal, verified.success, webRequest);
+});
 
 // Only the operator's grants count, and only while the operator's consent for the client has a
-// policy; anything else is 403.
-function mcpPrincipalForAccess(deps: ApiDeps, access: OAuthAccess) {
-  return Effect.gen(function* () {
-    const policy =
-      access.subject === deps.operatorId ? yield* deps.access.mcpPolicy(access.clientId) : null;
-    if (policy === null) return yield* Effect.fail("forbidden" as const);
-    return {
-      authority: "mcp",
-      identity: {
-        kind: "oauth",
-        userId: access.subject,
-        clientId: access.clientId,
-        clientLabel: `OAuth client ${access.clientId.slice(0, 12)}`,
-      },
-      policy,
-    } satisfies McpPrincipal;
-  });
-}
+// policy; anything else is no principal.
+const mcpPrincipalForAccess = Effect.fn("mcpPrincipalForAccess")(function* (
+  deps: ApiDeps,
+  access: OAuthAccess,
+) {
+  if (access.subject !== deps.operatorId) return null;
+  const policy = yield* deps.access.mcpPolicy(access.clientId);
+  if (policy === null) return null;
+  return {
+    authority: "mcp",
+    identity: {
+      kind: "oauth",
+      userId: access.subject,
+      clientId: access.clientId,
+      clientLabel: `OAuth client ${access.clientId.slice(0, 12)}`,
+    },
+    policy,
+  } satisfies McpPrincipal;
+});
 
-function serveAuthenticatedMcp(
+const serveAuthenticatedMcp = Effect.fn("serveAuthenticatedMcp")(function* (
   deps: ApiDeps,
   principal: Principal,
   access: OAuthAccess,
   request: Request,
 ) {
-  return Effect.gen(function* () {
-    const services = yield* Effect.context<Crypto.Crypto>();
-    const handler = createMcpHandler(
-      () => {
-        const server = new McpServer(agentMailMcpServerInfo(deps.applicationUrl.origin), {
-          jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
-          supportedProtocolVersions: [...LEGACY_PROTOCOL_VERSIONS],
-        });
-        registerTools(server, deps, principal, services);
-        return server;
-      },
-      { legacy: "stateless" },
-    );
-    const response = yield* Effect.promise(() =>
-      handler.fetch(request, {
-        authInfo: {
-          token: access.clientId,
-          clientId: access.clientId,
-          scopes: Array.from(access.scopes),
-        } satisfies AuthInfo,
-      }),
-    ).pipe(Effect.ensuring(Effect.promise(() => handler.close())));
-    return HttpServerResponse.fromWeb(response);
-  });
-}
+  const services = yield* Effect.context<Crypto.Crypto>();
+  const handler = createMcpHandler(
+    () => {
+      const server = new McpServer(agentMailMcpServerInfo(deps.applicationUrl.origin), {
+        jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
+        supportedProtocolVersions: [...LEGACY_PROTOCOL_VERSIONS],
+      });
+      registerTools(server, deps, principal, services);
+      return server;
+    },
+    { legacy: "stateless" },
+  );
+  const response = yield* Effect.promise(() =>
+    handler.fetch(request, {
+      authInfo: {
+        token: access.clientId,
+        clientId: access.clientId,
+        scopes: Array.from(access.scopes),
+      } satisfies AuthInfo,
+    }),
+  ).pipe(Effect.ensuring(Effect.promise(() => handler.close())));
+  return HttpServerResponse.fromWeb(response);
+});
 
 function mcpChallengeResponse(error: unknown, resource: string): Response {
   const challenge = oauthResourceChallenge(error, resource, [UMAIL_OAUTH_SCOPE]);

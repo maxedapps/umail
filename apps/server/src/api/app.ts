@@ -35,7 +35,7 @@ import type { AccountStoreRpc } from "../account/worker.ts";
 import { decideApproval, reviewApproval } from "./approval-http.ts";
 import { attachmentResponseHeaders, rfc6266ContentDisposition } from "./attachments.ts";
 import type { Access } from "../auth/access.ts";
-import type { UmailBetterAuth } from "../auth/options.ts";
+import type { UmailAuthInstance } from "../auth/options.ts";
 import { isOAuthRoute, serveOAuthRoute } from "../auth/oauth-routes.ts";
 import { isAgentMailIconPath, serveAgentMailIcon } from "./brand/identity.ts";
 import { consentPageResponse, loginPageResponse } from "./human-pages/auth.ts";
@@ -89,7 +89,7 @@ export type ApiDeps = {
   readonly destinations: DestinationsClient;
   readonly htmlPolicy: MailHtmlPolicy;
   readonly mailDomain: MailDomain;
-  readonly auth: UmailBetterAuth;
+  readonly auth: UmailAuthInstance;
   readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
@@ -170,38 +170,29 @@ export function makeApiHttpEffect(deps: ApiDeps) {
   );
 }
 
-function serveBetterAuth(deps: ApiDeps) {
-  return Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const webRequest = HttpServerRequest.toWebResult(request);
-    if (Result.isFailure(webRequest)) {
-      return yield* new HttpServerError({ reason: webRequest.failure });
-    }
-    const blocked = blockedAuthSurfaceResponse(webRequest.success);
-    if (blocked !== null) {
-      return HttpServerResponse.fromWeb(blocked);
-    }
-    const response = yield* Effect.promise(() => deps.auth.handler(webRequest.success));
-    return HttpServerResponse.fromWeb(response);
-  });
-}
+const serveBetterAuth = Effect.fn("serveBetterAuth")(function* (deps: ApiDeps) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const webRequest = HttpServerRequest.toWebResult(request);
+  if (Result.isFailure(webRequest)) {
+    return yield* new HttpServerError({ reason: webRequest.failure });
+  }
+  const blocked = blockedAuthSurfaceResponse(webRequest.success);
+  if (blocked !== null) {
+    return HttpServerResponse.fromWeb(blocked);
+  }
+  const auth = yield* deps.auth.auth;
+  const response = yield* Effect.promise(() => auth.handler(webRequest.success));
+  return HttpServerResponse.fromWeb(response);
+});
 
-function serveOAuthManagement(deps: ApiDeps) {
-  return Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const webRequest = HttpServerRequest.toWebResult(request);
-    if (Result.isFailure(webRequest)) {
-      return yield* new HttpServerError({ reason: webRequest.failure });
-    }
-    const run = Effect.runPromiseWith(
-      yield* Effect.context<Alchemy.RuntimeContext | Crypto.Crypto>(),
-    );
-    const response = yield* Effect.promise(() =>
-      serveOAuthRoute({ ...deps, run }, webRequest.success),
-    );
-    return HttpServerResponse.fromWeb(response);
-  });
-}
+const serveOAuthManagement = Effect.fn("serveOAuthManagement")(function* (deps: ApiDeps) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const webRequest = HttpServerRequest.toWebResult(request);
+  if (Result.isFailure(webRequest)) {
+    return yield* new HttpServerError({ reason: webRequest.failure });
+  }
+  return HttpServerResponse.fromWeb(yield* serveOAuthRoute(deps, webRequest.success));
+});
 
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>

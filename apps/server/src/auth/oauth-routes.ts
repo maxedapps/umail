@@ -1,6 +1,4 @@
-import type * as Alchemy from "alchemy";
-import type * as Crypto from "effect/Crypto";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { productPageTitle } from "../api/brand/identity.ts";
@@ -12,19 +10,16 @@ import {
 } from "../api/human-pages/oauth-management.ts";
 import { humanPageHeaders } from "../api/human-pages/response.ts";
 import { policyFromForm, type Access } from "./access.ts";
-import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type UmailBetterAuth } from "./options.ts";
+import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type UmailAuthInstance } from "./options.ts";
 import { cookieMutationAllowed } from "./runtime-surface.ts";
 
 const DeviceDecisionForm = Schema.Struct({ userCode: Schema.String });
 
 export type OAuthRouteDependencies = {
-  readonly auth: UmailBetterAuth;
+  readonly auth: UmailAuthInstance;
   readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
-  readonly run: <A, E>(
-    effect: Effect.Effect<A, E, Alchemy.RuntimeContext | Crypto.Crypto>,
-  ) => Promise<A>;
 };
 
 export function isOAuthRoute(pathname: string): boolean {
@@ -37,117 +32,124 @@ export function isOAuthRoute(pathname: string): boolean {
   );
 }
 
-export async function serveOAuthRoute(
+export const serveOAuthRoute = Effect.fn("serveOAuthRoute")(function* (
   deps: OAuthRouteDependencies,
   request: Request,
-): Promise<Response> {
+) {
   const url = new URL(request.url);
-  if (url.pathname === "/device" && request.method === "GET") {
-    return deviceRoute(deps, request);
-  }
-  if (url.pathname === "/device/approve" && request.method === "POST") {
-    const originError = cookieMutationOriginError(deps, request);
-    if (originError !== null) return originError;
-    return deviceDecisionRoute(deps, request, "approved");
-  }
-  if (url.pathname === "/device/deny" && request.method === "POST") {
-    const originError = cookieMutationOriginError(deps, request);
-    if (originError !== null) return originError;
-    return deviceDecisionRoute(deps, request, "denied");
-  }
-  if (url.pathname === "/clients" && request.method === "GET") {
-    return clientsRoute(deps, request);
-  }
+  const mutation = request.method === "POST";
   const policyMatch = /^\/clients\/([^/]+)\/policy$/.exec(url.pathname);
-  if (policyMatch !== null && request.method === "POST") {
-    const originError = cookieMutationOriginError(deps, request);
-    if (originError !== null) return originError;
-    return updateClientPolicyRoute(deps, request, decodeURIComponent(policyMatch[1] ?? ""));
-  }
   const revokeMatch = /^\/clients\/([^/]+)\/revoke$/.exec(url.pathname);
-  if (revokeMatch !== null && request.method === "POST") {
-    const originError = cookieMutationOriginError(deps, request);
-    if (originError !== null) return originError;
-    return revokeClientRoute(deps, request, decodeURIComponent(revokeMatch[1] ?? ""));
+  const route =
+    url.pathname === "/device" && request.method === "GET"
+      ? deviceRoute(deps, request)
+      : url.pathname === "/device/approve" && mutation
+        ? deviceDecisionRoute(deps, request, "approved")
+        : url.pathname === "/device/deny" && mutation
+          ? deviceDecisionRoute(deps, request, "denied")
+          : url.pathname === "/clients" && request.method === "GET"
+            ? clientsRoute(deps)
+            : policyMatch !== null && mutation
+              ? updateClientPolicyRoute(deps, request, decodeURIComponent(policyMatch[1] ?? ""))
+              : revokeMatch !== null && mutation
+                ? revokeClientRoute(deps, decodeURIComponent(revokeMatch[1] ?? ""))
+                : null;
+  if (route === null) {
+    return new Response(null, { status: 405 });
   }
-  return new Response(null, { status: 405 });
-}
-
-async function deviceRoute(deps: OAuthRouteDependencies, request: Request): Promise<Response> {
-  const session = await requireOperatorSession(deps, request);
+  if (mutation && !cookieMutationAllowed(request, deps.applicationUrl.origin)) {
+    return humanError("Forbidden.", 403);
+  }
+  const session = yield* operatorSession(deps, request);
   if (session.kind !== "authorized") return session.response;
+  return yield* route;
+});
+
+// Every OAuth management page belongs to the operator's signed-in session.
+const operatorSession = Effect.fn("operatorSession")(function* (
+  deps: OAuthRouteDependencies,
+  request: Request,
+) {
+  const auth = yield* deps.auth.auth;
+  const session = yield* Effect.promise(() => auth.api.getSession({ headers: request.headers }));
+  if (session === null) {
+    return { kind: "redirect", response: loginRedirect(request) } as const;
+  }
+  if (session.user.id !== deps.operatorId) {
+    return { kind: "forbidden", response: humanError("Forbidden.", 403) } as const;
+  }
+  return { kind: "authorized" } as const;
+});
+
+const deviceRoute = Effect.fn("deviceRoute")(function* (
+  deps: OAuthRouteDependencies,
+  request: Request,
+) {
   const userCode = new URL(request.url).searchParams.get("user_code");
   if (userCode === null || userCode.length === 0) {
     return humanError("Enter the complete verification URL shown by the CLI.", 400);
   }
-  try {
-    const verified = await deps.auth.api.deviceVerify({
-      headers: request.headers,
-      query: { user_code: userCode },
-    });
-    const resource = verifiedDeviceResource(verified.resource, deps.applicationUrl.origin);
-    assertDeviceScopes(verified.scope ?? "");
-    return humanResponse(
-      renderDeviceAuthorizationPage({
-        userCode: verified.user_code,
-        clientId: verified.client_id,
-        scope: verified.scope ?? "",
-        resource,
-      }),
-    );
-  } catch {
-    return humanError("This device code is invalid, expired, or requests unsupported access.", 400);
-  }
-}
+  const auth = yield* deps.auth.auth;
+  const resource = deps.applicationUrl.origin;
+  return yield* Effect.tryPromise(() =>
+    auth.api.deviceVerify({ headers: request.headers, query: { user_code: userCode } }),
+  ).pipe(
+    Effect.filterOrFail((verified) => deviceRequestAdmitted(verified, resource)),
+    Effect.map((verified) =>
+      humanResponse(
+        renderDeviceAuthorizationPage({
+          userCode: verified.user_code,
+          clientId: verified.client_id,
+          scope: verified.scope ?? "",
+          resource,
+        }),
+      ),
+    ),
+    Effect.orElseSucceed(() =>
+      humanError("This device code is invalid, expired, or requests unsupported access.", 400),
+    ),
+  );
+});
 
-async function deviceDecisionRoute(
+const deviceDecisionRoute = Effect.fn("deviceDecisionRoute")(function* (
   deps: OAuthRouteDependencies,
   request: Request,
   decision: "approved" | "denied",
-): Promise<Response> {
-  const session = await requireOperatorSession(deps, request);
-  if (session.kind !== "authorized") return session.response;
-  try {
-    const form = await Schema.decodeUnknownPromise(DeviceDecisionForm)(
-      Object.fromEntries(await request.formData()),
+) {
+  const auth = yield* deps.auth.auth;
+  return yield* Effect.gen(function* () {
+    const fields = Object.fromEntries(yield* Effect.tryPromise(() => request.formData()));
+    const form = yield* Schema.decodeUnknownEffect(DeviceDecisionForm)(fields);
+    yield* Effect.tryPromise(() =>
+      auth.api.deviceVerify({ headers: request.headers, query: { user_code: form.userCode } }),
+    ).pipe(
+      Effect.filterOrFail((verified) =>
+        deviceRequestAdmitted(verified, deps.applicationUrl.origin),
+      ),
     );
-    const verified = await deps.auth.api.deviceVerify({
-      headers: request.headers,
-      query: { user_code: form.userCode },
-    });
-    verifiedDeviceResource(verified.resource, deps.applicationUrl.origin);
-    assertDeviceScopes(verified.scope ?? "");
-    if (decision === "approved") {
-      await deps.auth.api.deviceApprove({
-        headers: request.headers,
-        body: { userCode: form.userCode },
-      });
-    } else {
-      await deps.auth.api.deviceDeny({
-        headers: request.headers,
-        body: { userCode: form.userCode },
-      });
-    }
+    yield* Effect.tryPromise(() =>
+      decision === "approved"
+        ? auth.api.deviceApprove({ headers: request.headers, body: { userCode: form.userCode } })
+        : auth.api.deviceDeny({ headers: request.headers, body: { userCode: form.userCode } }),
+    );
     return humanResponse(renderDeviceDecisionPage(decision));
-  } catch {
-    return humanError("This device code is invalid, expired, or already processed.", 400);
-  }
-}
+  }).pipe(
+    Effect.orElseSucceed(() =>
+      humanError("This device code is invalid, expired, or already processed.", 400),
+    ),
+  );
+});
 
-async function clientsRoute(deps: OAuthRouteDependencies, request: Request): Promise<Response> {
-  const session = await requireOperatorSession(deps, request);
-  if (session.kind !== "authorized") return session.response;
-  return humanResponse(renderClientsPage(await deps.run(deps.access.list())));
-}
+const clientsRoute = Effect.fn("clientsRoute")(function* (deps: OAuthRouteDependencies) {
+  return humanResponse(renderClientsPage(yield* deps.access.list()));
+});
 
-async function updateClientPolicyRoute(
+const updateClientPolicyRoute = Effect.fn("updateClientPolicyRoute")(function* (
   deps: OAuthRouteDependencies,
   request: Request,
   consentId: string,
-): Promise<Response> {
-  const session = await requireOperatorSession(deps, request);
-  if (session.kind !== "authorized") return session.response;
-  const form = await request.formData();
+) {
+  const form = yield* Effect.promise(() => request.formData());
   const policy = policyFromForm({
     mailboxes: form.get("mailboxes"),
     sendMode: form.get("sendMode"),
@@ -156,56 +158,33 @@ async function updateClientPolicyRoute(
     preapproved: form.get("preapproved"),
   });
   if (policy === null) return humanError("Could not read that policy.", 400);
-  const updated = await deps.run(deps.access.setPolicy(consentId, policy));
+  const updated = yield* deps.access.setPolicy(consentId, policy);
   if (!updated) return humanError("That client has no consent to update.", 404);
   return redirectResponse("/clients?updated=1");
-}
+});
 
-async function revokeClientRoute(
+const revokeClientRoute = Effect.fn("revokeClientRoute")(function* (
   deps: OAuthRouteDependencies,
-  request: Request,
   clientId: string,
-): Promise<Response> {
-  const session = await requireOperatorSession(deps, request);
-  if (session.kind !== "authorized") return session.response;
-  await deps.run(deps.access.revoke(clientId));
+) {
+  yield* deps.access.revoke(clientId);
   return redirectResponse("/clients?revoked=1");
-}
+});
 
-async function requireOperatorSession(deps: OAuthRouteDependencies, request: Request) {
-  const session = await deps.auth.api.getSession({ headers: request.headers });
-  if (session === null) {
-    return { kind: "redirect", response: loginRedirect(request) } as const;
-  }
-  if (session.user.id !== deps.operatorId) {
-    return { kind: "forbidden", response: humanError("Forbidden.", 403) } as const;
-  }
-  return { kind: "authorized" } as const;
-}
-
-function cookieMutationOriginError(
-  deps: OAuthRouteDependencies,
-  request: Request,
-): Response | null {
-  if (cookieMutationAllowed(request, deps.applicationUrl.origin)) {
-    return null;
-  }
-  return humanError("Forbidden.", 403);
-}
-
-function verifiedDeviceResource(resource: string | string[] | undefined, expected: string): string {
+// A device request must target the REST resource with the CLI's scopes, or it is refused.
+function deviceRequestAdmitted(
+  verified: { readonly resource?: string | string[] | undefined; readonly scope?: string | null },
+  expected: string,
+): boolean {
+  const resource = verified.resource;
   const values = Array.isArray(resource) ? resource : resource === undefined ? [] : [resource];
-  if (values.length !== 1 || values[0] !== expected) {
-    throw new Error("Device request targets the wrong resource.");
-  }
-  return expected;
-}
-
-function assertDeviceScopes(scope: string): void {
-  const scopes = new Set(scope.split(" ").filter((value) => value.length > 0));
-  if (!scopes.has(UMAIL_OAUTH_SCOPE) || !scopes.has(OFFLINE_ACCESS_SCOPE)) {
-    throw new Error("Device request has unsupported scopes.");
-  }
+  const scopes = new Set((verified.scope ?? "").split(" ").filter((value) => value.length > 0));
+  return (
+    values.length === 1 &&
+    values[0] === expected &&
+    scopes.has(UMAIL_OAUTH_SCOPE) &&
+    scopes.has(OFFLINE_ACCESS_SCOPE)
+  );
 }
 
 function loginRedirect(request: Request): Response {

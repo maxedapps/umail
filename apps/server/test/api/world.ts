@@ -135,7 +135,7 @@ export async function createWorld(
         destinations,
         htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
         mailDomain: MAIL_DOMAIN,
-        auth,
+        auth: { auth: Effect.succeed(auth) },
         access,
         applicationUrl: APPLICATION_URL,
         operatorId: provision.operatorId,

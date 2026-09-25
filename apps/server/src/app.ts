@@ -110,11 +110,10 @@ export default App.make(
     return {
       fetch: Effect.scoped(
         Effect.gen(function* () {
-          const auth = asUmailBetterAuth(yield* authInstance.auth);
           const handle = yield* makeApiHttpEffect({
             ...depsWithoutAccount,
             account: accounts.getByName(OPERATOR_ACCOUNT),
-            auth,
+            auth: { auth: Effect.map(authInstance.auth, asUmailBetterAuth) },
             access: makeAccess(authDb, operatorId),
           });
           return yield* handle;

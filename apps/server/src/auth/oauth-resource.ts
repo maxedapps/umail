@@ -5,10 +5,12 @@ import {
   parseAccessTokenAuthorization,
   verifyJwsAccessToken,
 } from "better-auth/oauth2";
+import type * as Alchemy from "alchemy";
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import type { UmailBetterAuth } from "./options.ts";
+import type { UmailAuthInstance } from "./options.ts";
 
 const OAuthAccessTokenClaims = Schema.Struct({
   sub: Schema.String.check(Schema.isMinLength(1)),
@@ -34,56 +36,56 @@ export type OAuthResourceRequirements = {
   readonly scopes: ReadonlyArray<string>;
 };
 
-export async function verifyOAuthResourceRequest(
-  auth: UmailBetterAuth,
+export const verifyOAuthResourceRequest = Effect.fn("verifyOAuthResourceRequest")(function* (
+  auth: UmailAuthInstance,
   request: Request,
   requirements: OAuthResourceRequirements,
-): Promise<OAuthAccess> {
+) {
   const authorization = parseAccessTokenAuthorization(request.headers.get("authorization"));
   if (authorization === undefined || authorization.scheme !== "Bearer") {
-    throw unauthorizedAccessToken();
+    return yield* Effect.fail(unauthorizedAccessToken());
   }
-  return verifyOAuthBearerToken(auth, authorization.token, requirements);
-}
+  return yield* verifyOAuthBearerToken(auth, authorization.token, requirements);
+});
 
-export async function verifyOAuthBearerToken(
-  auth: UmailBetterAuth,
+export const verifyOAuthBearerToken = Effect.fn("verifyOAuthBearerToken")(function* (
+  auth: UmailAuthInstance,
   token: string,
   requirements: OAuthResourceRequirements,
-): Promise<OAuthAccess> {
-  let payload: Awaited<ReturnType<typeof verifyJwsAccessToken>>;
-  try {
-    payload = await verifyJwsAccessToken(token, {
-      jwksFetch: () => auth.api.getJwks({}),
-      jwksCacheKey: JWKS_CACHE_KEY,
-      verifyOptions: {
-        issuer: requirements.issuer,
-        audience: requirements.audience,
-        requiredClaims: ["exp", "sub", "client_id", "scope", "aud", "umail_operator"],
-      },
-    });
-  } catch {
-    throw unauthorizedAccessToken();
-  }
-
+) {
+  // better-auth fetches the key set through a Promise callback, run in this request's context.
+  const run = Effect.runPromiseWith(yield* Effect.context<Alchemy.RuntimeContext>());
+  const payload = yield* Effect.tryPromise({
+    try: () =>
+      verifyJwsAccessToken(token, {
+        jwksFetch: () => run(auth.auth).then((instance) => instance.api.getJwks({})),
+        jwksCacheKey: JWKS_CACHE_KEY,
+        verifyOptions: {
+          issuer: requirements.issuer,
+          audience: requirements.audience,
+          requiredClaims: ["exp", "sub", "client_id", "scope", "aud", "umail_operator"],
+        },
+      }),
+    catch: () => unauthorizedAccessToken(),
+  });
   if (payload.cnf !== undefined) {
-    throw unauthorizedAccessToken();
+    return yield* Effect.fail(unauthorizedAccessToken());
   }
   const decoded = Schema.decodeUnknownResult(OAuthAccessTokenClaims)(payload);
   if (Result.isFailure(decoded) || !hasExactAudience(decoded.success.aud, requirements.audience)) {
-    throw unauthorizedAccessToken();
+    return yield* Effect.fail(unauthorizedAccessToken());
   }
   const scopes = new Set(decoded.success.scope.split(" ").filter((scope) => scope.length > 0));
   const missingScopes = requirements.scopes.filter((scope) => !scopes.has(scope));
   if (missingScopes.length > 0) {
-    throw createInsufficientScopeError(missingScopes);
+    return yield* Effect.fail(createInsufficientScopeError(missingScopes));
   }
   return {
     subject: decoded.success.sub,
     clientId: decoded.success.client_id,
     scopes,
-  };
-}
+  } satisfies OAuthAccess;
+});
 
 export function oauthResourceChallenge(
   error: unknown,

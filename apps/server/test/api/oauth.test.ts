@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
@@ -14,6 +15,7 @@ import {
   createWorld,
   listMcpPolicyRows,
   operatorCookieHeaders,
+  runInWorker,
 } from "./world.ts";
 
 const DynamicClient = Schema.Struct({
@@ -190,15 +192,19 @@ describe("OAuth-only operator and client lifecycle", () => {
       scopes: [UMAIL_OAUTH_SCOPE],
     };
 
-    const firstAccess = await verifyOAuthBearerToken(
-      first.auth,
-      world.operatorAccessToken,
-      requirements,
+    const firstAccess = await runInWorker(
+      verifyOAuthBearerToken(
+        { auth: Effect.succeed(first.auth) },
+        world.operatorAccessToken,
+        requirements,
+      ),
     );
-    const secondAccess = await verifyOAuthBearerToken(
-      second.auth,
-      world.operatorAccessToken,
-      requirements,
+    const secondAccess = await runInWorker(
+      verifyOAuthBearerToken(
+        { auth: Effect.succeed(second.auth) },
+        world.operatorAccessToken,
+        requirements,
+      ),
     );
 
     expect(firstAccess.subject).toBe(world.operatorId);

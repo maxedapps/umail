@@ -1,4 +1,6 @@
 import type { BetterAuthInstance, BetterAuthProps } from "@alchemy.run/better-auth";
+import type * as Alchemy from "alchemy";
+import type { PrincipalPolicy } from "@umail/api-contract";
 import { mcp } from "@better-auth/mcp";
 import {
   DEVICE_CODE_GRANT_TYPE,
@@ -12,7 +14,7 @@ import {
 import type { BetterAuthPlugin, GenericEndpointContext, HookEndpointContext } from "better-auth";
 import { APIError, createAuthMiddleware, isAPIError } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -115,10 +117,10 @@ export function firstPartyClientExtension(): OAuthProviderExtension {
   const discovery: ClientDiscovery = {
     id: FIRST_PARTY_CLIENT_DISCOVERY_ID,
     matches: (clientId) => clients.has(clientId),
-    resolve: async (_ctx, clientId, existing) => {
+    resolve: (_ctx, clientId, existing) => {
       const client = clients.get(clientId);
-      if (existing === null || client === undefined) return null;
-      return { ...client, disabled: existing.disabled ?? false };
+      if (existing === null || client === undefined) return Promise.resolve(null);
+      return Promise.resolve({ ...client, disabled: existing.disabled ?? false });
     },
   };
   return { clientDiscovery: [discovery] };
@@ -149,54 +151,75 @@ function mcpPolicyPlugin(operatorId: string): BetterAuthPlugin {
       before: [
         {
           matcher: isAcceptedConsent,
-          handler: createAuthMiddleware(async (ctx) => {
-            if (policyFromForm(ctx.body) === null) {
-              throw new APIError("BAD_REQUEST", {
-                message: "Choose which mailboxes this client may use and how it may send.",
-              });
-            }
-          }),
+          handler: createAuthMiddleware((ctx) =>
+            policyFromForm(ctx.body) === null
+              ? Promise.reject(
+                  new APIError("BAD_REQUEST", {
+                    message: "Choose which mailboxes this client may use and how it may send.",
+                  }),
+                )
+              : Promise.resolve(),
+          ),
         },
       ],
       after: [
         {
           matcher: isAcceptedConsent,
-          handler: createAuthMiddleware(async (ctx) => {
+          handler: createAuthMiddleware((ctx) => {
+            // Read in the hook's own call: the provider state lives in async-local storage, which a
+            // fiber resuming on a later turn may not carry.
+            const providerState = getOAuthProviderState();
             const policy = policyFromForm(ctx.body);
-            const clientId = new URLSearchParams((await getOAuthProviderState())?.query ?? "").get(
-              "client_id",
+            if (isAPIError(ctx.context.returned) || policy === null) return Promise.resolve();
+            return Effect.runPromise(
+              saveConsentPolicy(ctx.context.adapter, operatorId, providerState, policy),
             );
-            if (isAPIError(ctx.context.returned) || policy === null || clientId === null) return;
-            const consent = await ctx.context.adapter.findOne<{ id: string }>({
-              model: "oauthConsent",
-              where: [
-                { field: "clientId", value: clientId },
-                { field: "userId", value: operatorId },
-              ],
-            });
-            if (consent === null) return;
-            const existing = await ctx.context.adapter.findOne<{ id: string }>({
-              model: MCP_POLICY_MODEL,
-              where: [{ field: "consentId", value: consent.id }],
-            });
-            if (existing === null) {
-              await ctx.context.adapter.create({
-                model: MCP_POLICY_MODEL,
-                data: { consentId: consent.id, policy: encodePolicy(policy) },
-              });
-            } else {
-              await ctx.context.adapter.update({
-                model: MCP_POLICY_MODEL,
-                where: [{ field: "id", value: existing.id }],
-                update: { policy: encodePolicy(policy) },
-              });
-            }
           }),
         },
       ],
     },
   };
 }
+
+// Writes the policy chosen on the consent screen for the consent just granted.
+const saveConsentPolicy = Effect.fn("saveConsentPolicy")(function* (
+  adapter: HookEndpointContext["context"]["adapter"],
+  operatorId: string,
+  providerState: ReturnType<typeof getOAuthProviderState>,
+  policy: PrincipalPolicy,
+) {
+  const state = yield* Effect.promise(() => providerState);
+  const clientId = new URLSearchParams(state?.query ?? "").get("client_id");
+  if (clientId === null) return;
+  const consent = yield* Effect.promise(() =>
+    adapter.findOne<{ id: string }>({
+      model: "oauthConsent",
+      where: [
+        { field: "clientId", value: clientId },
+        { field: "userId", value: operatorId },
+      ],
+    }),
+  );
+  if (consent === null) return;
+  const existing = yield* Effect.promise(() =>
+    adapter.findOne<{ id: string }>({
+      model: MCP_POLICY_MODEL,
+      where: [{ field: "consentId", value: consent.id }],
+    }),
+  );
+  yield* Effect.promise(() =>
+    existing === null
+      ? adapter.create({
+          model: MCP_POLICY_MODEL,
+          data: { consentId: consent.id, policy: encodePolicy(policy) },
+        })
+      : adapter.update({
+          model: MCP_POLICY_MODEL,
+          where: [{ field: "id", value: existing.id }],
+          update: { policy: encodePolicy(policy) },
+        }),
+  );
+});
 
 export type AuthSite = { readonly apiHostname: string };
 export type AuthRateLimitSetting = { readonly rateLimit: boolean };
@@ -229,21 +252,9 @@ export function makeAuthOptions(
     rateLimit,
     disabledPaths: [...DISABLED_AUTH_PATHS],
     hooks: {
-      before: createAuthMiddleware(async (ctx) => {
-        if (ctx.path === "/oauth2/authorize") {
-          await assertRecognisableRedirectTarget(ctx, origin);
-          return;
-        }
-        if (ctx.path === "/oauth2/register") {
-          const decoded = Schema.decodeUnknownResult(DynamicRegistrationBody)(ctx.body);
-          if (Result.isFailure(decoded)) throw invalidRegistration();
-          assertCursorRedirectPolicy(decoded.success);
-          const normalized = normalizeDynamicRegistration(decoded.success);
-          assertUsableRedirectUris(decoded.success, normalized);
-          assertDynamicRegistration(normalized, mcpResource);
-          return { context: { body: normalized } };
-        }
-      }),
+      before: createAuthMiddleware((ctx) =>
+        Effect.runPromise(checkClientRequest(ctx, origin, mcpResource)),
+      ),
     },
     plugins: [
       jwt({ disableSettingJwtHeader: true }),
@@ -271,6 +282,37 @@ export function makeAuthOptions(
       mcpPolicyPlugin(operatorId),
     ],
   } satisfies BetterAuthProps;
+}
+
+// Fails with the APIError better-auth answers with when an authorize or register request is not
+// admitted; a register request continues with the normalized metadata.
+const checkClientRequest = Effect.fn("checkClientRequest")(function* (
+  ctx: GenericEndpointContext,
+  origin: string,
+  mcpResource: string,
+) {
+  if (ctx.path === "/oauth2/authorize") {
+    yield* assertRecognisableRedirectTarget(ctx, origin);
+    return undefined;
+  }
+  if (ctx.path === "/oauth2/register") {
+    return yield* Effect.try({
+      try: () => normalizedRegistration(ctx, mcpResource),
+      catch: (error) => error,
+    });
+  }
+  return undefined;
+});
+
+// Throws the APIError better-auth answers with when the registration is not admitted.
+function normalizedRegistration(ctx: GenericEndpointContext, mcpResource: string) {
+  const decoded = Schema.decodeUnknownResult(DynamicRegistrationBody)(ctx.body);
+  if (Result.isFailure(decoded)) throw invalidRegistration();
+  assertCursorRedirectPolicy(decoded.success);
+  const normalized = normalizeDynamicRegistration(decoded.success);
+  assertUsableRedirectUris(decoded.success, normalized);
+  assertDynamicRegistration(normalized, mcpResource);
+  return { context: { body: normalized } };
 }
 
 function normalizeDynamicRegistration(registration: DynamicRegistration): NormalizedRegistration {
@@ -384,34 +426,40 @@ function assertDynamicRegistration(
   }
 }
 
-async function assertRecognisableRedirectTarget(
+const assertRecognisableRedirectTarget = Effect.fn("assertRecognisableRedirectTarget")(function* (
   ctx: GenericEndpointContext,
   origin: string,
-): Promise<void> {
+) {
   const decoded = Schema.decodeUnknownResult(AuthorizeQuery)(ctx.query);
   if (Result.isFailure(decoded)) return;
   const { client_id: clientId, redirect_uri: requested } = decoded.success;
   if (clientId === undefined || clientId.length === 0) return;
 
-  const stored = await ctx.context.adapter.findOne<SchemaClient<Scope[]>>({
-    model: "oauthClient",
-    where: [{ field: "clientId", value: clientId }],
-  });
+  const stored = yield* Effect.promise(() =>
+    ctx.context.adapter.findOne<SchemaClient<Scope[]>>({
+      model: "oauthClient",
+      where: [{ field: "clientId", value: clientId }],
+    }),
+  );
   const registered = stored?.redirectUris;
   if (registered === undefined || registered.length === 0) return;
 
   if (requested === undefined || requested.length === 0) {
-    throw unregisteredRedirect(
-      origin,
-      `no redirect_uri was sent; client ${clientId} registered: ${registered.join(", ")}`,
+    return yield* Effect.fail(
+      unregisteredRedirect(
+        origin,
+        `no redirect_uri was sent; client ${clientId} registered: ${registered.join(", ")}`,
+      ),
     );
   }
   if (registered.some((candidate) => couldAddressSameTarget(candidate, requested))) return;
-  throw unregisteredRedirect(
-    origin,
-    `redirect_uri ${requested} is not registered for client ${clientId}; registered: ${registered.join(", ")}`,
+  return yield* Effect.fail(
+    unregisteredRedirect(
+      origin,
+      `redirect_uri ${requested} is not registered for client ${clientId}; registered: ${registered.join(", ")}`,
+    ),
   );
-}
+});
 
 function unregisteredRedirect(origin: string, description: string): APIError {
   const location = new URL(`${origin}/api/auth/error`);
@@ -458,6 +506,7 @@ type RequiredUmailAuthApiMethod =
   | "deviceApprove"
   | "deviceDeny";
 
+// Better Auth types plugin endpoints as optional; these plugins are always configured.
 type RequiredUmailAuthApi = UmailAuth["api"] & {
   readonly [K in RequiredUmailAuthApiMethod]-?: NonNullable<UmailAuth["api"][K]>;
 };
@@ -470,3 +519,9 @@ export type UmailBetterAuth = Omit<
 export function asUmailBetterAuth<T>(auth: T): UmailBetterAuth {
   return auth as T & UmailBetterAuth;
 }
+
+// The per-request Better Auth instance alchemy provides. Its own typed API is used, not alchemy's
+// effectified `api`, whose types degrade to `(any) => Effect<any>` for this plugin set.
+export type UmailAuthInstance = {
+  readonly auth: Effect.Effect<UmailBetterAuth, never, Alchemy.RuntimeContext>;
+};

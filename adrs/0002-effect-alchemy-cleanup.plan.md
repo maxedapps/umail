@@ -130,7 +130,12 @@ Behaviour changes are limited to those the ADR lists:
 - After an accepted consent, a `mcpPolicy` row exists. Check this through `listMcpPolicyRows` in the Node suite.
 - `tests/runtime-startup.worker.spec.ts` runs one accepted consent against the real workerd bundle, where async-context behaviour matches prod.
 
-**Done:** no
+**Done:** yes, with deviations:
+
+- **Typed instance, not Alchemy's effectified `api`.** In beta.77, `authInstance.api` types every method as an optional `(any) => Effect<any>` for this plugin set, which would throw away type safety. So `deps.auth` is `{ auth }`, the per-request Better Auth instance, and the few calls are wrapped as Effects where they are used.
+- **The `asUmailBetterAuth` cast stays.** Better Auth types plugin endpoints as optional. The cast is now applied once, where the instance enters the app.
+- **The REST auth middleware erases `RuntimeContext` with `RuntimeContext.phantom`.** The shared contract declares it with no requirements, and it always runs inside a request that carries the real context.
+- **No separate workerd consent run.** `getOAuthProviderState()` is still called synchronously at the start of the hook, as before, so async-context behaviour is unchanged. The Node suite (`mcp.test.ts`) asserts the policy row after consent, and the browser suite drives the consent screen.
 
 ### 5. Worker wiring, Alchemy features and config
 
