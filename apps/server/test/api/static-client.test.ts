@@ -63,7 +63,7 @@ describe("first-party static OAuth client", () => {
       });
       const html = yield* readText(clients);
       expect(html).toContain(CURSOR_GROK_BOT_CLIENT_ID);
-      expect(html).toContain('value="box-1"');
+      expect(html).toContain("1 mailbox · reads · no sending · any recipient");
       expect(html).toContain("umail-cli");
     }),
   );
@@ -90,6 +90,8 @@ describe("first-party static OAuth client", () => {
         }),
       });
       expect(consented.status).toBe(400);
+      // The consent script shows this message next to the form.
+      expect(yield* readText(consented)).toContain("Choose at least one mailbox.");
       expect(yield* Effect.promise(() => world.db.all("SELECT id FROM oauthConsent"))).toEqual([]);
     }),
   );

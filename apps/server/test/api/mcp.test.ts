@@ -1049,7 +1049,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
   );
 });
 
-// Saves a policy through the clients page, as the operator would.
+// Saves a policy through the client's page, as the operator would.
 const updatePolicy = Effect.fn("updatePolicy")(function* (
   world: World,
   clientId: string,
@@ -1061,18 +1061,21 @@ const updatePolicy = Effect.fn("updatePolicy")(function* (
     readonly preapproved?: string;
   },
 ) {
-  const [consent] = yield* query(world, "SELECT id FROM oauthConsent WHERE clientId = ?", clientId);
   const body = new URLSearchParams({
-    mailboxes: input.mailboxes,
+    mailboxScope: input.mailboxes === "all" ? "all" : "some",
     sendMode: input.sendMode,
-    recipients: input.recipients,
+    recipientScope: input.recipients === "any" ? "any" : "some",
+    recipients: input.recipients === "any" ? "" : input.recipients,
     preapproved: input.preapproved ?? "",
   });
+  if (input.mailboxes !== "all") {
+    for (const id of input.mailboxes.split(",")) body.append("mailbox", id.trim());
+  }
   if (input.canRead !== false) {
     body.set("canRead", "on");
   }
   const response = yield* world.request(
-    `http://umail.test/clients/${encodeURIComponent(String(consent?.id))}/policy`,
+    `http://umail.test/clients/${encodeURIComponent(clientId)}`,
     {
       method: "POST",
       redirect: "manual",
@@ -1082,7 +1085,7 @@ const updatePolicy = Effect.fn("updatePolicy")(function* (
       body: body.toString(),
     },
   );
-  expect(response.status).toBe(303);
+  expect(response.status, yield* readText(response.clone())).toBe(303);
 });
 
 function rawToolsList(world: World, token: string) {

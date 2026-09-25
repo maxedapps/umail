@@ -152,15 +152,12 @@ function mcpPolicyPlugin(operatorId: string): BetterAuthPlugin {
       before: [
         {
           matcher: isAcceptedConsent,
-          handler: createAuthMiddleware((ctx) =>
-            policyFromForm(ctx.body) === null
-              ? Promise.reject(
-                  new APIError("BAD_REQUEST", {
-                    message: "Choose which mailboxes this client may use and how it may send.",
-                  }),
-                )
-              : Promise.resolve(),
-          ),
+          handler: createAuthMiddleware((ctx) => {
+            const policy = policyFromForm(ctx.body);
+            return policy.kind === "invalid"
+              ? Promise.reject(new APIError("BAD_REQUEST", { message: policy.message }))
+              : Promise.resolve();
+          }),
         },
       ],
       after: [
@@ -171,9 +168,11 @@ function mcpPolicyPlugin(operatorId: string): BetterAuthPlugin {
             // fiber resuming on a later turn may not carry.
             const providerState = getOAuthProviderState();
             const policy = policyFromForm(ctx.body);
-            if (isAPIError(ctx.context.returned) || policy === null) return Promise.resolve();
+            if (isAPIError(ctx.context.returned) || policy.kind === "invalid") {
+              return Promise.resolve();
+            }
             return Effect.runPromise(
-              saveConsentPolicy(ctx.context.adapter, operatorId, providerState, policy),
+              saveConsentPolicy(ctx.context.adapter, operatorId, providerState, policy.policy),
             );
           }),
         },

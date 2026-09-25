@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–4 done)
+- **Status:** In progress (tasks 1–5 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -301,7 +301,12 @@ The consent script shrinks to building the `mailboxes` string from the checked b
   - The preapproved field is hidden until "With my approval" is chosen.
   - The revoke popover opens by keyboard with no JavaScript.
 
-**Done:** no.
+**Done:** yes. Notes:
+
+- A no-policy consent's form starts from the consent screen's defaults rather than blank, so "Grant access" saves something sensible.
+- `mcp.test.ts`'s `updatePolicy` helper now posts the new form to `POST /clients/:clientId`; task 2's "unchanged" only held until this task. `static-client.test.ts` checks the list's summary and the hook's message instead of the old policy inputs.
+- The consent hook's message is asserted in `static-client.test.ts`, which already drives a raw consent POST; the checked-mailboxes case is covered by `clients.test.ts` and the existing consent-time policy tests.
+- The browser fixture no longer seeds the page's session cookie: Vitest loads the fixture once for its middleware and again for its commands, so the cookie came from a different in-memory world. The proxy signs requests in with its own world's session instead.
 
 ### 6. Mail: list, conversation, body frame, attachments, read state, delete
 

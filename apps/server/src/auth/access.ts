@@ -32,6 +32,8 @@ const StoredPolicy = Schema.fromJsonString(PrincipalPolicy);
 
 const PolicyRow = Schema.Struct({ policy: Schema.String });
 
+const ClientNameRow = Schema.Struct({ name: Schema.NullOr(Schema.String) });
+
 const GrantRow = Schema.Struct({
   clientId: Schema.String,
   name: Schema.NullOr(Schema.String),
@@ -105,6 +107,18 @@ export function makeAccess(db: Cloudflare.D1.QueryDatabaseClient, operatorId: st
       return true;
     }),
 
+    // The registered client's name, or null for an unknown client or one without a name.
+    clientName: Effect.fn("Access.clientName")(function* (clientId: string) {
+      const row = yield* db
+        .prepare("SELECT name FROM oauthClient WHERE clientId = ?")
+        .bind(clientId)
+        .first();
+      return Schema.decodeUnknownOption(ClientNameRow)(row).pipe(
+        Option.flatMap((decoded) => Option.fromNullishOr(decoded.name)),
+        Option.getOrNull,
+      );
+    }),
+
     // Ends every grant the client holds. Deleting the consent deletes its policy, so reconnecting
     // shows the consent screen again; the client's registration stays.
     revoke: (clientId: string) =>
@@ -147,26 +161,50 @@ const PolicyForm = Schema.Struct({
   preapproved: Schema.optionalKey(Schema.String),
 });
 
-export function policyFromForm(input: unknown): PrincipalPolicy | null {
+export type PolicyField = "mailboxes" | "recipients" | "preapproved";
+
+export type PolicyFormResult =
+  | { readonly kind: "ok"; readonly policy: PrincipalPolicy }
+  | { readonly kind: "invalid"; readonly field: PolicyField; readonly message: string };
+
+export function policyFromForm(input: unknown): PolicyFormResult {
   const form = Schema.decodeUnknownOption(PolicyForm)(input);
-  if (Option.isNone(form)) return null;
+  if (Option.isNone(form)) {
+    return invalid("mailboxes", "Choose which mailboxes this client may use and how it may send.");
+  }
   const mailboxIds = parsePrincipalMailboxIds(form.value.mailboxes);
+  if (mailboxIds.kind !== "ok") return invalid("mailboxes", "Choose at least one mailbox.");
   const recipients = parsePrincipalRecipientAllowlist(form.value.recipients ?? "any");
-  const sendMode = parseSendMode(form.value.sendMode, form.value.preapproved ?? "");
-  if (mailboxIds.kind !== "ok" || recipients.kind !== "ok" || sendMode === null) return null;
+  if (recipients.kind === "empty") {
+    return invalid("recipients", "List at least one recipient, or allow anyone.");
+  }
+  if (recipients.kind !== "ok") return invalid("recipients", notAnAddress(recipients.value));
+  const preapproved =
+    form.value.sendMode === "requireApproval"
+      ? parseMailAddressList(form.value.preapproved ?? "")
+      : null;
+  if (preapproved !== null && preapproved.kind !== "ok") {
+    return invalid("preapproved", notAnAddress(preapproved.value));
+  }
+  const sendMode: PrincipalSendMode =
+    form.value.sendMode === "requireApproval"
+      ? requireApprovalSendMode(preapproved?.addresses)
+      : { kind: form.value.sendMode };
   return {
-    mailboxIds: mailboxIds.mailboxIds,
-    canRead: form.value.canRead ?? true,
-    sendMode,
-    recipientAllowlist: recipients.recipientAllowlist,
+    kind: "ok",
+    policy: {
+      mailboxIds: mailboxIds.mailboxIds,
+      canRead: form.value.canRead ?? true,
+      sendMode,
+      recipientAllowlist: recipients.recipientAllowlist,
+    },
   };
 }
 
-function parseSendMode(
-  kind: "deny" | "allow" | "requireApproval",
-  preapproved: string,
-): PrincipalSendMode | null {
-  if (kind !== "requireApproval") return { kind };
-  const parsed = parseMailAddressList(preapproved);
-  return parsed.kind === "ok" ? requireApprovalSendMode(parsed.addresses) : null;
+function invalid(field: PolicyField, message: string): PolicyFormResult {
+  return { kind: "invalid", field, message };
+}
+
+function notAnAddress(value: string): string {
+  return `“${value}” is not an email address.`;
 }

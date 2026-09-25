@@ -1,32 +1,22 @@
-import type { PageView } from "../document.ts";
-import { html } from "../html.ts";
+import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type Address } from "@umail/api-contract";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+
+import type { ApiDeps } from "../../api/app.ts";
+import { listAddresses } from "../../api/operations.ts";
+import { htmlResponse, type PageView } from "../document.ts";
+import { bidiAddress, bidiText, html } from "../html.ts";
+import { accessFieldsets, policyFormState } from "./clients.ts";
 import { AUTH_CONTINUATION_SCRIPT } from "./login.ts";
 
+// Builds the policy fields from the form and posts the decision with Better Auth's signed query.
 const CONSENT_PAGE_SCRIPT = `
-const oauthQuery = signedOAuthQuery(location.search);
-const params = new URLSearchParams(oauthQuery ?? "");
-document.getElementById("client-id").textContent = params.get("client_id") ?? "Not supplied";
-document.getElementById("scope").textContent = params.get("scope") ?? "Not supplied";
-document.getElementById("redirect-host").textContent = redirectHost(params.get("redirect_uri"));
 const consentForm = document.getElementById("consent-form");
-const mailboxesField = document.getElementById("mailboxes");
-const sendModeField = document.getElementById("send-mode");
 const acceptButton = document.getElementById("accept");
 const denyButton = document.getElementById("deny");
 const status = document.getElementById("status");
 ${AUTH_CONTINUATION_SCRIPT}
-
-function redirectHost(redirectUri) {
-  if (redirectUri === null) {
-    return "Not supplied";
-  }
-  try {
-    const url = new URL(redirectUri);
-    return url.protocol + "//" + url.host;
-  } catch {
-    return redirectUri;
-  }
-}
 
 function setPending(pending) {
   consentForm.setAttribute("aria-busy", pending ? "true" : "false");
@@ -39,23 +29,27 @@ async function consent(accept) {
   showStatus("Recording your decision…", "pending");
   try {
     const body = { accept };
+    const oauthQuery = signedOAuthQuery(location.search);
     if (oauthQuery !== null) {
       body.oauth_query = oauthQuery;
     }
     if (accept) {
-      body.mailboxes = mailboxesField.value;
-      body.sendMode = sendModeField.value;
+      const data = new FormData(consentForm);
+      body.mailboxes = data.get("mailboxScope") === "some" ? data.getAll("mailbox").join(",") : "all";
+      body.sendMode = data.get("sendMode");
+      body.preapproved = data.get("preapproved") ?? "";
     }
     const response = await fetch("/api/auth/oauth2/consent", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(body),
     });
+    const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      showStatus("Could not complete consent.", "error");
+      const message = payload !== null && typeof payload.message === "string" ? payload.message : null;
+      showStatus(message ?? "Could not complete consent.", "error");
       return;
     }
-    const payload = await response.json();
     const redirectUrl = browserRedirectUrl(payload);
     if (redirectUrl !== null) {
       location.assign(redirectUrl);
@@ -73,47 +67,74 @@ acceptButton.addEventListener("click", () => consent(true));
 denyButton.addEventListener("click", () => consent(false));
 `;
 
-export function consentPage(): PageView {
+function scopeInWords(scope: string): string {
+  switch (scope) {
+    case UMAIL_OAUTH_SCOPE:
+      return "Use your mailboxes";
+    case OFFLINE_ACCESS_SCOPE:
+      return "stay signed in";
+    default:
+      return scope;
+  }
+}
+
+type ConsentView = {
+  readonly clientId: string;
+  readonly clientName: string | null;
+  readonly scope: string;
+  readonly redirectUri: string | null;
+};
+
+export function consentPage(view: ConsentView, addresses: ReadonlyArray<Address>): PageView {
+  const scopes = view.scope
+    .split(" ")
+    .filter((scope) => scope.length > 0)
+    .map(scopeInWords);
+  const redirect = view.redirectUri === null ? null : URL.parse(view.redirectUri);
   return {
     kind: "auth",
     title: "Authorize mailbox access",
-    heading: "Review this access request",
-    lede: "A client is asking to use your mailboxes through AgentMail. Choose what it may do. You can change this later under Clients.",
+    heading: `Allow ${view.clientName ?? "this client"} to use AgentMail?`,
+    lede: "Choose what it may do. You can change this later under Clients.",
     main: html`<form class="stack" id="consent-form" aria-busy="false">
       <dl class="meta">
         <dt>Client</dt>
-        <dd><bdi id="client-id" dir="auto"></bdi></dd>
-        <dt>Scope</dt>
-        <dd><bdi id="scope" dir="auto"></bdi></dd>
-        <dt>Redirects to</dt>
-        <dd><bdi id="redirect-host" dir="auto"></bdi></dd>
+        <dd>
+          ${view.clientName === null ? null : html`${bidiText(view.clientName)}<br />`}
+          <span class="mono muted">${bidiAddress(view.clientId)}</span>
+        </dd>
+        <dt>Access</dt>
+        <dd>${scopes.length === 0 ? "Not stated" : scopes.join(" · ")}</dd>
+        <dt>Returns to</dt>
+        <dd>
+          ${redirect === null ? "Not stated" : bidiAddress(`${redirect.protocol}//${redirect.host}`)}
+        </dd>
       </dl>
-      <div class="field">
-        <label for="mailboxes">Mailboxes</label>
-        <input
-          id="mailboxes"
-          name="mailboxes"
-          type="text"
-          value="all"
-          required
-          aria-describedby="mailboxes-hint"
-        />
-        <p class="hint" id="mailboxes-hint">all, or comma-separated mailbox IDs.</p>
-      </div>
-      <div class="field">
-        <label for="send-mode">Sending</label>
-        <select id="send-mode" name="sendMode">
-          <option value="requireApproval" selected>Every send needs my approval</option>
-          <option value="allow">Send without approval</option>
-          <option value="deny">No sending</option>
-        </select>
-      </div>
+      ${accessFieldsets(policyFormState(null), addresses, null)}
       <div class="actions">
         <button id="accept" type="button">Allow access</button>
-        <button class="secondary" id="deny" type="button">Deny request</button>
+        <button class="secondary" id="deny" type="button">Deny</button>
       </div>
       <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
     </form>`,
     script: CONSENT_PAGE_SCRIPT,
   };
 }
+
+const ConsentQuery = Schema.Struct({
+  client_id: Schema.optionalKey(Schema.String),
+  scope: Schema.optionalKey(Schema.String),
+  redirect_uri: Schema.optionalKey(Schema.String),
+});
+
+export const consentRoute = Effect.fn("consentRoute")(function* (deps: ApiDeps) {
+  const query = yield* HttpServerRequest.schemaSearchParams(ConsentQuery);
+  const clientId = query.client_id ?? "";
+  const view = {
+    clientId,
+    clientName: clientId.length === 0 ? null : yield* deps.access.clientName(clientId),
+    scope: query.scope ?? "",
+    redirectUri: query.redirect_uri ?? null,
+  };
+  return yield* htmlResponse(200, consentPage(view, yield* listAddresses(deps)));
+});

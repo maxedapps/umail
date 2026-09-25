@@ -37,22 +37,35 @@ describe("web pages in Chromium", () => {
         expect(cspViolations(login)).toEqual([]);
 
         expect(consent.scriptNonce).toBe(cspScriptNonce(consent.contentSecurityPolicy));
-        expect(consent.clientId).not.toBeNull();
-        expect(consent.clientId).not.toContain("<");
-        expect(consent.scope).toContain("offline_access");
-        expect(consent.redirectHost).toBe("http://127.0.0.1");
+        expect(consent.heading).toBe("Allow Browser consent to use AgentMail?");
+        expect(consent.bodyText).toContain("Use your mailboxes · stay signed in");
+        expect(consent.bodyText).toContain("http://127.0.0.1");
         expect(consent.keyboardFocusId).toBe("deny");
         expect(consent.buttons).toEqual([
           { name: "Allow access", type: "button", formAction: "" },
-          { name: "Deny request", type: "button", formAction: "" },
+          { name: "Deny", type: "button", formAction: "" },
         ]);
         expect(consent.authRequestPath).toBe("/api/auth/oauth2/consent");
         expect(consent.authRequestMethod).toBe("POST");
         expect(consent.authRequestBody).toContain("oauth_query");
         expect(consent.authRequestBody).toContain("client_id");
+        expect(consent.authRequestBody).toContain('"mailboxes":"all"');
+        expect(consent.authRequestBody).toContain('"sendMode":"requireApproval"');
         expect(consent.hostileElementCount).toBe(0);
         expect(cspViolations(consent)).toEqual([]);
       }),
+  );
+
+  it.effect("reveals policy fields with :has() and opens the revoke popover by keyboard", () =>
+    Effect.gen(function* () {
+      const client = yield* observe("client");
+
+      expect(client.status).toBe(200);
+      expect(client.preapprovedShownWithApproval).toBe(true);
+      expect(client.preapprovedShownWhenNever).toBe(false);
+      expect(client.revokePopoverOpen).toBe(true);
+      expect(cspViolations(client)).toEqual([]);
+    }),
   );
 
   it.effect(
@@ -185,7 +198,7 @@ describe("web pages in Chromium", () => {
     "avoids horizontal overflow at 320px and computes distinct light and dark presentation",
     () =>
       Effect.gen(function* () {
-        const mobileFixtures = ["login", "consent", "pending", "accepted"] as const;
+        const mobileFixtures = ["login", "consent", "client", "pending", "accepted"] as const;
         for (const fixture of mobileFixtures) {
           const mobile = yield* observe(fixture, { width: 320, height: 900, colorScheme: "light" });
           expect(mobile.documentScrollWidth, `${fixture} scroll width`).toBeLessThanOrEqual(

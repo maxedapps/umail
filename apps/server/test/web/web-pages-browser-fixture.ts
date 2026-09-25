@@ -19,7 +19,7 @@ import type { Vite } from "vitest/node";
 import { randomId, webCrypto } from "../../src/crypto.ts";
 import { submitMessage } from "../../src/api/operations.ts";
 import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "../api/fakes.ts";
-import { registerMcpClient } from "../api/oauth-flow.ts";
+import { issueMcpAccessToken, registerMcpClient } from "../api/oauth-flow.ts";
 import {
   APPLICATION_ORIGIN,
   APPLICATION_URL,
@@ -89,9 +89,9 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     }
   });
 
-  const prepared = yield* preparedBrowserWorld;
+  // No cookie: the proxy signs every request in with its world's operator session. Vitest loads this
+  // module once for the middleware and again for the commands, so their worlds differ.
   yield* Effect.promise(() => context.clearCookies());
-  yield* Effect.promise(() => context.addCookies(sessionCookies(prepared.world, runnerPage.url())));
   yield* Effect.promise(() =>
     page.setViewportSize({ width: visit.viewportWidth, height: visit.viewportHeight }),
   );
@@ -123,9 +123,7 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
   const metadataText = yield* optionalText(page.locator(".meta"));
   const messageBodyBox = yield* optionalBoundingBox(page.locator("#message-body"));
   const decisionBox = yield* optionalBoundingBox(page.locator("#decision"));
-  const clientId = yield* optionalText(page.locator("#client-id"));
-  const scope = yield* optionalText(page.locator("#scope"));
-  const redirectHost = yield* optionalText(page.locator("#redirect-host"));
+  const client = visit.fixture === "client" ? yield* exerciseClientPage(page) : null;
   const heading = (yield* optionalText(page.locator("h1"))) ?? "";
   const title = yield* Effect.promise(() => page.title());
   const bodyText = yield* Effect.promise(() => page.locator("body").innerText());
@@ -191,9 +189,9 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     focusOutlineWidth: focus.outlineWidth,
     controlHeight: focus.controlHeight,
     scriptNonce,
-    clientId,
-    scope,
-    redirectHost,
+    preapprovedShownWithApproval: client?.preapprovedShownWithApproval ?? null,
+    preapprovedShownWhenNever: client?.preapprovedShownWhenNever ?? null,
+    revokePopoverOpen: client?.revokePopoverOpen ?? null,
     statusText: consentAuth?.statusText ?? focus.statusText,
     authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
     authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
@@ -347,6 +345,23 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
     authRequestMethod: null,
     authRequestBody: null,
   };
+});
+
+// The "Skip approval for" field shows only under "With my approval", and the revoke confirmation is
+// a popover the keyboard opens without any script.
+const exerciseClientPage = Effect.fn("exerciseClientPage")(function* (page: Page) {
+  const preapproved = page.locator("#preapproved");
+  const preapprovedShownWithApproval = yield* Effect.promise(() => preapproved.isVisible());
+  // By keyboard: the fixture page is a background tab, where pointer actions never settle.
+  yield* Effect.promise(() => page.locator('input[name="sendMode"][value="deny"]').focus());
+  yield* Effect.promise(() => page.keyboard.press("Space"));
+  const preapprovedShownWhenNever = yield* Effect.promise(() => preapproved.isVisible());
+  yield* Effect.promise(() => page.getByRole("button", { name: "Revoke access…" }).focus());
+  yield* Effect.promise(() => page.keyboard.press("Enter"));
+  const revokePopoverOpen = yield* Effect.promise(() =>
+    page.locator("#revoke-dialog").evaluate((element) => element.matches(":popover-open")),
+  );
+  return { preapprovedShownWithApproval, preapprovedShownWhenNever, revokePopoverOpen };
 });
 
 const submitConsent = Effect.fn("submitConsent")(function* (page: Page) {
@@ -657,11 +672,14 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
   // Approved last, so no pass sends it: its page shows the approved message as sending.
   yield* decide(world, queued.token, "approved");
   const consentPath = yield* consentAuthorizePath(world);
+  const agent = yield* registerMcpClient(world, { label: "Browser agent" });
+  yield* issueMcpAccessToken(world, agent);
   return {
     world,
     paths: {
       login: "/login",
       consent: consentPath,
+      client: `/clients/${encodeURIComponent(agent.clientId)}`,
       pending: approvalPath(pending.token),
       accepted: approvalPath(accepted.token),
       failed: approvalPath(failed.token),
@@ -832,41 +850,6 @@ const consentAuthorizePath = Effect.fn("consentAuthorizePath")(function* (world:
 
 function approvalPath(token: string): string {
   return `/approvals/${token}`;
-}
-
-function sessionCookies(world: World, pageUrl: string) {
-  const parsed = parseSessionCookie(world.sessionCookie, pageUrl);
-  if (parsed === null) {
-    throw new Error(`invalid session cookie for browser origin ${pageUrl}`);
-  }
-  return [parsed];
-}
-
-function parseSessionCookie(sessionCookie: string, pageUrl: string) {
-  const parsedUrl = URL.parse(pageUrl);
-  if (parsedUrl === null || (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:")) {
-    return null;
-  }
-  const pair = sessionCookie.split(";", 1)[0]?.trim() ?? "";
-  const separator = pair.indexOf("=");
-  if (separator <= 0) {
-    return null;
-  }
-  let name = pair.slice(0, separator).trim();
-  let value = pair.slice(separator + 1).trim();
-  const comma = value.indexOf(",");
-  if (comma >= 0) {
-    value = value.slice(0, comma).trim();
-  }
-  name = publicCookieName(name);
-  if (name.length === 0 || value.length === 0) {
-    return null;
-  }
-  return {
-    name,
-    value,
-    url: `${parsedUrl.protocol}//${parsedUrl.host}/`,
-  };
 }
 
 function pageOwnedScriptNonce(): string | null {

@@ -9,8 +9,8 @@ import { agentMailIconResponse } from "../api/brand/identity.ts";
 import { serveMcpRequest } from "../api/mcp/route.ts";
 import { blockedAuthSurfaceResponse } from "../auth/runtime-surface.ts";
 import { htmlResponse } from "./document.ts";
-import { clientsRoute, revokeClientRoute, updateClientPolicyRoute } from "./pages/clients.ts";
-import { consentPage } from "./pages/consent.ts";
+import { clientRoute, clientsRoute, revokeClientRoute, saveClientRoute } from "./pages/clients.ts";
+import { consentRoute } from "./pages/consent.ts";
 import { deviceDecisionRoute, deviceRoute } from "./pages/device.ts";
 import { loginPage } from "./pages/login.ts";
 import { logout, withOperator } from "./session.ts";
@@ -28,13 +28,14 @@ export function webRoutes(deps: ApiDeps) {
     HttpRouter.add("*", "/api/auth/*", serveBetterAuth(deps)),
     HttpRouter.add("*", "/.well-known/*", serveBetterAuth(deps)),
     HttpRouter.add("GET", "/login", htmlResponse(200, loginPage())),
-    HttpRouter.add("GET", "/consent", htmlResponse(200, consentPage())),
+    HttpRouter.add("GET", "/consent", operator(consentRoute(deps))),
     HttpRouter.add("POST", "/logout", logout(deps)),
     HttpRouter.add("GET", "/device", operator(deviceRoute(deps))),
     HttpRouter.add("POST", "/device/approve", operator(deviceDecisionRoute(deps, "approved"))),
     HttpRouter.add("POST", "/device/deny", operator(deviceDecisionRoute(deps, "denied"))),
     HttpRouter.add("GET", "/clients", operator(clientsRoute(deps))),
-    HttpRouter.add("POST", "/clients/:consentId/policy", operator(updateClientPolicyRoute(deps))),
+    HttpRouter.add("GET", "/clients/:clientId", operator(clientRoute(deps))),
+    HttpRouter.add("POST", "/clients/:clientId", operator(saveClientRoute(deps))),
     HttpRouter.add("POST", "/clients/:clientId/revoke", operator(revokeClientRoute(deps))),
   );
 }
