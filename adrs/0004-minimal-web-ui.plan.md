@@ -360,7 +360,7 @@ Then run the full `pnpm test`.
 
 **Verify:** `mailboxes.test.ts` passes unchanged (the badge strings stay). Then the full `pnpm test`.
 
-**Done:** no.
+**Done:** yes. Deviation: "Stop forwarding" is a second submit button in the forwarding form (`name="remove" value="1" formnovalidate`) rather than a separate form, which puts both buttons in one `.actions` row without nesting forms. The route already treats any `remove` field as the stop request.
 
 ### 6. Clients, client detail and the shared access sections
 

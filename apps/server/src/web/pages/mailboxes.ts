@@ -15,6 +15,7 @@ import {
 } from "../../api/operations.ts";
 import { htmlResponse, redirect, type Flash, type PageView } from "../document.ts";
 import { html, type Html } from "../html.ts";
+import { icon } from "../icons.ts";
 
 type FieldError = { readonly field: "localPart" | "forwardTo"; readonly message: string };
 
@@ -44,50 +45,55 @@ export function mailboxesPage(
     main: html`${
         addresses.length === 0
           ? html`<p class="empty">No mailboxes yet.</p>`
-          : html`<ul class="list">
+          : html`<ul class="rows">
               ${addresses.map(
                 (address) =>
                   html`<li>
                     <a class="row" href="/mailboxes/${encodeURIComponent(address.id)}">
-                      <span class="primary"
+                      <span
                         ><span class="mono">${address.address}</span> ${activeBadge(address)}</span
                       >
-                      <span class="secondary"
+                      <small
                         >${address.displayName ?? "No display name"}${
                           address.forwardTo === null ? null : ` · forwards to ${address.forwardTo}`
-                        }</span
+                        }</small
                       >
                     </a>
                   </li>`,
               )}
             </ul>`
       }
-      <section class="section" aria-labelledby="new-mailbox-title">
-        <h2 id="new-mailbox-title">New mailbox</h2>
-        <form class="stack" method="post" action="/mailboxes">
-          <div class="field">
-            <label for="localPart">Address</label>
-            <div class="suffixed">
-              <input
-                id="localPart"
-                name="localPart"
-                type="text"
-                value="${form.localPart}"
-                required
-                autocomplete="off"
-                ${error?.field === "localPart" ? html`aria-invalid="true"` : null}
-              />
-              <span>@${mailDomain}</span>
+      <div class="settings">
+        <section class="setting" aria-labelledby="new-mailbox-title">
+          <header>
+            <h2 id="new-mailbox-title">New mailbox</h2>
+            <p>Receives mail at @${mailDomain}.</p>
+          </header>
+          <form method="post" action="/mailboxes">
+            <div class="field">
+              <label for="localPart">Address</label>
+              <div class="suffixed">
+                <input
+                  id="localPart"
+                  name="localPart"
+                  type="text"
+                  value="${form.localPart}"
+                  required
+                  autocomplete="off"
+                  ${error?.field === "localPart" ? html`aria-invalid="true"` : null}
+                />
+                <span>@${mailDomain}</span>
+              </div>
+              ${fieldError(error, "localPart")}
             </div>
-            ${fieldError(error, "localPart")}
-          </div>
-          <div class="field">
-            <label for="displayName">Display name</label>
-            <input id="displayName" name="displayName" type="text" value="${form.displayName}" />
-          </div>
-          <div class="actions"><button type="submit">Create mailbox</button></div>
-        </form>
-      </section>`,
+            <div class="field">
+              <label for="displayName">Display name</label>
+              <input id="displayName" name="displayName" type="text" value="${form.displayName}" />
+            </div>
+            <div class="actions"><button class="button" type="submit">Create mailbox</button></div>
+          </form>
+        </section>
+      </div>`,
   };
 }
 
@@ -105,35 +111,52 @@ export function mailboxPage(
     heading: address.address,
     lede: activeBadge(address),
     flash,
-    main: html`<form class="stack" method="post" action="${path}">
-        <div class="field">
-          <label for="displayName">Display name</label>
-          <input
-            id="displayName"
-            name="displayName"
-            type="text"
-            value="${address.displayName ?? ""}"
-          />
-          <p class="hint">Shown as the sender name on mail from this address.</p>
-        </div>
-        <label class="choice"
-          ><input type="checkbox" name="active" ${address.active ? html`checked` : null} />
-          <span
-            >Active<small>An inactive mailbox rejects new mail and cannot send.</small></span
-          ></label
-        >
-        <div class="actions"><button type="submit">Save</button></div>
-      </form>
-      <section class="section" aria-labelledby="forwarding-title">
-        <h2 id="forwarding-title">Forwarding</h2>
-        <p class="muted">
-          ${
-            address.forwardTo === null
-              ? "Mail is kept here only."
-              : html`Mail is also forwarded to <span class="mono">${address.forwardTo}</span>.`
-          }
-        </p>
-        <form class="stack" method="post" action="${path}/forwarding">
+    toolbar: html`<nav class="crumbs" aria-label="Breadcrumb">
+      <a href="/mailboxes">Mailboxes</a>${icon("right")}<span>${address.address}</span>
+    </nav>`,
+    main: html`<div class="settings">
+      <section class="setting" aria-labelledby="general-title">
+        <header>
+          <h2 id="general-title">General</h2>
+          <p>How the address signs its mail, and whether it takes any.</p>
+        </header>
+        <form method="post" action="${path}">
+          <div class="field">
+            <label for="displayName">Display name</label>
+            <input
+              id="displayName"
+              name="displayName"
+              type="text"
+              value="${address.displayName ?? ""}"
+            />
+            <p class="hint">Shown as the sender name on mail from this address.</p>
+          </div>
+          <label class="switch-row"
+            ><span
+              ><b>Active</b
+              ><small>An inactive mailbox rejects new mail and cannot send.</small></span
+            ><input
+              class="switch"
+              type="checkbox"
+              name="active"
+              ${address.active ? html`checked` : null}
+          /></label>
+          <div class="actions"><button class="button" type="submit">Save</button></div>
+        </form>
+      </section>
+      <section class="setting" aria-labelledby="forwarding-title">
+        <header>
+          <h2 id="forwarding-title">Forwarding</h2>
+          <p>Copies incoming mail to another address.</p>
+        </header>
+        <form method="post" action="${path}/forwarding">
+          <p class="muted">
+            ${
+              address.forwardTo === null
+                ? "Mail is kept here only."
+                : html`Mail is also forwarded to <span class="mono">${address.forwardTo}</span>.`
+            }
+          </p>
           <div class="field">
             <label for="forwardTo">Forward to</label>
             <input
@@ -148,18 +171,26 @@ export function mailboxPage(
             ${fieldError(error, "forwardTo")}
           </div>
           <div class="actions">
-            <button type="submit">${address.forwardTo === null ? "Forward" : "Change"}</button>
+            <button class="button" type="submit">
+              ${address.forwardTo === null ? "Forward" : "Change"}
+            </button>
+            ${
+              address.forwardTo === null
+                ? null
+                : html`<button
+                    class="button danger"
+                    type="submit"
+                    name="remove"
+                    value="1"
+                    formnovalidate
+                  >
+                    Stop forwarding
+                  </button>`
+            }
           </div>
         </form>
-        ${
-          address.forwardTo === null
-            ? null
-            : html`<form method="post" action="${path}/forwarding">
-                <input type="hidden" name="remove" value="1" />
-                <button class="danger" type="submit">Stop forwarding</button>
-              </form>`
-        }
-      </section>`,
+      </section>
+    </div>`,
   };
 }
 
