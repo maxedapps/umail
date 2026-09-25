@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { ExternalMailAddress } from "@umail/api-contract";
 
-import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
+import { provisionAuth } from "../../src/auth/provisioning.ts";
+import { memoryQueryDatabase } from "./memory-d1.ts";
 import { DISABLED_AUTH_PATHS, sameOriginReturnPath } from "../../src/auth/runtime-surface.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
 import {
@@ -17,6 +18,7 @@ import {
   createWorld,
   listMcpPolicyRows,
   operatorCookieHeaders,
+  runInWorker,
   type World,
 } from "./world.ts";
 import { mcpResourceUrl, restResourceUrl } from "../../src/auth/options.ts";
@@ -509,12 +511,14 @@ async function consentForCode(world: World, consentPage: URL, redirectUri: strin
 }
 
 async function rotateOperatorPassword(world: World, password: string): Promise<void> {
-  await provisionAuth(world.db as AuthD1Database, {
-    identity: { databaseId: "test-auth" },
-    runNonce: crypto.randomUUID(),
-    operatorEmail: world.operatorEmail,
-    restResource: restResourceUrl(TEST_SITE),
-    mcpResource: mcpResourceUrl(TEST_SITE),
-    password,
-  });
+  await runInWorker(
+    provisionAuth(memoryQueryDatabase(world.db), {
+      identity: { databaseId: "test-auth" },
+      runNonce: crypto.randomUUID(),
+      operatorEmail: world.operatorEmail,
+      restResource: restResourceUrl(TEST_SITE),
+      mcpResource: mcpResourceUrl(TEST_SITE),
+      password,
+    }),
+  );
 }

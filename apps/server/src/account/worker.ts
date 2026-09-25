@@ -9,7 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
 import { createMailHtmlPolicy } from "../mail/html-policy.ts";
-import { makeAccess, type AccessDatabase } from "../auth/access.ts";
+import { makeAccess } from "../auth/access.ts";
 import { WebCrypto, randomId } from "../crypto.ts";
 import { cloudflareEmailSender } from "../mail/email-sender.ts";
 import { notificationKeyFromSecret } from "../mail/notifications.ts";
@@ -159,7 +159,7 @@ export const AccountStoreLive = AccountStore.make(
       }
       // Read at runtime: the provisioned operator id is only in the deployed Worker's env.
       const operatorId = yield* Config.string("AUTH_OPERATOR_ID").pipe(Effect.orDie);
-      const access = makeAccess((yield* authDb.raw) as AccessDatabase, operatorId);
+      const access = makeAccess(authDb, operatorId);
       const ports = {
         sender: yield* cloudflareEmailSender(email),
         index,

@@ -1,3 +1,5 @@
+import type * as Alchemy from "alchemy";
+import type * as Crypto from "effect/Crypto";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -20,7 +22,9 @@ export type OAuthRouteDependencies = {
   readonly access: Access;
   readonly applicationUrl: URL;
   readonly operatorId: string;
-  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, Alchemy.RuntimeContext | Crypto.Crypto>,
+  ) => Promise<A>;
 };
 
 export function isOAuthRoute(pathname: string): boolean {

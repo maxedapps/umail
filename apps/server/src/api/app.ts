@@ -1,3 +1,5 @@
+import type * as Alchemy from "alchemy";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -185,15 +187,19 @@ function serveBetterAuth(deps: ApiDeps) {
 }
 
 function serveOAuthManagement(deps: ApiDeps) {
-  return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
+  return Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
     const webRequest = HttpServerRequest.toWebResult(request);
     if (Result.isFailure(webRequest)) {
-      return new HttpServerError({ reason: webRequest.failure });
+      return yield* new HttpServerError({ reason: webRequest.failure });
     }
-    const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
-    return Effect.promise(() =>
-      serveOAuthRoute({ ...deps, operatorId: deps.operatorId, run }, webRequest.success),
-    ).pipe(Effect.map((response) => HttpServerResponse.fromWeb(response)));
+    const run = Effect.runPromiseWith(
+      yield* Effect.context<Alchemy.RuntimeContext | Crypto.Crypto>(),
+    );
+    const response = yield* Effect.promise(() =>
+      serveOAuthRoute({ ...deps, run }, webRequest.success),
+    );
+    return HttpServerResponse.fromWeb(response);
   });
 }
 

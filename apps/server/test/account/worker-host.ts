@@ -69,6 +69,9 @@ import {
   type SubmitOutboundInput,
 } from "../../src/account/domain.ts";
 
+import { RuntimeContext } from "alchemy/RuntimeContext";
+import * as Layer from "effect/Layer";
+
 import { WebCrypto } from "../../src/crypto.ts";
 
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
@@ -323,7 +326,9 @@ export class AccountStoreTestHost extends DurableObject {
     this.#ensureReady();
     if (this.dueWorkPorts === undefined) throw new Error("dueWorkPorts not installed");
     await Effect.runPromise(
-      runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()).pipe(Effect.provide(WebCrypto)),
+      runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()).pipe(
+        Effect.provide(Layer.merge(WebCrypto, RuntimeContext.phantom)),
+      ),
     );
   }
 

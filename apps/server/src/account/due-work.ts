@@ -1,5 +1,4 @@
 import * as Cause from "effect/Cause";
-import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -37,37 +36,36 @@ type DueWork<A> = {
 // One pass over everything the store has due: expire approvals, send ready jobs, settle abandoned
 // claims, and redrive stuck receipts. The steps are independent and never fail the pass; the
 // alarm is then set for the earliest remaining work.
-export const runDueWork = <R>(
+export const runDueWork = Effect.fn("runDueWork")(function* <R>(
   storage: AccountStorage,
   ports: DueWorkPorts<R>,
   nowMs: number,
-): Effect.Effect<void, never, R | Crypto.Crypto> =>
-  Effect.gen(function* () {
-    const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
-    const failed = {
-      approvals: yield* attempt(
-        { step: "expire" },
-        Effect.sync(() => expireDueApprovals(storage, nowIso)),
-      ),
-      ready: yield* sendReadyJobs(storage, ports, nowMs),
-      claims: yield* attempt(
-        { step: "settle" },
-        Effect.sync(() => settleAbandonedClaims(storage, nowIso)),
-      ),
-      receipts: yield* attempt(
-        { step: "redrive" },
-        Effect.gen(function* () {
-          const receiptIds = yield* Effect.sync(() =>
-            redriveDueInboundReceipts(storage, { nowIso, limit: REDRIVE_BATCH_SIZE }),
-          );
-          for (const receiptId of receiptIds) {
-            yield* ports.index.send({ version: 1, receiptId });
-          }
-        }),
-      ),
-    } satisfies DueWork<boolean>;
-    yield* Effect.promise(() => armDueWork(storage, nowMs, failed));
-  });
+) {
+  const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+  const failed = {
+    approvals: yield* attempt(
+      { step: "expire" },
+      Effect.sync(() => expireDueApprovals(storage, nowIso)),
+    ),
+    ready: yield* sendReadyJobs(storage, ports, nowMs),
+    claims: yield* attempt(
+      { step: "settle" },
+      Effect.sync(() => settleAbandonedClaims(storage, nowIso)),
+    ),
+    receipts: yield* attempt(
+      { step: "redrive" },
+      Effect.gen(function* () {
+        const receiptIds = yield* Effect.sync(() =>
+          redriveDueInboundReceipts(storage, { nowIso, limit: REDRIVE_BATCH_SIZE }),
+        );
+        for (const receiptId of receiptIds) {
+          yield* ports.index.send({ version: 1, receiptId });
+        }
+      }),
+    ),
+  } satisfies DueWork<boolean>;
+  yield* Effect.promise(() => armDueWork(storage, nowMs, failed));
+});
 
 // Sets the alarm to the earliest due work, or clears it. Due times come from committed state and the
 // alarm is set in the same synchronous turn, so the last caller always wins with fresh state. A
@@ -89,11 +87,7 @@ export function armDueWork(
 }
 
 // A failing job counts as the whole step failing.
-function sendReadyJobs<R>(
-  storage: AccountStorage,
-  ports: DueWorkPorts<R>,
-  nowMs: number,
-): Effect.Effect<boolean, never, Crypto.Crypto> {
+function sendReadyJobs<R>(storage: AccountStorage, ports: DueWorkPorts<R>, nowMs: number) {
   return Effect.suspend(() =>
     Effect.forEach(readyJobIds(storage, SEND_BATCH_SIZE), (jobId) =>
       attempt({ step: "send", jobId }, dispatchJob(storage, jobId, ports, nowMs)),

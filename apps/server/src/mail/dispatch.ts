@@ -1,4 +1,5 @@
 import type { ExternalMailAddress, MailDomain, PrincipalPolicy } from "@umail/api-contract";
+import type * as Alchemy from "alchemy";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
@@ -31,7 +32,9 @@ export type DispatchPorts = {
     readonly approvalAdminEmail: ExternalMailAddress;
   };
   // The requester's current policy, or null once it has no access.
-  readonly policyFor: (requester: OutboundRequester) => Effect.Effect<PrincipalPolicy | null>;
+  readonly policyFor: (
+    requester: OutboundRequester,
+  ) => Effect.Effect<PrincipalPolicy | null, never, Alchemy.RuntimeContext>;
 };
 
 // Sends one ready job. At-most-once: the provider is called only after `claimJob` moves the job out

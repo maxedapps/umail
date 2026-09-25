@@ -23,6 +23,7 @@ import {
   newApprovalCapability,
 } from "../../src/mail/notifications.ts";
 import { createMemoryAccount } from "../api/memory-account-store.ts";
+import { WorkerServices } from "../api/world.ts";
 import { FakeMailHtmlPolicy } from "../mail/fakes.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -343,7 +344,9 @@ async function createWorld(htmlPolicy: MailHtmlPolicy = new FakeMailHtmlPolicy()
                 }),
         },
       };
-      return Effect.runPromise(runDueWork(storage, ports, nowMs).pipe(Effect.provide(WebCrypto)));
+      return Effect.runPromise(
+        runDueWork(storage, ports, nowMs).pipe(Effect.provide(WorkerServices)),
+      );
     },
   };
   return world;

@@ -3,8 +3,9 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import { mcpResourceUrl, restResourceUrl } from "../../src/auth/options.ts";
-import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
-import { OPERATOR_EMAIL, OPERATOR_PASSWORD, TEST_SITE, createWorld } from "./world.ts";
+import { provisionAuth } from "../../src/auth/provisioning.ts";
+import { memoryQueryDatabase } from "./memory-d1.ts";
+import { OPERATOR_EMAIL, OPERATOR_PASSWORD, TEST_SITE, createWorld, runInWorker } from "./world.ts";
 
 const SessionBody = Schema.Struct({
   user: Schema.Struct({
@@ -51,14 +52,16 @@ describe("provisioned operator authority", () => {
 
   it("rejects the old password after rotation", async () => {
     const world = await createWorld();
-    await provisionAuth(world.db as AuthD1Database, {
-      identity: { databaseId: "test-auth" },
-      runNonce: "after-rotation",
-      operatorEmail: OPERATOR_EMAIL,
-      restResource: restResourceUrl(TEST_SITE),
-      mcpResource: mcpResourceUrl(TEST_SITE),
-      password: "replacement-passphrase",
-    });
+    await runInWorker(
+      provisionAuth(memoryQueryDatabase(world.db), {
+        identity: { databaseId: "test-auth" },
+        runNonce: "after-rotation",
+        operatorEmail: OPERATOR_EMAIL,
+        restResource: restResourceUrl(TEST_SITE),
+        mcpResource: mcpResourceUrl(TEST_SITE),
+        password: "replacement-passphrase",
+      }),
+    );
 
     const oldPassword = await world.fetch("http://umail.test/api/auth/sign-in/email", {
       method: "POST",
@@ -78,14 +81,16 @@ describe("provisioned operator authority", () => {
   it("signs in a mixed-case operator email through the provisioned issuer mapping", async () => {
     const mixedCaseEmail = Schema.decodeSync(ExternalMailAddress)("Admin@example.com");
     const world = await createWorld();
-    await provisionAuth(world.db as AuthD1Database, {
-      identity: { databaseId: "test-auth" },
-      runNonce: "mixed-case",
-      operatorEmail: mixedCaseEmail,
-      restResource: restResourceUrl(TEST_SITE),
-      mcpResource: mcpResourceUrl(TEST_SITE),
-      password: OPERATOR_PASSWORD,
-    });
+    await runInWorker(
+      provisionAuth(memoryQueryDatabase(world.db), {
+        identity: { databaseId: "test-auth" },
+        runNonce: "mixed-case",
+        operatorEmail: mixedCaseEmail,
+        restResource: restResourceUrl(TEST_SITE),
+        mcpResource: mcpResourceUrl(TEST_SITE),
+        password: OPERATOR_PASSWORD,
+      }),
+    );
 
     const signIn = await world.fetch("http://umail.test/api/auth/sign-in/email", {
       method: "POST",

@@ -1,9 +1,11 @@
+import * as Alchemy from "alchemy";
 import { betterAuth } from "better-auth";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as TestClock from "effect/testing/TestClock";
@@ -21,7 +23,7 @@ import type { CompleteAttemptOutcome } from "../../src/account/domain.ts";
 import { runDueWork } from "../../src/account/due-work.ts";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
 import { makeApiHttpEffect, type ApiDeps, type MailArchiveReader } from "../../src/api/app.ts";
-import { makeAccess, type Access, type AccessDatabase } from "../../src/auth/access.ts";
+import { makeAccess, type Access } from "../../src/auth/access.ts";
 import {
   asUmailBetterAuth,
   makeAuthOptions,
@@ -29,13 +31,13 @@ import {
   restResourceUrl,
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
-import { provisionAuth, type AuthD1Database } from "../../src/auth/provisioning.ts";
+import { provisionAuth } from "../../src/auth/provisioning.ts";
 import { WebCrypto } from "../../src/crypto.ts";
 import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
 import { FaithfulMailHtmlPolicy, MemoryArchive, MemoryDestinations } from "./fakes.ts";
 import { createMemoryAccount, type MemoryAccountSqliteStorage } from "./memory-account-store.ts";
-import { MemoryD1 } from "./memory-d1.ts";
+import { MemoryD1, memoryQueryDatabase } from "./memory-d1.ts";
 
 export const MAIL_DOMAIN = Schema.decodeSync(MailDomain)("umail.example.com");
 export const FROM_ADDRESS = Schema.decodeSync(MailboxAddress)("inbox@umail.example.com");
@@ -46,6 +48,16 @@ export const APPLICATION_URL = new URL("https://umail.test");
 export const APPLICATION_ORIGIN = APPLICATION_URL.origin;
 export const TEST_SITE = { apiHostname: "umail.test" } as const;
 export const AUTH_SECRET = "umail-test-better-auth-secret";
+// What the Worker runtime provides: Crypto, and alchemy's RuntimeContext, which the in-memory fakes
+// never read.
+export const WorkerServices = Layer.merge(WebCrypto, Alchemy.RuntimeContext.phantom);
+
+export function runInWorker<A, E>(
+  effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+): Promise<A> {
+  return Effect.runPromise(effect.pipe(Effect.provide(WorkerServices)));
+}
+
 export const WORLD_START = DateTime.makeUnsafe("2026-08-28T10:00:00.000Z");
 export { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 
@@ -61,7 +73,9 @@ export type World = {
   readonly clock: TestClock.TestClock;
   readonly setTime: (iso: string) => Promise<void>;
   // Runs an API operation directly, with the world's clock and crypto.
-  readonly run: <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) => Promise<A>;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+  ) => Promise<A>;
   readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
   readonly auth: UmailBetterAuth;
@@ -89,14 +103,16 @@ export async function createWorld(
   const db = new MemoryD1();
   const memoryAccount = createMemoryAccount();
   const operatorEmail = settings.operatorEmail ?? OPERATOR_EMAIL;
-  const provision = await provisionAuth(db as AuthD1Database, {
-    identity: { databaseId: "test-auth" },
-    runNonce: crypto.randomUUID(),
-    operatorEmail,
-    restResource: restResourceUrl(TEST_SITE),
-    mcpResource: mcpResourceUrl(TEST_SITE),
-    password: OPERATOR_PASSWORD,
-  });
+  const provision = await runInWorker(
+    provisionAuth(memoryQueryDatabase(db), {
+      identity: { databaseId: "test-auth" },
+      runNonce: crypto.randomUUID(),
+      operatorEmail,
+      restResource: restResourceUrl(TEST_SITE),
+      mcpResource: mcpResourceUrl(TEST_SITE),
+      password: OPERATOR_PASSWORD,
+    }),
+  );
   const auth = asUmailBetterAuth(
     betterAuth({
       ...makeAuthOptions(TEST_SITE, provision.operatorId, {
@@ -110,7 +126,7 @@ export async function createWorld(
   const destinations = new MemoryDestinations();
   const htmlPolicy = new FaithfulMailHtmlPolicy();
   const notificationKey = crypto.getRandomValues(new Uint8Array(32));
-  const access = makeAccess(db as AccessDatabase, provision.operatorId);
+  const access = makeAccess(memoryQueryDatabase(db), provision.operatorId);
   const runtime = await Effect.runPromise(
     Effect.gen(function* () {
       const deps = {
@@ -125,7 +141,9 @@ export async function createWorld(
         operatorId: provision.operatorId,
         notificationKey,
       } satisfies ApiDeps;
-      const handler = HttpEffect.toWebHandler(yield* makeApiHttpEffect(deps));
+      const handler = HttpEffect.toWebHandler(
+        (yield* makeApiHttpEffect(deps)).pipe(Effect.provide(Alchemy.RuntimeContext.phantom)),
+      );
       const clock = yield* TestClock.make();
       yield* clock.setTime(DateTime.toEpochMillis(WORLD_START));
       return { deps, handler, clock };
@@ -134,10 +152,8 @@ export async function createWorld(
   const clock = runtime.clock;
   const setTime = (iso: string) =>
     Effect.runPromise(clock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(iso))));
-  const run = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
-    Effect.runPromise(
-      effect.pipe(Effect.provideService(Clock.Clock, clock), Effect.provide(WebCrypto)),
-    );
+  const run = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>) =>
+    runInWorker(effect.pipe(Effect.provideService(Clock.Clock, clock)));
   const requestContext = Context.add(
     settings.requestContext ?? Context.empty(),
     Clock.Clock,
@@ -324,7 +340,7 @@ export async function runDueWorkPass(
         index: { send: () => Effect.void },
       },
       nowMs,
-    ).pipe(Effect.provide(WebCrypto)),
+    ).pipe(Effect.provide(WorkerServices)),
   );
   return mails;
 }

@@ -104,7 +104,7 @@ Behaviour changes are limited to those the ADR lists:
 - `provisioning.test.ts`, `provisioned-auth.test.ts`, `static-client.test.ts`, `oauth.test.ts` and `auth-boundaries.test.ts` pass.
 - `tests/stack.test.ts` still shows the Action input without the password.
 
-**Done:** no
+**Done:** yes. Access and provisioning run on Alchemy's `QueryDatabaseClient`, whose calls need `RuntimeContext`. Tests provide Alchemy's own `RuntimeContext.phantom` (plus `WebCrypto`) through `WorkerServices`/`runInWorker` in `test/api/world.ts`; the workerd test host imports it from `alchemy/RuntimeContext`, because the package root does not load in workerd. The OAuth management bridge now runs its effects with the request's context (`Effect.runPromiseWith`) until task 4 removes it. `provisioning.test.ts` moved to `@effect/vitest`, and its self-referential test (a task 6 item) is gone.
 
 ### 4. Auth through Alchemy's effectified Better Auth
 

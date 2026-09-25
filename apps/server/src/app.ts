@@ -14,7 +14,7 @@ import { AccountStore, AccountStoreLive, OPERATOR_ACCOUNT } from "./account/work
 import { ArchiveTransportError, makeApiHttpEffect } from "./api/app.ts";
 import { cloudflareDestinations } from "./api/destinations.ts";
 import { WebCrypto } from "./crypto.ts";
-import { makeAccess, type AccessDatabase } from "./auth/access.ts";
+import { makeAccess } from "./auth/access.ts";
 import { asUmailBetterAuth, makeAuthOptions } from "./auth/options.ts";
 import { receiveInbound } from "./mail/inbound.ts";
 import { notificationKeyFromSecret } from "./mail/notifications.ts";
@@ -115,7 +115,7 @@ export default App.make(
             ...depsWithoutAccount,
             account: accounts.getByName(OPERATOR_ACCOUNT),
             auth,
-            access: makeAccess((yield* authDb.raw) as AccessDatabase, operatorId),
+            access: makeAccess(authDb, operatorId),
           });
           return yield* handle;
         }),

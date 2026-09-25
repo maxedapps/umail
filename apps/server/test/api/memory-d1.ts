@@ -1,3 +1,6 @@
+import type { D1Database } from "@cloudflare/workers-types";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Effect from "effect/Effect";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 export type QueryRow = {
@@ -217,4 +220,20 @@ function toJsValue(value: SQLOutputValue): string | number | null {
   if (typeof value === "bigint") return Number(value);
   if (value instanceof Uint8Array) return new TextDecoder().decode(value);
   return value;
+}
+
+// Alchemy's Effect-native D1 client over this database, built the way alchemy's own bindings build it.
+export function memoryQueryDatabase(db: MemoryD1): Cloudflare.D1.QueryDatabaseClient {
+  const raw = Effect.succeed(db as D1Database);
+  return {
+    raw,
+    prepare: (query) => new Cloudflare.D1.PreparedStatement(query, [], raw),
+    exec: (query) => Effect.promise(() => db.exec(query)),
+    batch: (statements) =>
+      Effect.flatMap(raw, (database) =>
+        Effect.promise(() =>
+          database.batch(statements.map((statement) => statement._build(database))),
+        ),
+      ),
+  };
 }
