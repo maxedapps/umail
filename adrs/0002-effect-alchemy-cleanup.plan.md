@@ -301,6 +301,19 @@ Behaviour changes are limited to those the ADR lists:
 
 **Done:** yes. 103 exports that only their own module used lost `export`. No symbol, source file or dependency was left without a use (`bin.ts` is the CLI entry and `css-tree-subpaths.d.ts` holds ambient types). Results: `pnpm typecheck` passes, `pnpm lint` reports 0 warnings and 0 errors, and `pnpm build:clients` builds. All suites pass except the load-sensitive thread-paging spec, which times out in the full parallel server-worker run and passes alone (out of scope, see Goal).
 
+## Deploy
+
+Deployed to prod from `6c25bd0` on 2026-09-25. The plan and the deploy created `NotificationKey` and updated `App`, and left every other resource unchanged. `App/AUTH_OPERATOR_ID` shows as an update on every plan because the `AuthProvision` action computes it at deploy time. Provisioning reuses the existing operator, so the value did not change.
+
+Live checks:
+
+- Two `umail addresses list` calls in a row work with the pre-deploy credential file.
+- REST without a valid token returns 401.
+- The existing MCP client works without re-auth.
+- An MCP send from hello to probe was accepted and indexed in probe's inbox on the same thread about 5 s later.
+
+The owner still has to check in the browser an approval-required send with its decision link, and consent for a new MCP client. The existing client is in allow mode and covers all mailboxes, so it could not exercise either path.
+
 ## Open questions
 
 None. The owner decided tests, API deps, the notification key and the credential store on 2026-09-25.
