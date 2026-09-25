@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–6 done)
+- **Status:** In progress (tasks 1–7 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -399,7 +399,7 @@ The consent script shrinks to building the `mailboxes` string from the checked b
   - The status page shows the job state.
 - **Browser spec:** the compose page has no CSP violations, and the textarea grows.
 
-**Done:** no.
+**Done:** yes. `compose.test.ts` also covers task 3's case: the job's requester is `umail-web`, "AgentMail web". Reply-all is checked against the message `submitMessage` stores, which is the MCP reply path's own derivation.
 
 ### 8. Mailboxes and forwarding
 

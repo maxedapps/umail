@@ -426,6 +426,19 @@ const replyRecipients = Effect.fn("replyRecipients")(function* (
   return { to, cc: recipients.cc };
 });
 
+// The recipients a reply would get, for the console to show before sending: the same derivation
+// `submitMessage` runs, from the parent's own mailbox.
+export const previewReplyRecipients = Effect.fn("previewReplyRecipients")(function* (
+  deps: ApiDeps,
+  principal: Principal,
+  messageId: string,
+  mode: ReplyMode,
+) {
+  const parent = yield* readReplyParent(deps, principal, messageId);
+  const recipients = yield* replyRecipients(deps, parent, mode, parent.mailboxId);
+  return { parent, ...recipients };
+});
+
 type PreparedOutbound = {
   readonly mailboxId: string;
   readonly subject: string;

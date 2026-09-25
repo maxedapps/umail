@@ -11,6 +11,7 @@ import { serveMcpRequest } from "../api/mcp/route.ts";
 import { blockedAuthSurfaceResponse } from "../auth/runtime-surface.ts";
 import { htmlResponse } from "./document.ts";
 import { clientRoute, clientsRoute, revokeClientRoute, saveClientRoute } from "./pages/clients.ts";
+import { composeRoute, sendRoute, sentRoute } from "./pages/compose.ts";
 import { consentRoute } from "./pages/consent.ts";
 import { deviceDecisionRoute, deviceRoute } from "./pages/device.ts";
 import { loginPage } from "./pages/login.ts";
@@ -59,6 +60,9 @@ export function webRoutes(deps: ApiDeps) {
     HttpRouter.add("POST", "/clients/:clientId", operator(saveClientRoute)),
     HttpRouter.add("POST", "/clients/:clientId/revoke", operator(revokeClientRoute)),
     HttpRouter.add("GET", "/mail", operator(mailListRoute)),
+    HttpRouter.add("GET", "/mail/compose", operator(composeRoute)),
+    HttpRouter.add("POST", "/mail/compose", operator(sendRoute)),
+    HttpRouter.add("GET", "/mail/sent/:jobId", operator(sentRoute)),
     HttpRouter.add("GET", "/mail/threads/:threadId", operator(threadRoute)),
     HttpRouter.add("POST", "/mail/threads/:threadId/unread", operator(markUnreadRoute)),
     HttpRouter.add("POST", "/mail/threads/:threadId/delete", operator(deleteThreadRoute)),

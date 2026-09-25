@@ -125,6 +125,7 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
   const decisionBox = yield* optionalBoundingBox(page.locator("#decision"));
   const client = visit.fixture === "client" ? yield* exerciseClientPage(page) : null;
   const mail = visit.fixture === "mail-thread" ? yield* exerciseMailThread(page) : null;
+  const textareaGrowth = visit.fixture === "compose" ? yield* exerciseCompose(page) : null;
   const heading = (yield* optionalText(page.locator("h1"))) ?? "";
   const title = yield* Effect.promise(() => page.title());
   const bodyText = yield* Effect.promise(() => page.locator("body").innerText());
@@ -195,6 +196,7 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     revokePopoverOpen: client?.revokePopoverOpen ?? null,
     frameImageWidth: mail?.frameImageWidth ?? null,
     firstTimeText: mail?.firstTimeText ?? null,
+    textareaGrowth,
     statusText: consentAuth?.statusText ?? focus.statusText,
     authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
     authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
@@ -387,6 +389,16 @@ const exerciseMailThread = Effect.fn("exerciseMailThread")(function* (page: Page
   }
   const firstTimeText = yield* optionalText(page.locator("time"));
   return { frameImageWidth, firstTimeText };
+});
+
+// The message field grows with its text (field-sizing: content) instead of scrolling.
+const exerciseCompose = Effect.fn("exerciseCompose")(function* (page: Page) {
+  const body = page.locator("#text");
+  const before = (yield* Effect.promise(() => body.boundingBox()))?.height ?? 0;
+  yield* Effect.promise(() => body.focus());
+  yield* Effect.promise(() => page.keyboard.insertText(Array(30).fill("A line.").join("\n")));
+  const after = (yield* Effect.promise(() => body.boundingBox()))?.height ?? 0;
+  return after - before;
 });
 
 const submitConsent = Effect.fn("submitConsent")(function* (page: Page) {
@@ -735,6 +747,7 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
       consent: consentPath,
       client: `/clients/${encodeURIComponent(agent.clientId)}`,
       "mail-thread": `/mail/threads/${thread.threadId}`,
+      compose: "/mail/compose",
       pending: approvalPath(pending.token),
       accepted: approvalPath(accepted.token),
       failed: approvalPath(failed.token),

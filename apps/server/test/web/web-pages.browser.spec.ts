@@ -87,6 +87,16 @@ describe("web pages in Chromium", () => {
     }),
   );
 
+  it.effect("grows the compose message field with its text", () =>
+    Effect.gen(function* () {
+      const compose = yield* observe("compose");
+
+      expect(compose.status).toBe(200);
+      expect(compose.textareaGrowth).toBeGreaterThan(100);
+      expect(cspViolations(compose)).toEqual([]);
+    }),
+  );
+
   it.effect(
     "keeps hostile approval metadata inert and exposes one keyboard-usable native decision form",
     () =>
@@ -222,6 +232,7 @@ describe("web pages in Chromium", () => {
           "consent",
           "client",
           "mail-thread",
+          "compose",
           "pending",
           "accepted",
         ] as const;
