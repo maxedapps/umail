@@ -106,9 +106,8 @@ export function deviceAuthorizationPage(view: DeviceAuthorizationView): PageView
     title: "Approve device",
     heading: "Approve the CLI sign-in",
     lede: "Approve only when this code exactly matches the code shown by the AgentMail CLI.",
-    main: html`<dl class="meta">
-        <dt>Code</dt>
-        <dd><strong>${bidiAddress(view.userCode)}</strong></dd>
+    main: html`<p class="code">${bidiAddress(view.userCode)}</p>
+      <dl class="meta">
         <dt>Client</dt>
         <dd>${bidiAddress(view.clientId)}</dd>
         <dt>Scope</dt>
@@ -118,8 +117,12 @@ export function deviceAuthorizationPage(view: DeviceAuthorizationView): PageView
       </dl>
       <form class="actions" method="post">
         <input type="hidden" name="userCode" value="${view.userCode}" />
-        <button type="submit" formaction="/device/approve">Approve CLI access</button>
-        <button type="submit" class="secondary" formaction="/device/deny">Deny request</button>
+        <button class="button" type="submit" formaction="/device/approve">
+          Approve CLI access
+        </button>
+        <button class="button secondary" type="submit" formaction="/device/deny">
+          Deny request
+        </button>
       </form>`,
   };
 }

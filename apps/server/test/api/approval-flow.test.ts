@@ -287,7 +287,9 @@ describe("public approval flow", () => {
       });
       const plain = yield* queueApproval(yield* createWorld());
 
-      expect(remote.reviewHtml).toMatch(/role="note">\s*This message contains remote images\./u);
+      expect(remote.reviewHtml).toMatch(
+        /role="note">\s*<svg class="icon"[^]*?<\/svg>This message contains remote images\./u,
+      );
       expect(plain.reviewHtml).not.toContain(notice);
     }),
   );

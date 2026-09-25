@@ -1,5 +1,6 @@
-import { html } from "../html.ts";
 import type { PageView } from "../document.ts";
+import { html } from "../html.ts";
+import { icon } from "../icons.ts";
 
 type NoticeView = {
   readonly title: string;
@@ -14,11 +15,9 @@ export function noticePage(view: NoticeView): PageView {
     kind: "static",
     title: view.title,
     heading: view.heading,
-    main: html`<p
-      class="note${view.tone === "error" ? " danger" : ""}"
-      role="${view.tone === "error" ? "alert" : "status"}"
-    >
-      ${view.message}
-    </p>`,
+    main:
+      view.tone === "error"
+        ? html`<p class="lede" role="alert">${icon("alert")}${view.message}</p>`
+        : html`<p class="lede" role="status">${icon("check")}${view.message}</p>`,
   };
 }

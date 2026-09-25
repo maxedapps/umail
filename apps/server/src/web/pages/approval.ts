@@ -7,11 +7,12 @@ import {
   bidiText,
   contactHtml,
   contactListHtml,
-  contactName,
   html,
+  initials,
   timeHtml,
   type Html,
 } from "../html.ts";
+import { icon } from "../icons.ts";
 import { noticePage } from "./notice.ts";
 
 type StatePresentation = {
@@ -34,8 +35,8 @@ export function approvalReviewPage(
     title: state.title,
     heading: state.heading,
     lede: state.lede,
-    main: html`${summaryHtml(request, message, state.badge, nowIso)}
-    ${metadataHtml(request, message)} ${bodyHtml(token, message)} ${actionsHtml(token, request)}`,
+    main: html`${summaryHtml(request, message, state.badge, nowIso)} ${bodyHtml(token, message)}
+    ${actionsHtml(token, request)}`,
   };
 }
 
@@ -111,54 +112,32 @@ function statePresentation(request: StoredApproval, job: OutboundJob): StatePres
   };
 }
 
-// "Claude Code wants to send "Re: …" to Anna Example and 1 more"
+// The request at a glance: its state, who asks, the subject, then every header the email carries.
 function summaryHtml(
   request: StoredApproval,
   message: OutboundThreadMessage,
   badge: Html,
   nowIso: string,
 ): Html {
-  const recipients = [...message.to, ...message.cc];
-  const first = recipients[0];
-  const others = recipients.length - 1;
-  const verb = request.state === "pending" ? "wants to send" : "asked to send";
-  const expiry =
-    request.state === "pending"
-      ? html` · <span class="muted">expires in ${expiresIn(request.expiresAt, nowIso)}</span>`
-      : null;
-  return html`<div class="panel">
-    <p>
-      ${bidiText(request.requester.label)} ${verb}
-      “${bidiText(subjectOf(message))}”${
-        first === undefined
-          ? null
-          : html` to ${bidiText(contactName(first))}${others > 0 ? ` and ${others} more` : null}`
-      }
-    </p>
-    <p>${badge}${expiry}</p>
-  </div>`;
-}
-
-function expiresIn(expiresAt: string, nowIso: string): string {
-  const millis =
-    DateTime.toEpochMillis(DateTime.makeUnsafe(expiresAt)) -
-    DateTime.toEpochMillis(DateTime.makeUnsafe(nowIso));
-  const minutes = Math.max(0, Math.ceil(millis / 60_000));
-  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
-}
-
-function subjectOf(message: OutboundThreadMessage): string {
-  return message.subject === null || message.subject.length === 0
-    ? "(no subject)"
-    : message.subject;
-}
-
-function metadataHtml(request: StoredApproval, message: OutboundThreadMessage): Html {
   const from = message.from[0];
   const replyTo = message.replyTo[0];
   const showReplyTo = replyTo !== undefined && (from === undefined || !sameContact(replyTo, from));
-  return html`<section class="section" aria-labelledby="message-details-title">
-    <h2 id="message-details-title">Message details</h2>
+  return html`<div class="summary">
+    <p>
+      ${badge}${
+        request.state === "pending"
+          ? html`${icon("clock")}expires in ${expiresIn(request.expiresAt, nowIso)}`
+          : null
+      }
+    </p>
+    <div class="who">
+      <span class="avatar">${bidiText(initials(request.requester.label))}</span>
+      <span
+        ><b>${bidiText(request.requester.label)}</b>
+        ${request.state === "pending" ? "wants to send" : "asked to send"}</span
+      >
+    </div>
+    <h2>${bidiText(subjectOf(message))}</h2>
     <dl class="meta">
       <dt>Requested by</dt>
       <dd>${bidiText(request.requester.label)}</dd>
@@ -193,55 +172,68 @@ function metadataHtml(request: StoredApproval, message: OutboundThreadMessage): 
           : null
       }
     </dl>
-  </section>`;
+  </div>`;
+}
+
+function expiresIn(expiresAt: string, nowIso: string): string {
+  const millis =
+    DateTime.toEpochMillis(DateTime.makeUnsafe(expiresAt)) -
+    DateTime.toEpochMillis(DateTime.makeUnsafe(nowIso));
+  const minutes = Math.max(0, Math.ceil(millis / 60_000));
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
+}
+
+function subjectOf(message: OutboundThreadMessage): string {
+  return message.subject === null || message.subject.length === 0
+    ? "(no subject)"
+    : message.subject;
 }
 
 function bodyHtml(token: ApprovalToken, message: OutboundThreadMessage): Html {
   const text =
     message.textBody === null ? null : html`<pre class="prose">${message.textBody}</pre>`;
-  if (message.htmlBody === null) {
-    return html`<section class="section" id="message-body" aria-labelledby="message-body-title">
-      <h2 id="message-body-title">Message body</h2>
-      ${text ?? html`<p class="muted">No readable body is available.</p>`}
-    </section>`;
-  }
-  return html`<section class="section" id="message-body" aria-labelledby="message-body-title">
-    <h2 id="message-body-title">Message body</h2>
+  return html`<section class="stack" id="message-body" aria-labelledby="message-body-title">
+    <h2 class="section-label" id="message-body-title">Message body</h2>
     ${
-      message.hasRemoteImages
-        ? html`<p class="note warning" role="note">
-            This message contains remote images. They are blocked in this preview, but the
-            recipient's mail client will load them, and image URLs can carry data out. Deny unless
-            you expected images.
-          </p>`
-        : null
-    }
-    <iframe
-      class="frame"
-      title="HTML email preview"
-      src="/approvals/${encodeURIComponent(token)}/message"
-      sandbox=""
-    ></iframe>
-    ${
-      text === null
-        ? null
-        : html`<details>
-            <summary>Show plain-text alternative</summary>
-            ${text}
-          </details>`
+      message.htmlBody === null
+        ? (text ?? html`<p class="muted">No readable body is available.</p>`)
+        : html`${
+              message.hasRemoteImages
+                ? html`<p class="note warning" role="note">
+                    ${icon("alert")}This message contains remote images. They are blocked in this
+                    preview, but the recipient's mail client will load them, and image URLs can
+                    carry data out. Deny unless you expected images.
+                  </p>`
+                : null
+            }
+            <iframe
+              class="frame"
+              title="HTML email preview"
+              src="/approvals/${encodeURIComponent(token)}/message"
+              sandbox=""
+            ></iframe>
+            ${
+              text === null
+                ? null
+                : html`<details class="more">
+                    <summary>Show plain-text alternative</summary>
+                    ${text}
+                  </details>`
+            }`
     }
   </section>`;
 }
 
+// After the body, never pinned, so the reviewer passes the whole message before reaching Approve.
 function actionsHtml(token: ApprovalToken, request: StoredApproval): Html | null {
   if (request.state !== "pending") return null;
   const base = `/approvals/${encodeURIComponent(token)}`;
-  return html`<section class="section" id="decision" aria-labelledby="decision-title">
-    <h2 id="decision-title">Choose what happens next</h2>
+  return html`<section class="decision" id="decision" aria-labelledby="decision-title">
+    <h2 class="sr-only" id="decision-title">Choose what happens next</h2>
     <p>Approve only if every detail is correct. Denying is final, and the email is not sent.</p>
     <form method="post" class="actions">
-      <button type="submit" formaction="${base}/approve">Approve &amp; send</button>
-      <button type="submit" class="secondary" formaction="${base}/deny">Deny request</button>
+      <button class="button" type="submit" formaction="${base}/approve">Approve &amp; send</button>
+      <button class="button secondary" type="submit" formaction="${base}/deny">Deny request</button>
     </form>
   </section>`;
 }

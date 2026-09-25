@@ -169,9 +169,7 @@ export function loginPage(): PageView {
           required
         />
       </div>
-      <div class="actions">
-        <button id="login-submit" type="submit">Sign in</button>
-      </div>
+      <button class="button" id="login-submit" type="submit">Sign in</button>
       <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
     </form>`,
     script: LOGIN_PAGE_SCRIPT,

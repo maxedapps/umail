@@ -434,7 +434,11 @@ Then run the full `pnpm test`.
   - no CSP violations;
   - 320px.
 
-**Done:** no.
+**Done:** yes. Consent was ported in task 6. Two changes from the plan:
+
+- `approval-flow.test.ts` could not stay unchanged: its remote-images check expected the note's text right after `role="note">`, and the plan puts the alert icon there. The regex now allows that one icon before the text.
+- A notice's message is `<p class="lede" role="alert|status">` with the icon inside it, so the icon sits beside the text rather than on its own row in the card.
+- In the approval summary, the subject is an `h2`, and the requester line and avatar sit outside the `.meta`, whose rows and counts are unchanged.
 
 ### 8. Final sweep and docs
 
