@@ -1,4 +1,4 @@
-import { ExternalMailAddress } from "@umail/api-contract";
+import { ExternalMailAddress, UMAIL_CLI_CLIENT_ID } from "@umail/api-contract";
 import { expect, layer } from "@effect/vitest";
 import { betterAuth } from "better-auth";
 import { verifyPassword } from "better-auth/crypto";
@@ -11,7 +11,6 @@ import { MemoryD1, memoryQueryDatabase } from "../api/memory-d1.ts";
 import {
   CURSOR_GROK_BOT_CLIENT_ID,
   FIRST_PARTY_CLIENT_DISCOVERY_ID,
-  UMAIL_CLI_CLIENT_ID,
   asUmailBetterAuth,
   makeAuthOptions,
   mcpResourceUrl,

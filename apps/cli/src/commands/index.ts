@@ -16,6 +16,7 @@ import {
 } from "@umail/api-contract";
 import * as Console from "effect/Console";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -76,14 +77,14 @@ const pageFlags = { limit: limitFlag, cursor: cursorFlag };
 
 const loginCommand = Command.make("login", {}, () =>
   Effect.gen(function* () {
-    yield* login();
+    yield* login;
     yield* printJson({ authenticated: true });
   }),
 ).pipe(Command.withDescription("Authorize this CLI through the browser device flow"));
 
 const logoutCommand = Command.make("logout", {}, () =>
   Effect.gen(function* () {
-    yield* logout();
+    yield* logout;
     yield* printJson({ ok: true });
   }),
 ).pipe(
@@ -453,10 +454,11 @@ function messageBody(text: Option.Option<string>, html: Option.Option<string>) {
     : Effect.succeed(body);
 }
 
-function instantFromHours(hours: number) {
-  const date = new Date(Date.now() - hours * 60 * 60 * 1000);
-  const instant = Number.isNaN(date.getTime()) ? null : parseUtcInstant(date.toISOString());
-  return instant === null
-    ? Effect.fail(new InvalidSinceHoursError())
-    : Effect.succeed(Option.some(instant));
-}
+const instantFromHours = Effect.fn("instantFromHours")(function* (hours: number) {
+  const now = DateTime.toEpochMillis(yield* DateTime.now);
+  const instant = DateTime.make(now - hours * 60 * 60 * 1000).pipe(
+    Option.flatMapNullishOr((since) => parseUtcInstant(DateTime.formatIso(since))),
+  );
+  if (Option.isNone(instant)) return yield* new InvalidSinceHoursError();
+  return instant;
+});

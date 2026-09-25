@@ -73,7 +73,7 @@ The owner wants the defect fixed, every simplification done, zero lint warnings 
 ## Consequences
 
 - **The notification key rotates once**, on the first deploy. Approval links that are still pending at that moment stop working.
-- **The CLI's credential file format changes.** Existing `oauth.json` files no longer decode, and the owner runs `umail login` once after upgrading.
+- **The CLI's credential file format changes.** A signed-in `oauth.json` from an older version still decodes, because decoding ignores the extra fields. A logged-out leftover file, which holds no tokens, reports "missing or insecure" until the next `umail login` replaces it.
 - **An approval decision no longer re-checks the message's shape.** It used to require exactly one sender and at least one recipient. The store's state checks decide instead, and the review page still loads the message.
 - **The API contract drops `GET /messages/:id/reply-plan`.** It had no caller.
 - **About 60 test files change mechanically.** Browser and Durable Object specs get noisier, because each Promise step is wrapped in an Effect.

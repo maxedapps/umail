@@ -24,7 +24,7 @@ Behaviour changes are limited to those the ADR lists:
 
 - the scoped thread reads;
 - the one-time rotation of the notification key;
-- the CLI re-login;
+- the CLI credential file format;
 - the approval-decide checks;
 - the removed `reply-plan` endpoint.
 
@@ -237,7 +237,7 @@ Behaviour changes are limited to those the ADR lists:
   - a symlinked or world-readable file or directory still being rejected.
 - `tests/client-artifacts.test.ts` still builds a working bundle.
 
-**Done:** no
+**Done:** yes. A signed-in credential file from an older version still decodes (extra fields are ignored), so no re-login is needed. `auth.test.ts` moved to `@effect/vitest`; its generation cases gave way to one that checks every write and removal happens under the lock. The cross-process tests (delayed refresh versus logout, overlapping refreshes, SIGINT, stalled revocation, a live lock, and corrupt, world-writable or symlinked files) pass unchanged in intent. The file sync and directory sync after the atomic rename were dropped: losing the file on power loss only means logging in again.
 
 ### 8. Effect idioms across the source
 

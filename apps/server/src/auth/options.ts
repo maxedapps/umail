@@ -1,6 +1,11 @@
 import type { BetterAuthInstance, BetterAuthProps } from "@alchemy.run/better-auth";
 import type * as Alchemy from "alchemy";
-import type { PrincipalPolicy } from "@umail/api-contract";
+import {
+  OFFLINE_ACCESS_SCOPE,
+  UMAIL_CLI_CLIENT_ID,
+  UMAIL_OAUTH_SCOPE,
+  type PrincipalPolicy,
+} from "@umail/api-contract";
 import { mcp } from "@better-auth/mcp";
 import {
   DEVICE_CODE_GRANT_TYPE,
@@ -59,13 +64,9 @@ const CURSOR_MCP_REDIRECT_URIS: ReadonlySet<string> = new Set([
   CURSOR_LOOPBACK_CALLBACK_URI,
 ]);
 
-export const UMAIL_OAUTH_SCOPE = "umail:access" as const;
-export const OFFLINE_ACCESS_SCOPE = "offline_access" as const;
-
 export const FIRST_PARTY_CLIENT_DISCOVERY_ID = "umail-first-party" as const;
 
 export const CURSOR_GROK_BOT_CLIENT_ID = "cursor-grok-bot" as const;
-export const UMAIL_CLI_CLIENT_ID = "umail-cli" as const;
 
 export const FIRST_PARTY_CLIENT_METADATA_JSON = '{"owner":"umail-provision"}' as const;
 

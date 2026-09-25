@@ -11,7 +11,7 @@ import { accessToken } from "./auth.ts";
 export function umailClient(httpClient: HttpClient.HttpClient) {
   return Effect.gen(function* () {
     const baseUrl = yield* umailBaseUrl;
-    const token = yield* accessToken();
+    const token = yield* accessToken;
     return yield* makeUmailClient({ baseUrl, accessToken: token }, httpClient);
   });
 }

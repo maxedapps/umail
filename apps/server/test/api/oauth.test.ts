@@ -1,13 +1,10 @@
+import { UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import { verifyOAuthBearerToken } from "../../src/auth/oauth-resource.ts";
-import {
-  UMAIL_OAUTH_SCOPE,
-  asUmailBetterAuth,
-  type UmailBetterAuth,
-} from "../../src/auth/options.ts";
+import { asUmailBetterAuth, type UmailBetterAuth } from "../../src/auth/options.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
 import {
   APPLICATION_ORIGIN,

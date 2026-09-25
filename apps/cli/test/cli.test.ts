@@ -51,21 +51,15 @@ const testEnv = {
 
 const testCredentialStore = {
   read: Effect.succeed({
-    version: 2,
-    kind: "authorized",
     origin: "https://umail.example.test",
-    issuer: "https://umail.example.test/api/auth",
-    resource: "https://umail.example.test",
     scope: "umail:access offline_access",
-    clientId: "umail-cli",
     accessToken: "test-oauth-access-token",
     refreshToken: "test-oauth-refresh-token",
     expiresAt: Date.now() + 3_600_000,
-    generation: 0,
   }),
-  commit: () => Effect.succeed("committed" as const),
-  clearTokens: () => Effect.void,
-  withRefreshLock: (body) => body,
+  write: () => Effect.void,
+  remove: Effect.void,
+  withLock: (body) => body,
 } satisfies OAuthCredentialStoreService;
 
 const testScheduler = {

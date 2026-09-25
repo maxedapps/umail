@@ -21,13 +21,9 @@ import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  credentialLockPath,
-  credentialPath,
-  credentialRefreshLockPath,
-  makeCredentialStore,
-  type OAuthCredentialState,
-} from "../apps/cli/src/credential-store.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { makeCredentialStore, type OAuthCredentials } from "../apps/cli/src/credential-store.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI_BIN = join(REPO_ROOT, "apps/cli/src/bin.ts");
@@ -44,7 +40,6 @@ const REFRESH_TOKEN = "cred-proc-refresh-token";
 const ROTATED_ACCESS_TOKEN = "cred-proc-rotated-access";
 const ROTATED_REFRESH_TOKEN = "cred-proc-rotated-refresh";
 const DEVICE_CODE = "cred-proc-device-code";
-const CLIENT_ID = "cred-proc-cli";
 const SECRETS = [
   ACCESS_TOKEN,
   REFRESH_TOKEN,
@@ -111,10 +106,7 @@ describe("credential transitions across processes", () => {
     expectNoSecrets(logoutResult);
     const listed = await list.finished;
     expectNoSecrets(listed);
-    const state = await readState(stateHome);
-    expect(state).toMatchObject({ kind: "registered", generation: 1, clientId: CLIENT_ID });
-    expect(state).not.toHaveProperty("accessToken");
-    expect(state).not.toHaveProperty("refreshToken");
+    expect(await readState(stateHome)).toBeNull();
   }, 15_000);
 
   it("serializes overlapping refresh so only one token request is made", async () => {
@@ -131,10 +123,8 @@ describe("credential transitions across processes", () => {
     expect(server.control.refreshTokenRequests).toBe(1);
     const state = await readState(stateHome);
     expect(state).toMatchObject({
-      kind: "authorized",
       accessToken: ROTATED_ACCESS_TOKEN,
       refreshToken: ROTATED_REFRESH_TOKEN,
-      generation: 0,
     });
   }, 15_000);
 
@@ -164,11 +154,7 @@ describe("credential transitions across processes", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("local OAuth credentials were kept");
     expectNoSecrets(result);
-    expect(await readState(stateHome)).toMatchObject({
-      kind: "authorized",
-      generation: 0,
-      refreshToken: REFRESH_TOKEN,
-    });
+    expect(await readState(stateHome)).toMatchObject({ refreshToken: REFRESH_TOKEN });
   }, 15_000);
 
   it("terminates a stalled refresh instead of hanging", async () => {
@@ -183,7 +169,7 @@ describe("credential transitions across processes", () => {
     expectLockFilesGone(stateHome);
   }, 15_000);
 
-  it("releases the refresh lock when a stalled refresh is interrupted", async () => {
+  it("releases the credential lock when a stalled refresh is interrupted", async () => {
     const { server, stateHome, env } = await startHarness();
     writeAuthorizedState(stateHome, server.baseUrl, Date.now() - 1_000);
     server.control.hangToken = true;
@@ -201,11 +187,11 @@ describe("credential transitions across processes", () => {
     temporaryDirectories.push(stateHome);
     const origin = "https://umail.example.test";
     writeAuthorizedState(stateHome, origin, Date.now() + 3_600_000);
-    const lockPath = credentialLockPath(credentialPath({ XDG_STATE_HOME: stateHome }));
+    const lockPath = `${credentialFileIn(stateHome)}.lock`;
     writeFileSync(lockPath, "", { mode: 0o600 });
     chmodSync(lockPath, 0o600);
     const env = { ...process.env, XDG_STATE_HOME: stateHome };
-    const workers = [spawnLockWorker(env, origin), spawnLockWorker(env, origin)];
+    const workers = [spawnLockWorker(env), spawnLockWorker(env)];
     const results = await Promise.all(workers.map((worker) => worker.finished));
     for (const result of results) {
       expect(result.status).toBe(0);
@@ -216,8 +202,6 @@ describe("credential transitions across processes", () => {
       });
     }
     expect(await readState(stateHome)).toMatchObject({
-      kind: "authorized",
-      generation: 0,
       accessToken: ACCESS_TOKEN,
       refreshToken: REFRESH_TOKEN,
     });
@@ -227,7 +211,7 @@ describe("credential transitions across processes", () => {
 
   it("rejects a corrupt credential file without leaking secrets", async () => {
     const { stateHome, env } = await startHarness();
-    const path = credentialPath({ XDG_STATE_HOME: stateHome });
+    const path = credentialFileIn(stateHome);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(path, "{not-json\n", { mode: 0o600 });
     const result = await spawnCli(["addresses", "list"], env).finished;
@@ -239,7 +223,7 @@ describe("credential transitions across processes", () => {
   it("rejects a world-writable credential file without leaking secrets", async () => {
     const { server, stateHome, env } = await startHarness();
     writeAuthorizedState(stateHome, server.baseUrl, Date.now() + 3_600_000);
-    chmodSync(credentialPath({ XDG_STATE_HOME: stateHome }), 0o666);
+    chmodSync(credentialFileIn(stateHome), 0o666);
     const result = await spawnCli(["addresses", "list"], env).finished;
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing or insecure");
@@ -248,7 +232,7 @@ describe("credential transitions across processes", () => {
 
   it("rejects a symlinked credential file without leaking secrets", async () => {
     const { stateHome, env } = await startHarness();
-    const path = credentialPath({ XDG_STATE_HOME: stateHome });
+    const path = credentialFileIn(stateHome);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     symlinkSync(join(stateHome, "missing"), path);
     const result = await spawnCli(["addresses", "list"], env).finished;
@@ -285,14 +269,18 @@ function spawnCli(args: ReadonlyArray<string>, env: NodeJS.ProcessEnv): TrackedC
   );
 }
 
-function spawnLockWorker(env: NodeJS.ProcessEnv, origin: string): TrackedCliProcess {
+function spawnLockWorker(env: NodeJS.ProcessEnv): TrackedCliProcess {
   const script = `
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { makeCredentialStore } from ${JSON.stringify(CREDENTIAL_STORE_HREF)};
+import { credentialFile, makeCredentialStore } from ${JSON.stringify(CREDENTIAL_STORE_HREF)};
 
 const result = await Effect.runPromise(
-  Effect.result(makeCredentialStore(process.env).clearTokens(${JSON.stringify(origin)})),
+  Effect.gen(function* () {
+    const store = yield* makeCredentialStore(yield* credentialFile);
+    return yield* Effect.result(store.withLock(store.remove));
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 if (Result.isFailure(result)) {
   process.stdout.write(JSON.stringify({ ok: false, tag: result.failure._tag }));
@@ -349,32 +337,33 @@ function decodeSignal(signal: string | null): NodeJS.Signals | null {
 }
 
 function writeAuthorizedState(stateHome: string, origin: string, expiresAt: number) {
-  const path = credentialPath({ XDG_STATE_HOME: stateHome });
+  const path = credentialFileIn(stateHome);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const state = {
-    version: 2,
-    kind: "authorized",
     origin,
-    issuer: `${origin}/api/auth`,
-    resource: origin,
     scope: "umail:access offline_access",
-    clientId: CLIENT_ID,
     accessToken: ACCESS_TOKEN,
     refreshToken: REFRESH_TOKEN,
     expiresAt,
-    generation: 0,
-  } satisfies OAuthCredentialState;
+  } satisfies OAuthCredentials;
   writeFileSync(path, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 }
 
+function credentialFileIn(stateHome: string) {
+  return join(stateHome, "umail", "oauth.json");
+}
+
 async function readState(stateHome: string) {
-  return Effect.runPromise(makeCredentialStore({ XDG_STATE_HOME: stateHome }).read);
+  return Effect.runPromise(
+    makeCredentialStore(credentialFileIn(stateHome)).pipe(
+      Effect.flatMap((store) => store.read),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
 }
 
 function expectLockFilesGone(stateHome: string) {
-  const path = credentialPath({ XDG_STATE_HOME: stateHome });
-  expect(existsSync(credentialLockPath(path))).toBe(false);
-  expect(existsSync(credentialRefreshLockPath(path))).toBe(false);
+  expect(existsSync(`${credentialFileIn(stateHome)}.lock`)).toBe(false);
 }
 
 function expectNoSecrets(result: CliProcessResult) {

@@ -1,3 +1,4 @@
+import { OFFLINE_ACCESS_SCOPE, UMAIL_CLI_CLIENT_ID, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import { umailBaseUrl } from "@umail/api-contract/client";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
@@ -12,23 +13,11 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import {
-  OAuthCredentialStore,
-  OAuthCredentialSupersededError,
-  type OAuthAuthorizedState,
-  type OAuthCredentialState,
-  type OAuthCredentialStoreService,
-  type OAuthRegisteredState,
-  registeredCredentialState,
-} from "./credential-store.ts";
+import { OAuthCredentialStore } from "./credential-store.ts";
 
-// The CLI is the static public client that provisioning registers for the REST resource.
-const UMAIL_CLI_CLIENT_ID = "umail-cli" as const;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
 const REFRESH_GRANT = "refresh_token" as const;
-const UMAIL_SCOPE = "umail:access" as const;
-const OFFLINE_SCOPE = "offline_access" as const;
-const REQUIRED_SCOPE = `${UMAIL_SCOPE} ${OFFLINE_SCOPE}` as const;
+const REQUIRED_SCOPE = `${UMAIL_OAUTH_SCOPE} ${OFFLINE_ACCESS_SCOPE}` as const;
 const REFRESH_SKEW_MS = 30_000;
 const SLOW_DOWN_INCREMENT_MS = 5_000;
 const OAUTH_HTTP_TIMEOUT = Duration.seconds(5);
@@ -106,182 +95,159 @@ export class OAuthScheduler extends Context.Service<OAuthScheduler, OAuthSchedul
   );
 }
 
-export function login() {
-  return Effect.gen(function* () {
-    const baseUrl = yield* umailBaseUrl;
-    const httpClient = yield* HttpClient.HttpClient;
-    const store = yield* OAuthCredentialStore;
-    const scheduler = yield* OAuthScheduler;
-    const metadata = yield* discoverOAuth(httpClient, baseUrl);
-    const current = yield* store.read;
-    const registration = {
-      version: 2,
-      kind: "registered",
+// Device login as the static CLI client. The browser approval can take minutes, so only the final
+// write holds the credential lock.
+export const login = Effect.gen(function* () {
+  const baseUrl = yield* umailBaseUrl;
+  const httpClient = yield* HttpClient.HttpClient;
+  const store = yield* OAuthCredentialStore;
+  const scheduler = yield* OAuthScheduler;
+  const metadata = yield* discoverOAuth(httpClient, baseUrl);
+  const device = yield* requestJson(
+    httpClient,
+    HttpClientRequest.post(metadata.device_authorization_endpoint).pipe(
+      HttpClientRequest.bodyUrlParams({
+        client_id: UMAIL_CLI_CLIENT_ID,
+        resource: baseUrl,
+        scope: REQUIRED_SCOPE,
+      }),
+    ),
+    DeviceCodeResponse,
+  );
+  if (
+    device.expires_in <= 0 ||
+    device.interval <= 0 ||
+    !isDeviceVerificationUrl(device.verification_uri, baseUrl) ||
+    !isDeviceVerificationUrl(device.verification_uri_complete, baseUrl)
+  ) {
+    return yield* new OAuthProtocolError();
+  }
+  const startedAt = yield* scheduler.now;
+  yield* Console.log(`Open: ${device.verification_uri_complete}`);
+  yield* Console.log(`Code: ${device.user_code}`);
+  yield* Console.log("Waiting for approval…");
+  const tokens = yield* pollForTokens(
+    httpClient,
+    scheduler,
+    metadata.token_endpoint,
+    baseUrl,
+    device,
+    startedAt,
+  );
+  const now = yield* scheduler.now;
+  const refreshToken = tokens.refresh_token;
+  const scope = tokens.scope ?? REQUIRED_SCOPE;
+  if (
+    tokens.token_type.toLowerCase() !== "bearer" ||
+    tokens.expires_in <= 0 ||
+    !hasRequiredScopes(scope) ||
+    refreshToken === undefined ||
+    refreshToken.length === 0
+  ) {
+    return yield* new OAuthProtocolError();
+  }
+  yield* store.withLock(
+    store.write({
       origin: baseUrl,
-      issuer: metadata.issuer,
-      resource: baseUrl,
-      scope: REQUIRED_SCOPE,
-      clientId: UMAIL_CLI_CLIENT_ID,
-      generation: current?.generation ?? 0,
-    } as const satisfies OAuthRegisteredState;
-    yield* loginWithRegistration(httpClient, store, scheduler, metadata, registration);
-  }).pipe(Effect.catchTag("OAuthEndpointError", () => new OAuthProtocolError()));
-}
-
-function loginWithRegistration(
-  httpClient: HttpClient.HttpClient,
-  store: OAuthCredentialStoreService,
-  scheduler: OAuthSchedulerService,
-  metadata: typeof OAuthMetadata.Type,
-  registration: OAuthRegisteredState,
-) {
-  return Effect.gen(function* () {
-    const device = yield* requestJson(
-      httpClient,
-      HttpClientRequest.post(metadata.device_authorization_endpoint).pipe(
-        HttpClientRequest.bodyUrlParams({
-          client_id: registration.clientId,
-          resource: registration.resource,
-          scope: registration.scope,
-        }),
-      ),
-      DeviceCodeResponse,
-    );
-    if (
-      device.expires_in <= 0 ||
-      device.interval <= 0 ||
-      !isDeviceVerificationUrl(device.verification_uri, registration.origin) ||
-      !isDeviceVerificationUrl(device.verification_uri_complete, registration.origin)
-    ) {
-      return yield* new OAuthProtocolError();
-    }
-    const startedAt = yield* scheduler.now;
-    yield* Console.log(`Open: ${device.verification_uri_complete}`);
-    yield* Console.log(`Code: ${device.user_code}`);
-    yield* Console.log("Waiting for approval…");
-    const tokens = yield* pollForTokens(
-      httpClient,
-      scheduler,
-      metadata.token_endpoint,
-      registration,
-      device,
-      startedAt,
-    );
-    const now = yield* scheduler.now;
-    const refreshToken = tokens.refresh_token;
-    if (
-      tokens.token_type.toLowerCase() !== "bearer" ||
-      tokens.expires_in <= 0 ||
-      !hasRequiredScopes(tokens.scope ?? registration.scope) ||
-      refreshToken === undefined ||
-      refreshToken.length === 0
-    ) {
-      return yield* new OAuthProtocolError();
-    }
-    const authorized = {
-      ...registration,
-      kind: "authorized",
-      scope: tokens.scope ?? registration.scope,
+      scope,
       accessToken: tokens.access_token,
       refreshToken,
       expiresAt: now + tokens.expires_in * 1_000,
-      generation: registration.generation,
-    } as const satisfies OAuthAuthorizedState;
-    const outcome = yield* store.commit(registration.generation, authorized);
-    if (outcome === "superseded") return yield* new OAuthCredentialSupersededError();
-  });
-}
+    }),
+  );
+}).pipe(Effect.catchTag("OAuthEndpointError", () => new OAuthProtocolError()));
 
-export function accessToken() {
-  return Effect.gen(function* () {
-    const baseUrl = yield* umailBaseUrl;
-    const store = yield* OAuthCredentialStore;
-    const scheduler = yield* OAuthScheduler;
-    return yield* store.withRefreshLock(
-      Effect.gen(function* () {
-        const state = yield* store.read;
-        if (state === null || state.origin !== baseUrl || state.kind !== "authorized") {
-          return yield* new OAuthLoginRequiredError();
-        }
-        if (!validRegistration(state, baseUrl, `${baseUrl}/api/auth`)) {
-          return yield* new OAuthProtocolError();
-        }
-        const now = yield* scheduler.now;
-        if (state.expiresAt - now > REFRESH_SKEW_MS) return Redacted.make(state.accessToken);
-        const httpClient = yield* HttpClient.HttpClient;
-        const metadata = yield* discoverOAuth(httpClient, baseUrl);
-        const refreshed = yield* requestJson(
-          httpClient,
-          HttpClientRequest.post(metadata.token_endpoint).pipe(
-            HttpClientRequest.bodyUrlParams({
-              grant_type: REFRESH_GRANT,
-              refresh_token: state.refreshToken,
-              client_id: state.clientId,
-              resource: state.resource,
-            }),
+// The current access token, refreshed under the credential lock when it is about to expire.
+export const accessToken = Effect.gen(function* () {
+  const baseUrl = yield* umailBaseUrl;
+  const store = yield* OAuthCredentialStore;
+  const scheduler = yield* OAuthScheduler;
+  return yield* store.withLock(
+    Effect.gen(function* () {
+      const credentials = yield* store.read;
+      if (credentials === null || credentials.origin !== baseUrl) {
+        return yield* new OAuthLoginRequiredError();
+      }
+      if (!hasRequiredScopes(credentials.scope)) {
+        return yield* new OAuthProtocolError();
+      }
+      const now = yield* scheduler.now;
+      if (credentials.expiresAt - now > REFRESH_SKEW_MS) {
+        return Redacted.make(credentials.accessToken);
+      }
+      const httpClient = yield* HttpClient.HttpClient;
+      const metadata = yield* discoverOAuth(httpClient, baseUrl);
+      const refreshed = yield* requestJson(
+        httpClient,
+        HttpClientRequest.post(metadata.token_endpoint).pipe(
+          HttpClientRequest.bodyUrlParams({
+            grant_type: REFRESH_GRANT,
+            refresh_token: credentials.refreshToken,
+            client_id: UMAIL_CLI_CLIENT_ID,
+            resource: baseUrl,
+          }),
+        ),
+        OAuthTokenResponse,
+      ).pipe(
+        Effect.catchTag("OAuthEndpointError", (error) =>
+          Effect.fail(
+            error.error === "invalid_grant" || error.error === "invalid_client"
+              ? new OAuthLoginRequiredError()
+              : new OAuthProtocolError(),
           ),
-          OAuthTokenResponse,
-        ).pipe(
-          Effect.catchTag("OAuthEndpointError", (error) =>
-            Effect.fail(
-              error.error === "invalid_grant" || error.error === "invalid_client"
-                ? new OAuthLoginRequiredError()
-                : new OAuthProtocolError(),
-            ),
-          ),
-        );
-        if (
-          refreshed.token_type.toLowerCase() !== "bearer" ||
-          refreshed.expires_in <= 0 ||
-          !hasRequiredScopes(refreshed.scope ?? state.scope)
-        )
-          return yield* new OAuthProtocolError();
-        const nextState = {
-          ...state,
-          accessToken: refreshed.access_token,
-          refreshToken: refreshed.refresh_token ?? state.refreshToken,
-          scope: refreshed.scope ?? state.scope,
-          expiresAt: now + refreshed.expires_in * 1_000,
-          generation: state.generation,
-        } satisfies OAuthAuthorizedState;
-        const outcome = yield* store.commit(state.generation, nextState);
-        if (outcome === "superseded") return yield* new OAuthLoginRequiredError();
-        return Redacted.make(nextState.accessToken);
-      }),
-    );
-  });
-}
+        ),
+      );
+      const scope = refreshed.scope ?? credentials.scope;
+      if (
+        refreshed.token_type.toLowerCase() !== "bearer" ||
+        refreshed.expires_in <= 0 ||
+        !hasRequiredScopes(scope)
+      ) {
+        return yield* new OAuthProtocolError();
+      }
+      const next = {
+        origin: baseUrl,
+        scope,
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token ?? credentials.refreshToken,
+        expiresAt: now + refreshed.expires_in * 1_000,
+      };
+      yield* store.write(next);
+      return Redacted.make(next.accessToken);
+    }),
+  );
+});
 
 // Revokes on the server first; the local tokens are removed only once that succeeded.
-export function logout() {
-  return Effect.gen(function* () {
-    const baseUrl = yield* umailBaseUrl;
-    const store = yield* OAuthCredentialStore;
-    const state = yield* store.read;
-    if (state === null || state.origin !== baseUrl) return;
-    if (state.kind === "authorized") {
-      const httpClient = yield* HttpClient.HttpClient;
-      yield* revokeRefreshToken(httpClient, baseUrl, state).pipe(
+export const logout = Effect.gen(function* () {
+  const baseUrl = yield* umailBaseUrl;
+  const store = yield* OAuthCredentialStore;
+  const httpClient = yield* HttpClient.HttpClient;
+  yield* store.withLock(
+    Effect.gen(function* () {
+      const credentials = yield* store.read;
+      if (credentials === null || credentials.origin !== baseUrl) return;
+      yield* revokeRefreshToken(httpClient, baseUrl, credentials.refreshToken).pipe(
         Effect.mapError(() => new OAuthRevocationError()),
       );
-    }
-    yield* store.clearTokens(baseUrl);
-  });
-}
+      yield* store.remove;
+    }),
+  );
+});
 
 function revokeRefreshToken(
   httpClient: HttpClient.HttpClient,
   baseUrl: string,
-  revocation: { readonly clientId: string; readonly refreshToken: string },
+  refreshToken: string,
 ) {
   return Effect.gen(function* () {
     const metadata = yield* discoverOAuth(httpClient, baseUrl);
     const response = yield* httpClient.execute(
       HttpClientRequest.post(metadata.revocation_endpoint).pipe(
         HttpClientRequest.bodyUrlParams({
-          token: revocation.refreshToken,
+          token: refreshToken,
           token_type_hint: "refresh_token",
-          client_id: revocation.clientId,
+          client_id: UMAIL_CLI_CLIENT_ID,
         }),
       ),
     );
@@ -313,26 +279,9 @@ function discoverOAuth(httpClient: HttpClient.HttpClient, baseUrl: string) {
   );
 }
 
-function validRegistration(
-  state: OAuthCredentialState | null,
-  origin: string,
-  issuer: string,
-): OAuthRegisteredState | null {
-  if (
-    state === null ||
-    state.origin !== origin ||
-    state.issuer !== issuer ||
-    state.resource !== origin ||
-    state.clientId.length === 0 ||
-    !hasRequiredScopes(state.scope)
-  )
-    return null;
-  return registeredCredentialState(state);
-}
-
 function hasRequiredScopes(scope: string): boolean {
   const scopes = new Set(scope.split(" ").filter((value) => value.length > 0));
-  return scopes.has(UMAIL_SCOPE) && scopes.has(OFFLINE_SCOPE);
+  return scopes.has(UMAIL_OAUTH_SCOPE) && scopes.has(OFFLINE_ACCESS_SCOPE);
 }
 
 function isSameOriginUrl(value: string, origin: string): boolean {
@@ -355,7 +304,7 @@ function pollForTokens(
   httpClient: HttpClient.HttpClient,
   scheduler: OAuthSchedulerService,
   tokenEndpoint: string,
-  registration: OAuthRegisteredState,
+  resource: string,
   device: typeof DeviceCodeResponse.Type,
   startedAt: number,
 ) {
@@ -372,8 +321,8 @@ function pollForTokens(
           HttpClientRequest.bodyUrlParams({
             grant_type: DEVICE_GRANT,
             device_code: device.device_code,
-            client_id: registration.clientId,
-            resource: registration.resource,
+            client_id: UMAIL_CLI_CLIENT_ID,
+            resource,
           }),
         ),
       );

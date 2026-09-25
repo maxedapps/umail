@@ -125,6 +125,11 @@ export type McpPrincipal = {
 
 export type Principal = OperatorPrincipal | McpPrincipal;
 
+// The static public OAuth client the CLI signs in as, and the scopes its tokens carry.
+export const UMAIL_CLI_CLIENT_ID = "umail-cli" as const;
+export const UMAIL_OAUTH_SCOPE = "umail:access" as const;
+export const OFFLINE_ACCESS_SCOPE = "offline_access" as const;
+
 // The operator's full access; the API and the account store's send check both use it.
 export const OPERATOR_POLICY = {
   mailboxIds: "all",

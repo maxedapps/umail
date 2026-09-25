@@ -2,6 +2,7 @@ import {
   CurrentPrincipal,
   PrincipalAuthorization,
   operatorOAuthPrincipal,
+  UMAIL_OAUTH_SCOPE,
 } from "@umail/api-contract";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Effect from "effect/Effect";
@@ -9,7 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
-import { UMAIL_OAUTH_SCOPE, type UmailAuthInstance } from "./options.ts";
+import { type UmailAuthInstance } from "./options.ts";
 import { verifyOAuthBearerToken } from "./oauth-resource.ts";
 
 export type OperatorAuthorizationDependencies = {

@@ -1,5 +1,10 @@
 import type { D1Database } from "@cloudflare/workers-types";
-import { parseExternalMailAddress, type ExternalMailAddress } from "@umail/api-contract";
+import {
+  parseExternalMailAddress,
+  type ExternalMailAddress,
+  OFFLINE_ACCESS_SCOPE,
+  UMAIL_OAUTH_SCOPE,
+} from "@umail/api-contract";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Config from "effect/Config";
@@ -14,8 +19,6 @@ import { WebCrypto, randomId } from "../crypto.ts";
 import { AuthDb } from "../resources.ts";
 import {
   FIRST_PARTY_CLIENT_DISCOVERY_ID,
-  OFFLINE_ACCESS_SCOPE,
-  UMAIL_OAUTH_SCOPE,
   firstPartyClients,
   makeAuthOptions,
   type FirstPartyClient,

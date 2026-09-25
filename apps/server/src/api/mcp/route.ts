@@ -1,4 +1,4 @@
-import { type McpPrincipal, type Principal } from "@umail/api-contract";
+import { type McpPrincipal, type Principal, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import { createMcpHandler, McpServer, type AuthInfo } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import type * as Alchemy from "alchemy";
@@ -11,7 +11,6 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import { agentMailMcpServerInfo } from "../brand/identity.ts";
 import type { ApiDeps } from "../app.ts";
-import { UMAIL_OAUTH_SCOPE } from "../../auth/options.ts";
 import {
   oauthResourceChallenge,
   verifyOAuthResourceRequest,

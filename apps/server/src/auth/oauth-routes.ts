@@ -1,3 +1,4 @@
+import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -10,7 +11,7 @@ import {
 } from "../api/human-pages/oauth-management.ts";
 import { humanPageHeaders } from "../api/human-pages/response.ts";
 import { policyFromForm, type Access } from "./access.ts";
-import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE, type UmailAuthInstance } from "./options.ts";
+import { type UmailAuthInstance } from "./options.ts";
 import { cookieMutationAllowed } from "./runtime-surface.ts";
 
 const DeviceDecisionForm = Schema.Struct({ userCode: Schema.String });
