@@ -26,8 +26,8 @@ import {
   OPERATOR_EMAIL,
   OPERATOR_PASSWORD,
   createWorld,
-  readText,
   runDueWorkPass,
+  seedInboundMessage,
   seedMailbox,
   type World,
 } from "../api/world.ts";
@@ -89,8 +89,8 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     }
   });
 
-  // No cookie: the proxy signs every request in with its world's operator session. Vitest loads this
-  // module once for the middleware and again for the commands, so their worlds differ.
+  // The fixture redirect sets the session cookie. Vitest loads this module once for the middleware
+  // and again for the commands, so only the middleware's world may issue it.
   yield* Effect.promise(() => context.clearCookies());
   yield* Effect.promise(() =>
     page.setViewportSize({ width: visit.viewportWidth, height: visit.viewportHeight }),
@@ -124,6 +124,7 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
   const messageBodyBox = yield* optionalBoundingBox(page.locator("#message-body"));
   const decisionBox = yield* optionalBoundingBox(page.locator("#decision"));
   const client = visit.fixture === "client" ? yield* exerciseClientPage(page) : null;
+  const mail = visit.fixture === "mail-thread" ? yield* exerciseMailThread(page) : null;
   const heading = (yield* optionalText(page.locator("h1"))) ?? "";
   const title = yield* Effect.promise(() => page.title());
   const bodyText = yield* Effect.promise(() => page.locator("body").innerText());
@@ -192,6 +193,8 @@ const observeWebPage = Effect.fn("observeWebPage")(function* (
     preapprovedShownWithApproval: client?.preapprovedShownWithApproval ?? null,
     preapprovedShownWhenNever: client?.preapprovedShownWhenNever ?? null,
     revokePopoverOpen: client?.revokePopoverOpen ?? null,
+    frameImageWidth: mail?.frameImageWidth ?? null,
+    firstTimeText: mail?.firstTimeText ?? null,
     statusText: consentAuth?.statusText ?? focus.statusText,
     authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
     authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
@@ -258,6 +261,9 @@ const serveFixtureRequest = Effect.fn("serveFixtureRequest")(function* (
     response.statusCode = 302;
     response.setHeader("location", `${target.pathname}${target.search}`);
     response.setHeader("cache-control", "no-store");
+    // The browser holds the operator's session like a signed-in browser would, so it decides which
+    // requests carry it (SameSite, sandboxed frames).
+    response.setHeader("set-cookie", browserSessionCookie(prepared.world.sessionCookie));
     response.end();
     return;
   }
@@ -362,6 +368,25 @@ const exerciseClientPage = Effect.fn("exerciseClientPage")(function* (page: Page
     page.locator("#revoke-dialog").evaluate((element) => element.matches(":popover-open")),
   );
   return { preapprovedShownWithApproval, preapprovedShownWhenNever, revokePopoverOpen };
+});
+
+// The message body frame is sandboxed and loads nothing, so its inline image stays blocked; the page's
+// one script shows times in the viewer's zone.
+const exerciseMailThread = Effect.fn("exerciseMailThread")(function* (page: Page) {
+  const image = page.frameLocator('iframe[title="Message body"]').locator("#inline-image");
+  let frameImageWidth = -1;
+  for (let attempt = 0; attempt < 50 && frameImageWidth === -1; attempt += 1) {
+    const state = yield* Effect.promise(() =>
+      image.evaluate((element: HTMLImageElement) => ({
+        complete: element.complete,
+        width: element.naturalWidth,
+      })),
+    );
+    if (state.complete) frameImageWidth = state.width;
+    else yield* Effect.sleep("100 millis");
+  }
+  const firstTimeText = yield* optionalText(page.locator("time"));
+  return { frameImageWidth, firstTimeText };
 });
 
 const submitConsent = Effect.fn("submitConsent")(function* (page: Page) {
@@ -536,7 +561,9 @@ const worldRequestInit = Effect.fn("worldRequestInit")(function* (
   } else if (url.pathname === "/api/auth/oauth2/consent") {
     headers.set("cookie", world.sessionCookie);
   } else {
-    headers.set("cookie", cookieHeaderForWorld(headers.get("cookie"), world.sessionCookie));
+    const cookie = cookieHeaderForWorld(headers.get("cookie"), world.sessionCookie);
+    if (cookie.length === 0) headers.delete("cookie");
+    else headers.set("cookie", cookie);
   }
   const method = request.method ?? "GET";
   const init: RequestInit = { method, headers };
@@ -574,7 +601,7 @@ const writeWorldResponse = Effect.fn("writeWorldResponse")(function* (
   for (const cookie of cookies) {
     response.appendHeader("set-cookie", rewriteSetCookie(cookie));
   }
-  response.end(yield* readText(webResponse));
+  response.end(Buffer.from(yield* Effect.promise(() => webResponse.arrayBuffer())));
 });
 
 function rewriteLocation(location: string, browserOrigin: string): string {
@@ -593,9 +620,15 @@ function setCookieValues(webResponse: Response): ReadonlyArray<string> {
   return combined === null ? [] : [combined];
 }
 
+function browserSessionCookie(worldSessionCookie: string): string {
+  const separator = worldSessionCookie.indexOf("=");
+  const name = publicCookieName(worldSessionCookie.slice(0, separator));
+  return `${name}=${worldSessionCookie.slice(separator + 1)}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
 function cookieHeaderForWorld(browserCookie: string | null, worldSessionCookie: string): string {
   if (browserCookie === null || browserCookie.length === 0) {
-    return worldSessionCookie;
+    return "";
   }
   const worldName = worldSessionCookie.split("=")[0] ?? "";
   const browserName = publicCookieName(worldName);
@@ -672,6 +705,27 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
   // Approved last, so no pass sends it: its page shows the approved message as sending.
   yield* decide(world, queued.token, "approved");
   const consentPath = yield* consentAuthorizePath(world);
+  const thread = yield* seedInboundMessage(world, mailbox.id, {
+    id: "m-thread",
+    subject: HOSTILE_SUBJECT,
+    from: "sender@example.com",
+    textBody: "Plain alternative",
+    htmlBody:
+      '<p id="frame-copy">Inline image below</p><img id="inline-image" src="/messages/m-thread/attachments/logo" alt="Logo">',
+    attachments: [
+      {
+        id: "logo",
+        position: 0,
+        filename: "logo.png",
+        mimeType: "image/png",
+        size: 4,
+        r2Key: "mail/logo.png",
+        contentId: "logo@example.com",
+        disposition: "inline",
+        isInline: true,
+      },
+    ],
+  });
   const agent = yield* registerMcpClient(world, { label: "Browser agent" });
   yield* issueMcpAccessToken(world, agent);
   return {
@@ -680,6 +734,7 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
       login: "/login",
       consent: consentPath,
       client: `/clients/${encodeURIComponent(agent.clientId)}`,
+      "mail-thread": `/mail/threads/${thread.threadId}`,
       pending: approvalPath(pending.token),
       accepted: approvalPath(accepted.token),
       failed: approvalPath(failed.token),

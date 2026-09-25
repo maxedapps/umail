@@ -1,6 +1,6 @@
 # Plan for 0003: A server-rendered web console on one page system
 
-- **Status:** In progress (tasks 1–5 done)
+- **Status:** In progress (tasks 1–6 done)
 - **ADR:** `adrs/0003-web-console.md`
 
 ## Goal
@@ -54,14 +54,14 @@ apps/server/src/web/
 
 **Page kinds and their CSP.** Every kind keeps `default-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, `style-src 'nonce-…'` and `style-src-attr 'none'`.
 
-| Kind       | Scripts             | `connect-src` | `form-action` | `frame-src` | Used by                                                                                                                                      |
-| ---------- | ------------------- | ------------- | ------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth`     | nonce               | `'self'`      | `'self'`      | `'none'`    | login, consent                                                                                                                               |
-| `console`  | nonce (time script) | `'none'`      | `'self'`      | `'self'`    | mail, compose, mailboxes, clients                                                                                                            |
-| `form`     | `'none'`            | `'none'`      | `'self'`      | `'none'`    | device                                                                                                                                       |
-| `approval` | `'none'`            | `'none'`      | `'self'`      | `'self'`    | approval review                                                                                                                              |
-| `static`   | `'none'`            | `'none'`      | `'none'`      | `'none'`    | notices                                                                                                                                      |
-| body frame | `'none'`, `sandbox` | `'none'`      | `'none'`      | —           | approval preview: today's `APPROVAL_MESSAGE_PREVIEW_CSP`, unchanged. Console body: the same policy plus `img-src 'self'`, for inline images. |
+| Kind       | Scripts             | `connect-src` | `form-action` | `frame-src` | Used by                                                                                                                                                                                               |
+| ---------- | ------------------- | ------------- | ------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth`     | nonce               | `'self'`      | `'self'`      | `'none'`    | login, consent                                                                                                                                                                                        |
+| `console`  | nonce (time script) | `'none'`      | `'self'`      | `'self'`    | mail, compose, mailboxes, clients                                                                                                                                                                     |
+| `form`     | `'none'`            | `'none'`      | `'self'`      | `'none'`    | device                                                                                                                                                                                                |
+| `approval` | `'none'`            | `'none'`      | `'self'`      | `'self'`    | approval review                                                                                                                                                                                       |
+| `static`   | `'none'`            | `'none'`      | `'none'`      | `'none'`    | notices                                                                                                                                                                                               |
+| body frame | `'none'`, `sandbox` | `'none'`      | `'none'`      | —           | approval preview and console body: today's `APPROVAL_MESSAGE_PREVIEW_CSP`, unchanged (`BODY_FRAME_CSP`). _Changed:_ the console body was planned with `img-src 'self'` for inline images; see task 6. |
 
 **Routes.** None of these clash with the REST root paths (`/addresses`, `/threads`, `/messages`, `/jobs`, `/submissions`, `/sending-identities`), so REST stays where it is.
 
@@ -327,8 +327,8 @@ The consent script shrinks to building the `mailboxes` string from the checked b
   - `getMessage` returns the metadata (from, to, cc, date, mailbox);
   - the text-only body is rendered in `<pre>`-wrapped prose;
   - an HTML body is rendered as `<iframe sandbox src="/mail/messages/:id/body" loading="lazy">` with a tall `.frame` (`min(80dvh, 60rem)`), plus a plain-text alternative in `<details>`;
-  - a "Remote images are blocked" note shows when `hasRemoteImages` is set;
-  - the attachment list links to downloads.
+  - a "Remote images are blocked" note shows when `hasRemoteImages` is set; _changed:_ it says images are not shown whenever the message has remote or inline images;
+  - the attachment list links to downloads, inline images included.
 - **Opening marks read:** the GET calls `setThreadReadState(…, true)` when `unreadCount > 0`.
 - **Actions:** Reply, Reply all, Mark unread (POST, then 303 to `/mail`), and Delete conversation (a popover confirm, then POST, then 303 to `/mail` with a flash).
 
@@ -336,6 +336,7 @@ The consent script shrinks to building the `mailboxes` string from the checked b
 
 - **Body route:** `getMessage`, then the body document with the console body CSP. It reuses the approval preview's HTML wrapper, moved to `document.ts`. A message without HTML returns 404.
   - **Inline images:** the sanitizer stores `cid:` images as `src="/messages/<id>/attachments/<aid>"` (`mail/html-policy.ts`). The route rewrites exactly that prefix for this message id to `/mail/messages/<id>/attachments/`, so the frame loads them through the session-gated attachment route.
+  - _Changed during implementation (owner's decision, 2026-09-25):_ dropped. The Chromium spec showed the sandboxed frame's image request going out as `sec-fetch-site: cross-site` without the session cookie, so the attachment route answered 303 to `/login`. The body route now serves the stored HTML with the approval preview's CSP (`img-src 'none'`), and inline images are listed as attachments.
 - **Attachment route:** `readAttachment` plus `attachmentResponseHeaders`.
 
 **Time script:** the console-kind script (under 20 lines, nonce'd) rewrites each `<time datetime>` with `Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })`. The server text stays as the UTC fallback.
@@ -347,18 +348,21 @@ The consent script shrinks to building the `mailboxes` string from the checked b
   - Unread rows are marked.
   - The cursor pages.
   - The thread page opens the newest message by default and `?open` picks another.
-  - The body route sends `sandbox` and `img-src 'self'`, and rewrites a seeded `cid:` image to the console attachment path. Without a session it answers like every console route: a 303 to `/login`.
+  - The body route sends `sandbox` and `img-src 'none'` (changed, see above), and the thread lists the inline image as an attachment. Without a session it answers like every console route: a 303 to `/login`.
   - Opening an unread thread marks it read. "Mark unread" restores the unread state.
   - The attachment download has `content-disposition`.
   - Read and unread flip `unreadCount`.
   - Delete hides the thread.
 - **Browser spec** (new `mail-thread` fixture):
-  - no CSP violations;
+  - no CSP violations, except the frame refusing the seeded inline image;
   - hostile subject and sender stay inert;
   - `<time>` is localized;
   - no horizontal scroll at 390px.
 
-**Done:** no.
+**Done:** yes. Notes:
+
+- No `POST /mail/threads/:threadId/read` route: opening a conversation marks it read, so nothing would post to it.
+- The browser fixture now lets the browser hold the session cookie (set by the fixture redirect) instead of the proxy adding it to cookie-less requests, which had hidden the frame's missing cookie. The proxy also passes binary bodies through unchanged.
 
 ### 7. Compose, reply, send status
 
@@ -454,4 +458,4 @@ The consent script shrinks to building the `mailboxes` string from the checked b
 
 ## Open questions
 
-None. Both are resolved, 2026-09-25: opening a conversation marks it read, and inline images are shown.
+None. Both are resolved, 2026-09-25: opening a conversation marks it read, and inline images are shown. The owner later reversed the second one during task 6: inline images are not shown (see task 6).

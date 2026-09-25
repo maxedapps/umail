@@ -40,6 +40,7 @@ The owner also wants a lean web UI to view, read and send mail. AgentMail stays 
    - REST stays bearer-only. MCP is unchanged.
 6. **JavaScript only where it earns its place.** Login and consent keep their small nonce'd scripts. Console pages get one nonce'd script that shows times in the viewer's zone. Everything else is forms, `303` redirects and CSS.
 7. **Mail bodies render in a sandboxed frame.** A session-gated body route reuses the approval preview's sandbox CSP, with one change: it allows `img-src 'self'`. Inline (`cid:`) images then load through the console's attachment route, and remote images stay blocked.
+   - _Amended during implementation (owner's decision, 2026-09-25):_ inline images are not shown. The body route uses the approval preview's CSP unchanged (`img-src 'none'`), and inline images are listed as attachments. Chromium sends the sandboxed frame's image requests as cross-site, so they carry no `SameSite=Lax` session cookie and the attachment route answers 303 to `/login`. The owner chose this over embedding them as `data:` URIs or giving the frame `allow-same-origin`.
 8. **Opening a conversation marks it read.** "Mark unread" undoes that.
 
 ## Alternatives
@@ -57,7 +58,7 @@ The owner also wants a lean web UI to view, read and send mail. AgentMail stays 
 
 - **A second operator surface.** A stolen session cookie now reads and sends mail as well as managing clients. Better Auth's cookie flags, `cookieMutationAllowed` on every POST, and `frame-ancestors 'none'` stay the guards.
 - **Console pages run one script.** They are no longer script-free, but the script is nonce'd and only formats `<time>` elements.
-- **Limited mail rendering.** Remote images are never shown, and a sandboxed frame has a fixed height.
+- **Limited mail rendering.** No images are shown in a mail body, remote or inline, and a sandboxed frame has a fixed height. Inline images are listed as attachments.
 - **Viewing changes state.** A conversation's GET marks it read. It is the operator's own session, and the change is visible and reversible.
 - **The page tests are rewritten**, because they assert today's markup and class names.
 - **README scope changes.** "There is no … browser mailbox" is no longer true.

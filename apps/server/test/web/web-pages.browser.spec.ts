@@ -68,6 +68,25 @@ describe("web pages in Chromium", () => {
     }),
   );
 
+  it.effect("shows a conversation with a loadless body frame, local times and inert metadata", () =>
+    Effect.gen(function* () {
+      const thread = yield* observe("mail-thread");
+
+      expect(thread.status).toBe(200);
+      // Inline images stay blocked in the frame and are listed as attachments instead.
+      expect(thread.frameImageWidth).toBe(0);
+      expect(thread.bodyText).toContain("logo.png");
+      expect(thread.firstTimeText).not.toBeNull();
+      expect(thread.firstTimeText).not.toContain("UTC");
+      expect(thread.heading).toContain("<script data-hostile-subject>subject</script>");
+      expect(thread.hostileElementCount).toBe(0);
+      // The only report is the frame refusing that image.
+      expect(cspViolations(thread)).toEqual([
+        expect.stringMatching(/image .*violates .*"img-src 'none'"/u),
+      ]);
+    }),
+  );
+
   it.effect(
     "keeps hostile approval metadata inert and exposes one keyboard-usable native decision form",
     () =>
@@ -198,7 +217,14 @@ describe("web pages in Chromium", () => {
     "avoids horizontal overflow at 320px and computes distinct light and dark presentation",
     () =>
       Effect.gen(function* () {
-        const mobileFixtures = ["login", "consent", "client", "pending", "accepted"] as const;
+        const mobileFixtures = [
+          "login",
+          "consent",
+          "client",
+          "mail-thread",
+          "pending",
+          "accepted",
+        ] as const;
         for (const fixture of mobileFixtures) {
           const mobile = yield* observe(fixture, { width: 320, height: 900, colorScheme: "light" });
           expect(mobile.documentScrollWidth, `${fixture} scroll width`).toBeLessThanOrEqual(

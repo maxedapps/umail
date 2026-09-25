@@ -32,7 +32,7 @@ import type { DestinationsClient } from "./destinations.ts";
 import { WebCrypto } from "../crypto.ts";
 import { webRoutes } from "../web/routes.ts";
 import {
-  APPROVAL_PREVIEW_CSP,
+  BODY_FRAME_CSP,
   approvalHttpApiBody,
   bodyDocument,
   bodyFrameHeaders,
@@ -298,7 +298,7 @@ const showApprovalMessagePreview = Effect.fn("showApprovalMessagePreview")(funct
   }
   return HttpApiSchema.withHeaders({
     body: bodyDocument(outcome.message.htmlBody),
-    headers: bodyFrameHeaders(APPROVAL_PREVIEW_CSP),
+    headers: bodyFrameHeaders(BODY_FRAME_CSP),
   });
 });
 

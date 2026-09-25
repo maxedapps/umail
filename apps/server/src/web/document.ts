@@ -192,15 +192,11 @@ export function redirect(location: string) {
   });
 }
 
-// A stored mail body, framed by a sandboxed iframe. Its styles are inline attributes, which only
-// this document's own policy allows; it never runs script, submits forms or loads remote content.
-const BODY_FRAME_CSP =
+// A stored mail body, framed by a sandboxed iframe, for approval review and the console. Its styles
+// are inline attributes, which only this document's own policy allows; it never runs script, submits
+// forms or loads anything, images included.
+export const BODY_FRAME_CSP =
   "default-src 'none'; sandbox; frame-ancestors 'self'; script-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; style-src-elem 'none'; style-src-attr 'unsafe-inline'";
-
-export const APPROVAL_PREVIEW_CSP = BODY_FRAME_CSP;
-
-// The console's body frame also loads inline (`cid:`) images from the session-gated attachment route.
-export const CONSOLE_BODY_CSP = BODY_FRAME_CSP.replace("img-src 'none'", "img-src 'self'");
 
 export function bodyDocument(storedHtml: string): string {
   return htmlText(html`<!doctype html>

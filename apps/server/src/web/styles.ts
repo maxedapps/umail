@@ -645,7 +645,6 @@ export const styles = String.raw`
 
     > .primary {
       display: flex;
-      flex-wrap: wrap;
       align-items: baseline;
       gap: var(--space-2xs) var(--space-xs);
       min-inline-size: 0;
@@ -670,6 +669,7 @@ export const styles = String.raw`
     }
 
     &.unread > .primary::before {
+      flex: none;
       content: "";
       inline-size: 0.5rem;
       block-size: 0.5rem;
@@ -767,6 +767,12 @@ export const styles = String.raw`
     margin: 0;
     padding: 0;
     list-style: none;
+
+    /* Narrow: the sidebar's links wrap into a row above the content. */
+    @container console (inline-size <= 52rem) {
+      display: flex;
+      flex-wrap: wrap;
+    }
 
     a {
       display: flex;
