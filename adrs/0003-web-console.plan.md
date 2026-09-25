@@ -460,6 +460,21 @@ The consent script shrinks to building the `mailboxes` string from the checked b
 - Connect an MCP client: check the consent screen, then narrow it on `/clients`, then revoke it.
 - Check light, dark and phone widths.
 
+## Deploy
+
+Merged into `main` as a fast-forward and deployed to prod from `3f1b3c0` on 2026-09-25. The plan updated `App` only. `App/AUTH_OPERATOR_ID` plans as an update on every deploy, and every other resource was unchanged. The review of PR #1 raised that console reads share unread state with agents, and the owner kept read-on-open. The README and the ADR now say so.
+
+Live checks, with no browser:
+
+- `/login` returns 200 with the auth page's CSP.
+- `/mail`, `/clients` and a thread path redirect to `/login?next=<path>`.
+- A cross-site POST to `/mailboxes` returns 403.
+- REST without a token returns 401.
+- The icon, Better Auth and the OAuth metadata respond.
+- `umail addresses list` works with the existing CLI credential.
+
+The owner's manual QA above is still to do.
+
 ## Open questions
 
 None. Both are resolved, 2026-09-25: opening a conversation marks it read, and inline images are shown. The owner later reversed the second one during task 6: inline images are not shown (see task 6).
