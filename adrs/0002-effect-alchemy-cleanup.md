@@ -35,7 +35,8 @@ The owner wants the defect fixed, every simplification done, zero lint warnings 
    - Opaque ids are the one exception. A thread id is the id of its founding message, and `parentMessageId` may point at a message outside the scope. No content is attached to those ids, and bodies stay gated per message.
 2. **Use the platform's Effect-native surfaces instead of hand-rolled ones:**
    - D1 goes through Alchemy's `QueryDatabase` client.
-   - Better Auth goes through Alchemy's effectified `api`.
+   - Better Auth goes through Alchemy's per-request instance (`authInstance.auth`).
+     - _Amended during implementation:_ not its effectified `api`, whose types degrade to `(any) => Effect<any>` for this plugin set. The typed instance's promise calls are wrapped as Effects where they are used.
    - Randomness and digests go through Effect's `Crypto` service, backed by WebCrypto.
    - Time goes through `Clock`/`DateTime`, tested with `TestClock`.
    - Configuration goes through `Config.schema`, so errors surface as `ConfigError`.
@@ -78,6 +79,6 @@ The owner wants the defect fixed, every simplification done, zero lint warnings 
 - **An approval decision no longer re-checks the message's shape.** It used to require exactly one sender and at least one recipient. The store's state checks decide instead, and the review page still loads the message.
 - **The API contract drops `GET /messages/:id/reply-plan`.** It had no caller.
 - **About 60 test files change mechanically.** Browser and Durable Object specs get noisier, because each Promise step is wrapped in an Effect.
-- **Tests rely on one internal Alchemy helper.** They build Alchemy's effectified Better Auth surface with `makeApiProxy` (`@alchemy.run/better-auth/ApiProxy`, marked internal). An Alchemy upgrade may need a test-side adjustment.
+- **Tests supply alchemy's runtime context with its phantom layer.** They provide `RuntimeContext.phantom`, a public but type-only layer, where the Worker runtime would supply the real context. _(Amended: the planned internal `makeApiProxy` was not needed.)_
 - **The credential store drops `O_NOFOLLOW`.** It relies on its private `0700` directory, plus owner, mode and `realPath` checks.
 - **The Alchemy DO pattern needs one lint suppression.** Alchemy's documented Durable Object shape returns the per-instance initializer from the outer effect. That trips `return-effect-in-gen`, so it keeps a single justified line-level suppression. That line is the only exception to "zero warnings, no overrides".
