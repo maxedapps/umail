@@ -124,6 +124,7 @@ export const styles = String.raw`
     letter-spacing: -0.015em;
     line-height: 1.2;
     text-wrap: balance;
+    overflow-wrap: anywhere;
   }
 
   h1 {
