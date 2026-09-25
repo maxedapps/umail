@@ -1,10 +1,12 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import * as Effect from "effect/Effect";
 
 import type { World } from "./world.ts";
 
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 
-export async function connectedMcp(world: World, token: string): Promise<Client> {
+// A connected MCP client, closed when the test's scope ends.
+export const connectedMcp = Effect.fn("connectedMcp")(function* (world: World, token: string) {
   const client = new Client(
     { name: "umail-http-test", version: "0.0.0" },
     {
@@ -16,6 +18,9 @@ export async function connectedMcp(world: World, token: string): Promise<Client>
     fetch: (url, init) => world.fetch(String(url), init),
     requestInit: { headers: { authorization: `Bearer ${token}` } },
   });
-  await client.connect(transport);
+  yield* Effect.acquireRelease(
+    Effect.promise(() => client.connect(transport)),
+    () => Effect.promise(() => client.close()),
+  );
   return client;
-}
+});

@@ -272,7 +272,13 @@ Behaviour changes are limited to those the ADR lists:
 
 **Verify:** all four suites pass (`vitest run`, `pnpm test:worker`, the server `test:worker` and `test:browser`), and `pnpm lint` reports 0.
 
-**Done:** no
+**Done:** yes. The spike (a worker spec on `it.effect` in workerd) passed. The overrides block is gone, and `pnpm lint` reports 0 warnings and 0 errors. The shared test helpers (`world.ts`, `oauth-flow.ts`, `mcp-drivers.ts`, the account harness) have Effect APIs. `world.ts` builds its router on the world's `TestClock`, because the router keeps the services it was built with. Six parallel conversions followed, one per test group, each keeping every assertion. Details:
+
+- Process tests spawn the CLI with `ChildProcess` and serve the fake OAuth endpoints with `NodeHttpServer.layerTest`.
+- Real-time suites run with `excludeTestServices`.
+- The browser config pre-bundles `@effect/vitest`, which a cold Vite cache otherwise reloads mid-run.
+- `Schema.UnknownFromJsonString`, which the lint messages suggest, does not exist in rc.112, so tests use `Schema.fromJsonString(Schema.Unknown)`.
+- The thread-paging spec still times out when all 15 server worker files run in parallel (it takes 231 ms alone). That is the load-sensitive flake the owner kept out of scope, and it passes on rerun.
 
 ### 10. Dead code and exports sweep, final check
 

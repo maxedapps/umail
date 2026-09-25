@@ -21,35 +21,36 @@ export class MemoryD1 {
     });
   }
 
-  async all(query: string, ...params: ReadonlyArray<string | number | null>): Promise<QueryRow[]> {
-    const result = await this.prepare(query)
+  all(query: string, ...params: ReadonlyArray<string | number | null>): Promise<QueryRow[]> {
+    return this.prepare(query)
       .bind(...params)
-      .all();
-    return result.results;
+      .all()
+      .then((result) => result.results);
   }
 
   run(query: string, ...params: ReadonlyArray<string | number | null>): void {
     this.#sqlite.prepare(query).run(...params.map(toSqlValue));
   }
 
-  async batch(statements: MemoryStatement[]): Promise<MemoryD1Result[]> {
-    this.#sqlite.exec("BEGIN");
-    try {
-      const results: MemoryD1Result[] = [];
-      for (const statement of statements) {
-        results.push(await statement.all());
+  batch(statements: MemoryStatement[]): Promise<MemoryD1Result[]> {
+    return Promise.try(() => {
+      this.#sqlite.exec("BEGIN");
+      try {
+        const results = statements.map((statement) => statement.allSync());
+        this.#sqlite.exec("COMMIT");
+        return results;
+      } catch (error) {
+        this.#sqlite.exec("ROLLBACK");
+        throw error;
       }
-      this.#sqlite.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.#sqlite.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
-  async exec(query: string): Promise<{ count: number; duration: number }> {
-    this.#sqlite.exec(query);
-    return { count: 0, duration: 0 };
+  exec(query: string): Promise<{ count: number; duration: number }> {
+    return Promise.try(() => {
+      this.#sqlite.exec(query);
+      return { count: 0, duration: 0 };
+    });
   }
 
   withSession(): MemoryD1 {
@@ -60,8 +61,8 @@ export class MemoryD1 {
     return null;
   }
 
-  async dump(): Promise<ArrayBuffer> {
-    return new ArrayBuffer(0);
+  dump(): Promise<ArrayBuffer> {
+    return Promise.resolve(new ArrayBuffer(0));
   }
 }
 
@@ -83,17 +84,22 @@ export class MemoryStatement {
     this.recordWrite = recordWrite;
   }
 
-  bind(...values: ReadonlyArray<string | number | null | unknown>): MemoryStatement {
+  bind(...values: ReadonlyArray<unknown>): MemoryStatement {
     return new MemoryStatement(this.sqlite, this.query, values.map(toSqlValue), this.recordWrite);
   }
 
-  async first(): Promise<QueryRow | null> {
-    const row = this.sqlite.prepare(this.query).get(...this.params);
-    if (row === undefined) return null;
-    return toJsRow(row);
+  first(): Promise<QueryRow | null> {
+    return Promise.try(() => {
+      const row = this.sqlite.prepare(this.query).get(...this.params);
+      return row === undefined ? null : toJsRow(row);
+    });
   }
 
-  async all(): Promise<MemoryD1Result> {
+  all(): Promise<MemoryD1Result> {
+    return Promise.try(() => this.allSync());
+  }
+
+  allSync(): MemoryD1Result {
     if (isSelect(this.query)) {
       const results = this.sqlite
         .prepare(this.query)
@@ -113,33 +119,35 @@ export class MemoryStatement {
     return { success: true, meta: metaFromRun(info), results: [] };
   }
 
-  async run(): Promise<MemoryD1Result> {
-    this.recordWrite();
-    const info = this.sqlite.prepare(this.query).run(...this.params);
-    return { success: true, meta: metaFromRun(info), results: [] };
+  run(): Promise<MemoryD1Result> {
+    return Promise.try(() => {
+      this.recordWrite();
+      const info = this.sqlite.prepare(this.query).run(...this.params);
+      return { success: true, meta: metaFromRun(info), results: [] };
+    });
   }
 
-  async raw(options: {
-    columnNames: true;
-  }): Promise<[string[], ...Array<Array<string | number | null>>]>;
-  async raw(options?: { columnNames?: false }): Promise<Array<Array<string | number | null>>>;
-  async raw(options?: {
+  raw(options: { columnNames: true }): Promise<[string[], ...Array<Array<string | number | null>>]>;
+  raw(options?: { columnNames?: false }): Promise<Array<Array<string | number | null>>>;
+  raw(options?: {
     columnNames?: boolean;
   }): Promise<
     [string[], ...Array<Array<string | number | null>>] | Array<Array<string | number | null>>
   > {
-    const statement = this.sqlite.prepare(this.query);
-    if (!isSelect(this.query)) {
-      statement.run(...this.params);
-      return [];
-    }
-    const rows = statement.all(...this.params);
-    const names = statement.columns().map((column) => column.name);
-    const values = rows.map((row) => names.map((name) => toJsValue(row[name] ?? null)));
-    if (options?.columnNames === true) {
-      return [names, ...values];
-    }
-    return values;
+    return Promise.try(() => {
+      const statement = this.sqlite.prepare(this.query);
+      if (!isSelect(this.query)) {
+        statement.run(...this.params);
+        return [];
+      }
+      const rows = statement.all(...this.params);
+      const names = statement.columns().map((column) => column.name);
+      const values = rows.map((row) => names.map((name) => toJsValue(row[name] ?? null)));
+      if (options?.columnNames === true) {
+        return [names, ...values];
+      }
+      return values;
+    });
   }
 }
 

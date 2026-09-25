@@ -1,6 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { describe, expect, it } from "vitest";
 
 import { ExternalMailAddress, requireApprovalSendMode } from "@umail/api-contract";
 
@@ -37,53 +38,54 @@ function directives(csp: string) {
 }
 
 describe("human page rendering", () => {
-  it.each([200, 404, 410] as const)(
+  it.effect.each([200, 404, 410] as const)(
     "renders a private semantic HTML response with status %s",
-    async (status) => {
-      const page = notice(status);
-      const response = HttpServerResponse.toWeb(humanPageHttpResponse(page));
-      const html = await response.text();
+    (status) =>
+      Effect.gen(function* () {
+        const page = notice(status);
+        const response = HttpServerResponse.toWeb(humanPageHttpResponse(page));
+        const html = yield* Effect.promise(() => response.text());
 
-      expect(response.status).toBe(status);
-      expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(response.headers.get("x-frame-options")).toBe("DENY");
-      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
-      expect(response.headers.get("permissions-policy")).toContain("camera=()");
-      expect(html).toContain('<html lang="en">');
-      expect(html).toContain('<meta charset="utf-8">');
-      expect(html).toContain('name="viewport"');
-      expect(html).toContain('name="robots" content="noindex,nofollow,noarchive"');
-      expect(html).toContain('<main class="page-shell">');
-      expect(html).toContain('class="wordmark"');
-      expect(html).toContain('aria-label="AgentMail"');
-      expect(html).toContain(">AM</span>");
-      expect(html).toContain("AgentMail · API / CLI / MCP first");
-      expect(html).not.toContain("Umail");
-      expect(html.match(/<style\s/gu) ?? []).toHaveLength(1);
-      expect(html).toContain(`style nonce="${page.nonce}"`);
-      expect(html).toContain(`Ledger &lt;${status}&gt; &amp; private`);
-      expect(html).toContain(`Status ${status} &lt;script&gt;`);
-      expect(html).toContain(
-        "Nothing here can become &lt;img src=x onerror=&quot;alert(1)&quot;&gt; markup.",
-      );
-      expect(html).not.toContain('<img src=x onerror="alert(1)">');
-      expect(html).not.toMatch(/https?:\/\//u);
-      expect(html).not.toContain("@font-face");
+        expect(response.status).toBe(status);
+        expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("x-frame-options")).toBe("DENY");
+        expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+        expect(response.headers.get("permissions-policy")).toContain("camera=()");
+        expect(html).toContain('<html lang="en">');
+        expect(html).toContain('<meta charset="utf-8">');
+        expect(html).toContain('name="viewport"');
+        expect(html).toContain('name="robots" content="noindex,nofollow,noarchive"');
+        expect(html).toContain('<main class="page-shell">');
+        expect(html).toContain('class="wordmark"');
+        expect(html).toContain('aria-label="AgentMail"');
+        expect(html).toContain(">AM</span>");
+        expect(html).toContain("AgentMail · API / CLI / MCP first");
+        expect(html).not.toContain("Umail");
+        expect(html.match(/<style\s/gu) ?? []).toHaveLength(1);
+        expect(html).toContain(`style nonce="${page.nonce}"`);
+        expect(html).toContain(`Ledger &lt;${status}&gt; &amp; private`);
+        expect(html).toContain(`Status ${status} &lt;script&gt;`);
+        expect(html).toContain(
+          "Nothing here can become &lt;img src=x onerror=&quot;alert(1)&quot;&gt; markup.",
+        );
+        expect(html).not.toContain('<img src=x onerror="alert(1)">');
+        expect(html).not.toMatch(/https?:\/\//u);
+        expect(html).not.toContain("@font-face");
 
-      const csp = directives(response.headers.get("content-security-policy") ?? "");
-      expect(csp.get("default-src")).toBe("'none'");
-      expect(csp.get("base-uri")).toBe("'none'");
-      expect(csp.get("frame-ancestors")).toBe("'none'");
-      expect(csp.get("script-src")).toBe("'none'");
-      expect(csp.get("connect-src")).toBe("'none'");
-      expect(csp.get("form-action")).toBe("'none'");
-      expect(csp.get("frame-src")).toBe("'none'");
-      expect(csp.get("style-src")).toBe(`'nonce-${page.nonce}'`);
-      expect(csp.get("style-src-attr")).toBe("'none'");
-    },
+        const csp = directives(response.headers.get("content-security-policy") ?? "");
+        expect(csp.get("default-src")).toBe("'none'");
+        expect(csp.get("base-uri")).toBe("'none'");
+        expect(csp.get("frame-ancestors")).toBe("'none'");
+        expect(csp.get("script-src")).toBe("'none'");
+        expect(csp.get("connect-src")).toBe("'none'");
+        expect(csp.get("form-action")).toBe("'none'");
+        expect(csp.get("frame-src")).toBe("'none'");
+        expect(csp.get("style-src")).toBe(`'nonce-${page.nonce}'`);
+        expect(csp.get("style-src-attr")).toBe("'none'");
+      }),
   );
 
   it("uses the same body and policy headers for typed HttpApi responses", () => {

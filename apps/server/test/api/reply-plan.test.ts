@@ -5,7 +5,7 @@ import {
   parseMailboxAddress,
   type MailboxAddress,
 } from "@umail/api-contract";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { deriveReplyRecipients } from "../../src/api/reply-plan.ts";
 

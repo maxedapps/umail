@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -322,11 +323,13 @@ export class AccountStoreTestHost extends DurableObject {
   // Specs install fake ports with `runInDurableObject` before running the alarm.
   dueWorkPorts: DueWorkPorts<never> | undefined;
 
-  override async alarm() {
+  override alarm() {
     this.#ensureReady();
-    if (this.dueWorkPorts === undefined) throw new Error("dueWorkPorts not installed");
-    await Effect.runPromise(
-      runDueWork(this.ctx.storage, this.dueWorkPorts, Date.now()).pipe(
+    const ports = this.dueWorkPorts;
+    if (ports === undefined) throw new Error("dueWorkPorts not installed");
+    return Effect.runPromise(
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) => runDueWork(this.ctx.storage, ports, now)),
         Effect.provide(Layer.merge(WebCrypto, RuntimeContext.phantom)),
       ),
     );

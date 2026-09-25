@@ -8,6 +8,8 @@ import {
 
 export default defineConfig({
   plugins: [humanPageBrowserFixture()],
+  // Pre-bundled so a cold cache does not reload the page while the specs import it.
+  optimizeDeps: { include: ["@effect/vitest"] },
   test: {
     include: ["test/api/human-pages.browser.spec.ts", "test/mail/html-semantics.browser.spec.ts"],
     fileParallelism: false,

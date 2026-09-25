@@ -1,4 +1,3 @@
-import type * as Crypto from "effect/Crypto";
 import type { RpcAsync } from "alchemy/Cloudflare/Bridge";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
 import {
@@ -12,12 +11,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
 import type { InboundMessage } from "../../src/mail/inbound.ts";
-import { WebCrypto } from "../../src/crypto.ts";
-
-// Runs an Effect that needs Crypto, as the Worker would, for Promise-based specs.
-export function runWithCrypto<A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Promise<A> {
-  return Effect.runPromise(effect.pipe(Effect.provide(WebCrypto)));
-}
 
 export type MailHtmlSanitizeCall = {
   readonly html: string;
@@ -28,7 +21,6 @@ export class FakeMailHtmlPolicy implements MailHtmlPolicy {
   readonly calls: MailHtmlSanitizeCall[] = [];
   private output: StoredMailHtml | null = null;
   private failureReason: MailHtmlPolicyError["reason"] | null = null;
-  private nextPause: MailHtmlPolicyPauseState | null = null;
 
   setOutput(body: string, hasRemoteImages = false): void {
     this.output = { body, hasRemoteImages };
@@ -42,24 +34,11 @@ export class FakeMailHtmlPolicy implements MailHtmlPolicy {
     this.failureReason = null;
   }
 
-  pauseNext(): MailHtmlPolicyPause {
-    const started = Promise.withResolvers<void>();
-    const released = Promise.withResolvers<void>();
-    this.nextPause = { started: started.resolve, released: released.promise };
-    return { started: started.promise, release: released.resolve };
-  }
-
   sanitizeForStorage(
     html: string,
     sanitization: MailHtmlSanitization,
   ): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
     this.calls.push({ html, sanitization });
-    const pause = this.nextPause;
-    if (pause !== null) {
-      this.nextPause = null;
-      pause.started();
-      return Effect.promise(() => pause.released).pipe(Effect.flatMap(() => this.result(html)));
-    }
     return this.result(html);
   }
 
@@ -76,16 +55,6 @@ export class FakeMailHtmlPolicy implements MailHtmlPolicy {
     return Effect.succeed(this.output ?? { body: html, hasRemoteImages: false });
   }
 }
-
-export type MailHtmlPolicyPause = {
-  readonly started: Promise<void>;
-  readonly release: () => void;
-};
-
-type MailHtmlPolicyPauseState = {
-  readonly started: () => void;
-  readonly released: Promise<void>;
-};
 
 // The Promise-based R2 bucket of the test runtime, in the shape of alchemy's Effect bucket client.
 export type PromiseBucket = {

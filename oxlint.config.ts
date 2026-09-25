@@ -37,23 +37,4 @@ export default defineConfig({
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "off",
   },
-  overrides: [
-    {
-      files: [
-        "apps/server/src/mail/inbound.ts",
-        "apps/server/src/mail/archive.ts",
-        "apps/server/src/mail/policy.ts",
-        "apps/server/src/mail/notifications.ts",
-        "apps/server/test/mail/**",
-        "apps/server/test/api/**",
-        "apps/server/test/account/**",
-        "tests/**",
-      ],
-      rules: {
-        "effecttsgo/async-function": "off",
-        "effecttsgo/global-date": "off",
-        "effecttsgo/node-builtin-import": "off",
-      },
-    },
-  ],
 });

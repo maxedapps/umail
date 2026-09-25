@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import type { Json } from "effect/Schema";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
@@ -375,19 +376,16 @@ layer(NodeServices.layer)("POSIX OAuth credential store", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.makeDirectory(`${stateHome}/umail`, { mode: 0o700 });
-        yield* fs.writeFileString(
-          file,
-          `${JSON.stringify({
-            version: 2,
-            kind: "authorized",
-            issuer: METADATA.issuer,
-            resource: ORIGIN,
-            clientId: "umail-cli",
-            generation: 3,
-            ...validCredentials(),
-          })}\n`,
-          { mode: 0o600 },
-        );
+        const legacy = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
+          version: 2,
+          kind: "authorized",
+          issuer: METADATA.issuer,
+          resource: ORIGIN,
+          clientId: "umail-cli",
+          generation: 3,
+          ...validCredentials(),
+        });
+        yield* fs.writeFileString(file, `${legacy}\n`, { mode: 0o600 });
         const store = yield* makeCredentialStore(file);
         expect(yield* store.read).toEqual(validCredentials());
       }),

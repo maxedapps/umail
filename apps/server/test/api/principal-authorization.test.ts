@@ -1,5 +1,5 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
 
 import {
   operatorOAuthPrincipal,
@@ -50,15 +50,17 @@ describe("OAuth principal authorization", () => {
     });
   });
 
-  it("enforces live MCP mailbox, read, and send policy", async () => {
-    expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-1")).toBe(true);
-    expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-2")).toBe(false);
-    expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
-    await expect(Effect.runPromise(requireSend(MCP_PRINCIPAL))).resolves.toBeUndefined();
-    await expect(Effect.runPromise(requireRead(MCP_PRINCIPAL))).rejects.toMatchObject({
-      _tag: "Forbidden",
-    });
-  });
+  it.effect("enforces live MCP mailbox, read, and send policy", () =>
+    Effect.gen(function* () {
+      expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-1")).toBe(true);
+      expect(mailboxAllowed(MCP_PRINCIPAL, "mailbox-2")).toBe(false);
+      expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
+      expect(yield* requireSend(MCP_PRINCIPAL)).toBeUndefined();
+      expect(yield* Effect.flip(requireRead(MCP_PRINCIPAL))).toMatchObject({
+        _tag: "Forbidden",
+      });
+    }),
+  );
 });
 
 function mailAddress(raw: string): ExternalMailAddress {

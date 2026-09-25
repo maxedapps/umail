@@ -32,7 +32,7 @@ import {
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
 import { provisionAuth } from "../../src/auth/provisioning.ts";
-import { WebCrypto } from "../../src/crypto.ts";
+import { WebCrypto, webCrypto } from "../../src/crypto.ts";
 import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
 import { FaithfulMailHtmlPolicy, MemoryArchive, MemoryDestinations } from "./fakes.ts";
@@ -71,11 +71,11 @@ export type World = {
   readonly htmlPolicy: FaithfulMailHtmlPolicy;
   // Every request's Clock. It starts at WORLD_START; tests move it with `setTime`.
   readonly clock: TestClock.TestClock;
-  readonly setTime: (iso: string) => Promise<void>;
-  // Runs an API operation directly, with the world's clock and crypto.
+  readonly setTime: (iso: string) => Effect.Effect<void>;
+  // Runs an API operation directly, with the world's clock and the Worker's services.
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
-  ) => Promise<A>;
+  ) => Effect.Effect<A, E>;
   readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
   readonly auth: UmailBetterAuth;
@@ -85,10 +85,12 @@ export type World = {
   readonly operatorAccessToken: string;
   readonly operatorRefreshToken: string;
   readonly operatorClientId: string;
+  // For clients that take a fetch function, such as the MCP transport.
   readonly fetch: (input: string, init?: RequestInit) => Promise<Response>;
+  readonly request: (input: string, init?: RequestInit) => Effect.Effect<Response>;
 };
 
-export async function createWorld(
+export const createWorld = Effect.fn("createWorld")(function* (
   settings: {
     readonly rateLimit?: boolean;
     readonly operatorEmail?: ExternalMailAddress;
@@ -99,20 +101,18 @@ export async function createWorld(
     // Merged into every request fiber, e.g. a test Logger.
     readonly requestContext?: Context.Context<never>;
   } = {},
-): Promise<World> {
+) {
   const db = new MemoryD1();
   const memoryAccount = createMemoryAccount();
   const operatorEmail = settings.operatorEmail ?? OPERATOR_EMAIL;
-  const provision = await runInWorker(
-    provisionAuth(memoryQueryDatabase(db), {
-      identity: { databaseId: "test-auth" },
-      runNonce: crypto.randomUUID(),
-      operatorEmail,
-      restResource: restResourceUrl(TEST_SITE),
-      mcpResource: mcpResourceUrl(TEST_SITE),
-      password: OPERATOR_PASSWORD,
-    }),
-  );
+  const provision = yield* provisionAuth(memoryQueryDatabase(db), {
+    identity: { databaseId: "test-auth" },
+    runNonce: "test-world",
+    operatorEmail,
+    restResource: restResourceUrl(TEST_SITE),
+    mcpResource: mcpResourceUrl(TEST_SITE),
+    password: OPERATOR_PASSWORD,
+  }).pipe(Effect.provide(WorkerServices));
   const auth = asUmailBetterAuth(
     betterAuth({
       ...makeAuthOptions(TEST_SITE, provision.operatorId, {
@@ -125,35 +125,35 @@ export async function createWorld(
   const archive = new MemoryArchive();
   const destinations = new MemoryDestinations();
   const htmlPolicy = new FaithfulMailHtmlPolicy();
-  const notificationKey = crypto.getRandomValues(new Uint8Array(32));
+  const notificationKey = new Uint8Array(yield* webCrypto.randomBytes(32).pipe(Effect.orDie));
   const access = makeAccess(memoryQueryDatabase(db), provision.operatorId);
-  const runtime = await Effect.runPromise(
-    Effect.gen(function* () {
-      const deps = {
-        account: { ...memoryAccount.account, ...settings.account },
-        archive: settings.archive ?? archive,
-        destinations,
-        htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
-        mailDomain: MAIL_DOMAIN,
-        auth: { auth: Effect.succeed(auth) },
-        access,
-        applicationUrl: APPLICATION_URL,
-        operatorId: provision.operatorId,
-        notificationKey: Effect.succeed(notificationKey),
-      } satisfies ApiDeps;
-      const handler = HttpEffect.toWebHandler(
-        (yield* makeApiHttpEffect(deps)).pipe(Effect.provide(Alchemy.RuntimeContext.phantom)),
-      );
-      const clock = yield* TestClock.make();
-      yield* clock.setTime(DateTime.toEpochMillis(WORLD_START));
-      return { deps, handler, clock };
-    }).pipe(Effect.provide(Reactivity.layer), Effect.scoped),
-  );
+  const runtime = yield* Effect.gen(function* () {
+    const deps = {
+      account: { ...memoryAccount.account, ...settings.account },
+      archive: settings.archive ?? archive,
+      destinations,
+      htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
+      mailDomain: MAIL_DOMAIN,
+      auth: { auth: Effect.succeed(auth) },
+      access,
+      applicationUrl: APPLICATION_URL,
+      operatorId: provision.operatorId,
+      notificationKey: Effect.succeed(notificationKey),
+    } satisfies ApiDeps;
+    const clock = yield* TestClock.make();
+    yield* clock.setTime(DateTime.toEpochMillis(WORLD_START));
+    // The router keeps the services it was built with, so it is built on the world's clock.
+    const handler = HttpEffect.toWebHandler(
+      (yield* makeApiHttpEffect(deps).pipe(Effect.provideService(Clock.Clock, clock))).pipe(
+        Effect.provide(Alchemy.RuntimeContext.phantom),
+      ),
+    );
+    return { deps, handler, clock };
+  }).pipe(Effect.provide(Reactivity.layer), Effect.scoped);
   const clock = runtime.clock;
-  const setTime = (iso: string) =>
-    Effect.runPromise(clock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(iso))));
+  const setTime = (iso: string) => clock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(iso)));
   const run = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>) =>
-    runInWorker(effect.pipe(Effect.provideService(Clock.Clock, clock)));
+    effect.pipe(Effect.provideService(Clock.Clock, clock), Effect.provide(WorkerServices));
   const requestContext = Context.add(
     settings.requestContext ?? Context.empty(),
     Clock.Clock,
@@ -162,8 +162,10 @@ export async function createWorld(
 
   const dispatch = (request: Request) => runtime.handler(request, requestContext);
   const fetchWorld = (input: string, init?: RequestInit) => dispatch(new Request(input, init));
+  const request = (input: string, init?: RequestInit) =>
+    Effect.promise(() => fetchWorld(input, init));
 
-  const operator = await bootstrapOperator(fetchWorld, operatorEmail);
+  const operator = yield* bootstrapOperator(request, operatorEmail);
 
   return {
     db,
@@ -186,7 +188,19 @@ export async function createWorld(
     operatorRefreshToken: operator.refreshToken,
     operatorClientId: operator.clientId,
     fetch: fetchWorld,
-  };
+    request,
+  } satisfies World;
+});
+
+// A JSON request body.
+export const jsonBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+export function readJson(response: Response) {
+  return Effect.promise(() => response.json());
+}
+
+export function readText(response: Response) {
+  return Effect.promise(() => response.text());
 }
 
 export function authorized(world: World): RequestInit {
@@ -217,33 +231,30 @@ export function operatorCookieHeaders(
   return headers;
 }
 
-async function bootstrapOperator(
-  fetchWorld: (input: string, init?: RequestInit) => Promise<Response>,
+const bootstrapOperator = Effect.fn("bootstrapOperator")(function* (
+  request: (input: string, init?: RequestInit) => Effect.Effect<Response>,
   operatorEmail: ExternalMailAddress,
-): Promise<{
-  readonly sessionCookie: string;
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly clientId: string;
-}> {
-  const signIn = await fetchWorld("http://umail.test/api/auth/sign-in/email", {
+) {
+  const signIn = yield* request("http://umail.test/api/auth/sign-in/email", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+    body: jsonBody({
       email: operatorEmail,
       password: OPERATOR_PASSWORD,
     }),
   });
   if (!signIn.ok) {
-    throw new Error(`operator sign-in failed: ${signIn.status} ${await signIn.text()}`);
+    return yield* Effect.die(
+      `operator sign-in failed: ${signIn.status} ${yield* readText(signIn)}`,
+    );
   }
   const sessionCookie = responseCookie(signIn);
   if (sessionCookie === null) {
-    throw new Error("operator sign-in did not return a browser session cookie");
+    return yield* Effect.die("operator sign-in did not return a browser session cookie");
   }
 
   const cli = { client_id: "umail-cli" };
-  const device = await fetchWorld("http://umail.test/api/auth/device/code", {
+  const device = yield* request("http://umail.test/api/auth/device/code", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -253,12 +264,14 @@ async function bootstrapOperator(
     }).toString(),
   });
   if (!device.ok) {
-    throw new Error(`device authorization failed: ${device.status} ${await device.text()}`);
+    return yield* Effect.die(
+      `device authorization failed: ${device.status} ${yield* readText(device)}`,
+    );
   }
-  const codes = Schema.decodeUnknownSync(
+  const codes = yield* Schema.decodeUnknownEffect(
     Schema.Struct({ device_code: Schema.String, user_code: Schema.String }),
-  )(await device.json());
-  const approval = await fetchWorld("http://umail.test/device/approve", {
+  )(yield* readJson(device)).pipe(Effect.orDie);
+  const approval = yield* request("http://umail.test/device/approve", {
     method: "POST",
     headers: operatorCookieHeaders(sessionCookie, {
       "content-type": "application/x-www-form-urlencoded",
@@ -266,9 +279,11 @@ async function bootstrapOperator(
     body: new URLSearchParams({ userCode: codes.user_code }).toString(),
   });
   if (!approval.ok) {
-    throw new Error(`device approval failed: ${approval.status} ${await approval.text()}`);
+    return yield* Effect.die(
+      `device approval failed: ${approval.status} ${yield* readText(approval)}`,
+    );
   }
-  const token = await fetchWorld("http://umail.test/api/auth/oauth2/token", {
+  const token = yield* request("http://umail.test/api/auth/oauth2/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -279,90 +294,92 @@ async function bootstrapOperator(
     }).toString(),
   });
   if (!token.ok) {
-    throw new Error(`device token exchange failed: ${token.status} ${await token.text()}`);
+    return yield* Effect.die(
+      `device token exchange failed: ${token.status} ${yield* readText(token)}`,
+    );
   }
-  const tokens = Schema.decodeUnknownSync(
+  const tokens = yield* Schema.decodeUnknownEffect(
     Schema.Struct({ access_token: Schema.String, refresh_token: Schema.String }),
-  )(await token.json());
+  )(yield* readJson(token)).pipe(Effect.orDie);
   return {
     sessionCookie,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     clientId: cli.client_id,
   };
-}
+});
 
 // Runs the store's due-work pass, as its alarm would, through a fake provider. Returns the mail sent.
 // MCP requesters get `mcpPolicy` when given, else their consent's policy.
-export async function runDueWorkPass(
+export const runDueWorkPass = Effect.fn("runDueWorkPass")(function* (
   world: World,
   options: {
     readonly at?: string;
     readonly outcome?: CompleteAttemptOutcome;
     readonly mcpPolicy?: PrincipalPolicy;
   } = {},
-): Promise<ReadonlyArray<ProviderOutboundMail>> {
+) {
   const mails: Array<ProviderOutboundMail> = [];
   const nowMs =
     options.at === undefined
-      ? Effect.runSync(world.clock.currentTimeMillis)
+      ? yield* world.clock.currentTimeMillis
       : DateTime.toEpochMillis(DateTime.makeUnsafe(options.at));
-  await Effect.runPromise(
-    runDueWork(
-      world.accountStorage,
-      {
-        sender: {
-          send: (mail) =>
-            Effect.sync(() => {
-              mails.push(mail);
-              return (
-                options.outcome ?? {
-                  kind: "accepted",
-                  providerMessageId: `provider-${mails.length}`,
-                  rfcMessageId: null,
-                }
-              );
-            }),
-        },
-        htmlPolicy: world.htmlPolicy,
-        applicationUrl: APPLICATION_URL,
-        notification: {
-          key: Effect.succeed(world.notificationKey),
-          mailDomain: MAIL_DOMAIN,
-          approvalAdminEmail: world.operatorEmail,
-        },
-        policyFor: (requester) =>
-          requester.kind === "operator"
-            ? Effect.succeed(OPERATOR_POLICY)
-            : options.mcpPolicy === undefined
-              ? world.access.mcpPolicy(requester.clientId)
-              : Effect.succeed(options.mcpPolicy),
-        index: { send: () => Effect.void },
+  yield* runDueWork(
+    world.accountStorage,
+    {
+      sender: {
+        send: (mail) =>
+          Effect.sync(() => {
+            mails.push(mail);
+            return (
+              options.outcome ?? {
+                kind: "accepted",
+                providerMessageId: `provider-${mails.length}`,
+                rfcMessageId: null,
+              }
+            );
+          }),
       },
-      nowMs,
-    ).pipe(Effect.provide(WorkerServices)),
-  );
+      htmlPolicy: world.htmlPolicy,
+      applicationUrl: APPLICATION_URL,
+      notification: {
+        key: Effect.succeed(world.notificationKey),
+        mailDomain: MAIL_DOMAIN,
+        approvalAdminEmail: world.operatorEmail,
+      },
+      policyFor: (requester) =>
+        requester.kind === "operator"
+          ? Effect.succeed(OPERATOR_POLICY)
+          : options.mcpPolicy === undefined
+            ? world.access.mcpPolicy(requester.clientId)
+            : Effect.succeed(options.mcpPolicy),
+      index: { send: () => Effect.void },
+    },
+    nowMs,
+  ).pipe(Effect.provide(WorkerServices));
   return mails;
-}
+});
 
 export function listMcpPolicyRows(world: World) {
-  return world.db.all("SELECT consentId, policy FROM mcpPolicy ORDER BY consentId");
+  return Effect.promise(() =>
+    world.db.all("SELECT consentId, policy FROM mcpPolicy ORDER BY consentId"),
+  );
 }
 
-export async function seedMailbox(
+export const seedMailbox = Effect.fn("seedMailbox")(function* (
   world: World,
   localPart = "inbox",
   displayName = localPart === "inbox" ? "Inbox" : "Probe",
 ) {
   const now = "2026-01-01T00:00:00.000Z";
-  const address = await Effect.runPromise(
-    world.account.createAddress(localPart, MAIL_DOMAIN, displayName, now),
-  );
+  const address = yield* world.account
+    .createAddress(localPart, MAIL_DOMAIN, displayName, now)
+    .pipe(Effect.orDie);
   if (address === null) {
-    throw new Error(`Could not create mailbox ${localPart}`);
+    return yield* Effect.die(`Could not create mailbox ${localPart}`);
   }
   return address;
-}
+});
 
 type InboundMessageSeed = {
   readonly id?: string;
@@ -382,7 +399,7 @@ type InboundMessageSeed = {
   readonly forward?: Parameters<AccountStoreRpc["observeInboundForward"]>[0]["observation"];
 };
 
-export async function seedInboundMessage(
+export const seedInboundMessage = Effect.fn("seedInboundMessage")(function* (
   world: World,
   mailboxId: string,
   seed: InboundMessageSeed = {},
@@ -391,13 +408,12 @@ export async function seedInboundMessage(
   const now =
     seed.occurredAt ??
     (id === "message-text" ? "2026-01-02T00:00:00.000Z" : "2026-01-01T00:00:00.000Z");
-  const fromAddress = Schema.decodeSync(ExternalMailAddress)(seed.from ?? "sender@example.com");
-  const toAddresses = (seed.to ?? [FROM_ADDRESS]).map((address) =>
-    Schema.decodeSync(ExternalMailAddress)(address),
-  );
-  const ccAddresses = (seed.cc ?? []).map((address) =>
-    Schema.decodeSync(ExternalMailAddress)(address),
-  );
+  const decodeAddresses = Schema.decodeEffect(Schema.Array(ExternalMailAddress));
+  const fromAddress = yield* Schema.decodeEffect(ExternalMailAddress)(
+    seed.from ?? "sender@example.com",
+  ).pipe(Effect.orDie);
+  const toAddresses = yield* decodeAddresses(seed.to ?? [FROM_ADDRESS]).pipe(Effect.orDie);
+  const ccAddresses = yield* decodeAddresses(seed.cc ?? []).pipe(Effect.orDie);
   const input: Parameters<AccountStoreRpc["acceptInbound"]>[0] = {
     messageId: id,
     mailboxId,
@@ -416,30 +432,30 @@ export async function seedInboundMessage(
     to: toAddresses.map((address) => ({ address, displayName: null })),
     cc: ccAddresses.map((address) => ({ address, displayName: null })),
   };
-  await Effect.runPromise(
-    world.account.registerInboundReceipt({
+  yield* world.account
+    .registerInboundReceipt({
       receiptId: id,
       envelopeFrom: seed.envelopeFrom ?? seed.from ?? "sender@example.com",
       envelopeTo: seed.envelopeTo ?? FROM_ADDRESS,
       rawKey: `raw/${id}`,
       receivedAt: now,
-    }),
-  );
+    })
+    .pipe(Effect.orDie);
   if (seed.forward !== undefined) {
-    await Effect.runPromise(
-      world.account.observeInboundForward({ receiptId: id, observation: seed.forward }),
-    );
+    yield* world.account
+      .observeInboundForward({ receiptId: id, observation: seed.forward })
+      .pipe(Effect.orDie);
   }
-  const accepted = await Effect.runPromise(
-    world.account.acceptInbound(
+  const accepted = yield* world.account
+    .acceptInbound(
       seed.attachments === undefined ? input : { ...input, attachments: seed.attachments },
-    ),
-  );
+    )
+    .pipe(Effect.orDie);
   if (accepted === null) {
-    throw new Error(`Seeded receipt ${id} was already settled`);
+    return yield* Effect.die(`Seeded receipt ${id} was already settled`);
   }
   return accepted;
-}
+});
 
 function responseCookie(response: Response): string | null {
   const setCookie = response.headers.get("set-cookie");

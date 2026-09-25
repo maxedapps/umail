@@ -1,11 +1,7 @@
+import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  createMailHtmlPolicy,
-  type MailHtmlAttachment,
-  type StoredMailHtml,
-} from "../../src/mail/html-policy.ts";
+import { createMailHtmlPolicy, type MailHtmlAttachment } from "../../src/mail/html-policy.ts";
 
 const MESSAGE_ID = "in_browser_semantics";
 const APPLICATION_URL = new URL("https://mail.umail.test/inbox");
@@ -36,10 +32,11 @@ describe("mail HTML browser semantics", () => {
     hosts.length = 0;
   });
 
-  it("preserves quoted font families without creating forbidden CSS resources", () =>
-    sanitize(
-      `<p style='font-family: "Times New Roman", Georgia, serif; color: navy'>Quoted</p>`,
-    ).then((stored) => {
+  it.effect("preserves quoted font families without creating forbidden CSS resources", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        `<p style='font-family: "Times New Roman", Georgia, serif; color: navy'>Quoted</p>`,
+      );
       const host = mount(stored.body);
       const paragraph = host.querySelector("p");
       expect(paragraph).not.toBeNull();
@@ -50,12 +47,14 @@ describe("mail HTML browser semantics", () => {
       expect(resourceUrls()).not.toEqual(
         expect.arrayContaining([expect.stringMatching(/tracker/u)]),
       );
-    }));
+    }),
+  );
 
-  it("decodes named and numeric entity quotes into sanitizer-owned values", () =>
-    sanitize(
-      `<a title="&quot;named&quot;" href="https://example.test/?q=&quot;x&quot;">named</a><img alt="&#34;numeric&#34;" src="&#x68;ttps://tracker.umail-semantics.test/encoded">`,
-    ).then((stored) => {
+  it.effect("decodes named and numeric entity quotes into sanitizer-owned values", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        `<a title="&quot;named&quot;" href="https://example.test/?q=&quot;x&quot;">named</a><img alt="&#34;numeric&#34;" src="&#x68;ttps://tracker.umail-semantics.test/encoded">`,
+      );
       expect(stored.hasRemoteImages).toBe(true);
       const host = mount(stored.body);
       const anchor = host.querySelector("a");
@@ -69,12 +68,14 @@ describe("mail HTML browser semantics", () => {
       expect(image.getAttribute("data-umail-remote-src")).toBe(`${TRACKER}/encoded`);
       expect(image.currentSrc).toBe("");
       expectForbiddenResources(host);
-    }));
+    }),
+  );
 
-  it("drops foreign and hostile markup and unwraps unknown elements", () =>
-    sanitize(
-      `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><p>svg-secret</p></svg><math><p>math-secret</p></math><custom-element><p>custom-secret</p></custom-element><p title="ok"><b>bold<img src="javascript:alert(1)"><script>bad`,
-    ).then((stored) => {
+  it.effect("drops foreign and hostile markup and unwraps unknown elements", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><p>svg-secret</p></svg><math><p>math-secret</p></math><custom-element><p>custom-secret</p></custom-element><p title="ok"><b>bold<img src="javascript:alert(1)"><script>bad`,
+      );
       const host = mount(stored.body);
       expect(host.querySelector("svg")).toBeNull();
       expect(host.querySelector("math")).toBeNull();
@@ -87,17 +88,19 @@ describe("mail HTML browser semantics", () => {
       expect(host.querySelector('p[title="ok"]')?.getAttribute("title")).toBe("ok");
       expect(host.querySelector("img")?.getAttribute("src")).toBeNull();
       expectForbiddenResources(host);
-    }));
+    }),
+  );
 
-  it("drops ambiguous CIDs and rewrites only a unique safe image", () =>
-    sanitize(
-      '<img alt="unique" src="cid:logo@umail"><img alt="dup" src="cid:dup@umail"><img alt="missing" src="cid:missing@umail">',
-      [
-        attachment("att_logo", "logo@umail", "image/png"),
-        attachment("first", "dup@umail", "image/jpeg"),
-        attachment("second", "<Dup@UMail>", "image/png"),
-      ],
-    ).then((stored) => {
+  it.effect("drops ambiguous CIDs and rewrites only a unique safe image", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        '<img alt="unique" src="cid:logo@umail"><img alt="dup" src="cid:dup@umail"><img alt="missing" src="cid:missing@umail">',
+        [
+          attachment("att_logo", "logo@umail", "image/png"),
+          attachment("first", "dup@umail", "image/jpeg"),
+          attachment("second", "<Dup@UMail>", "image/png"),
+        ],
+      );
       const host = mount(stored.body);
       const unique = host.querySelector('img[alt="unique"]');
       const duplicate = host.querySelector('img[alt="dup"]');
@@ -106,40 +109,43 @@ describe("mail HTML browser semantics", () => {
       expect(duplicate?.getAttribute("src")).toBeNull();
       expect(missing?.getAttribute("src")).toBeNull();
       expectForbiddenResources(host);
-    }));
+    }),
+  );
 
-  it("keeps stored remote previews network-inert until activation", () =>
-    sanitize(
-      `<img alt="remote" src="${TRACKER}/pixel.png"><img alt="http" src="http://tracker.umail-semantics.test/pixel">`,
-    ).then((stored) => {
+  it.effect("keeps stored remote previews network-inert until activation", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        `<img alt="remote" src="${TRACKER}/pixel.png"><img alt="http" src="http://tracker.umail-semantics.test/pixel">`,
+      );
       expect(stored.hasRemoteImages).toBe(true);
       const preview = mount(stored.body);
       const remote = preview.querySelector('img[alt="remote"]');
       expect(remote).toBeInstanceOf(HTMLImageElement);
-      if (!(remote instanceof HTMLImageElement)) return Promise.resolve();
+      if (!(remote instanceof HTMLImageElement)) return;
       expect(remote.getAttribute("src")).toBeNull();
       expect(remote.getAttribute("data-umail-remote-src")).toBe(`${TRACKER}/pixel.png`);
       expect(remote.currentSrc).toBe("");
       expect(resourceUrls().some((url) => url.includes("tracker.umail-semantics.test"))).toBe(
         false,
       );
-      return materialize(stored.body).then((activated) => {
-        const revealed = mount(activated);
-        const revealedRemote = revealed.querySelector('img[alt="remote"]');
-        const revealedHttp = revealed.querySelector('img[alt="http"]');
-        expect(revealedRemote?.getAttribute("src")).toBe(`${TRACKER}/pixel.png`);
-        expect(revealedRemote?.getAttribute("referrerpolicy")).toBe("no-referrer");
-        expect(revealedHttp?.getAttribute("src")).toBeNull();
-        expectForbiddenResources(preview);
-        expectForbiddenResources(revealed);
-      });
-    }));
+      const activated = yield* materialize(stored.body);
+      const revealed = mount(activated);
+      const revealedRemote = revealed.querySelector('img[alt="remote"]');
+      const revealedHttp = revealed.querySelector('img[alt="http"]');
+      expect(revealedRemote?.getAttribute("src")).toBe(`${TRACKER}/pixel.png`);
+      expect(revealedRemote?.getAttribute("referrerpolicy")).toBe("no-referrer");
+      expect(revealedHttp?.getAttribute("src")).toBeNull();
+      expectForbiddenResources(preview);
+      expectForbiddenResources(revealed);
+    }),
+  );
 
-  it("renders a benign rich template without browser-created forbidden CSS or tags", () =>
-    sanitize(
-      `<table style="border-collapse: collapse; width: 100%"><tr><td style="font-family: &quot;Courier New&quot;, monospace; padding: 8px"><a href="https://example.test/a/../inbox">Open</a><img alt="cid" src="cid:logo@umail"><img alt="remote" src="${TRACKER}/pixel.png"></td></tr></table>`,
-      [attachment("att_logo", "logo@umail", "image/png")],
-    ).then((stored) => {
+  it.effect("renders a benign rich template without browser-created forbidden CSS or tags", () =>
+    Effect.gen(function* () {
+      const stored = yield* sanitize(
+        `<table style="border-collapse: collapse; width: 100%"><tr><td style="font-family: &quot;Courier New&quot;, monospace; padding: 8px"><a href="https://example.test/a/../inbox">Open</a><img alt="cid" src="cid:logo@umail"><img alt="remote" src="${TRACKER}/pixel.png"></td></tr></table>`,
+        [attachment("att_logo", "logo@umail", "image/png")],
+      );
       const host = mount(stored.body);
       const cell = host.querySelector("td");
       expect(cell).not.toBeNull();
@@ -155,22 +161,16 @@ describe("mail HTML browser semantics", () => {
       expect(resourceUrls().some((url) => url.includes("tracker.umail-semantics.test"))).toBe(
         false,
       );
-    }));
+    }),
+  );
 });
 
-function sanitize(
-  html: string,
-  attachments: ReadonlyArray<MailHtmlAttachment> = [],
-): Promise<StoredMailHtml> {
-  return Effect.runPromise(
-    createMailHtmlPolicy().sanitizeForStorage(html, { messageId: MESSAGE_ID, attachments }),
-  );
+function sanitize(html: string, attachments: ReadonlyArray<MailHtmlAttachment> = []) {
+  return createMailHtmlPolicy().sanitizeForStorage(html, { messageId: MESSAGE_ID, attachments });
 }
 
-function materialize(body: string): Promise<string> {
-  return Effect.runPromise(
-    createMailHtmlPolicy().materializeRemoteImages({ body, applicationUrl: APPLICATION_URL }),
-  );
+function materialize(body: string) {
+  return createMailHtmlPolicy().materializeRemoteImages({ body, applicationUrl: APPLICATION_URL });
 }
 
 function attachment(id: string, contentId: string, mimeType: string): MailHtmlAttachment {

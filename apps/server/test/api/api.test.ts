@@ -1,8 +1,9 @@
+import { describe, expect, it } from "@effect/vitest";
 import { RpcCallError } from "alchemy/Rpc";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import { describe, expect, it } from "vitest";
 
 import {
   AddressForwarding,
@@ -29,6 +30,8 @@ import {
   authorized,
   createWorld,
   jsonHeaders,
+  readJson,
+  readText,
   runDueWorkPass,
   seedInboundMessage,
   seedMailbox,
@@ -40,6 +43,7 @@ const REQUEST_ID = Schema.decodeSync(SubmissionRequestId)("11111111-1111-4111-81
 const REPLY_REQUEST_ID = Schema.decodeSync(SubmissionRequestId)(
   "22222222-2222-4222-8222-222222222222",
 );
+const jsonText = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const PROVIDER_RFC_ID = Schema.decodeSync(NormalizedRfcMessageId)("<provider-1@cf.example>");
 
 describe("API contract", () => {
@@ -83,995 +87,1105 @@ describe("API contract", () => {
 });
 
 describe("authoritative inbound message metadata", () => {
-  it("returns the same envelope, parsed date, and forwarding observation on every REST read", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, {
-      id: "authoritative-inbound",
-      from: "header-sender@example.com",
-      to: ["visible-recipient@example.com"],
-      envelopeFrom: "",
-      envelopeTo: FROM_ADDRESS,
-      parsedDate: "2026-08-25T10:00:00.000Z",
-      occurredAt: "2026-08-25T11:00:00.000Z",
-      forward: { kind: "failure", destination: "forward@example.net" },
-    });
-
-    const list = await Schema.decodeUnknownPromise(MailMessagePage)(
-      await (await world.fetch("http://umail.test/messages", authorized(world))).json(),
-    );
-    const message = await Schema.decodeUnknownPromise(ThreadMessage)(
-      await (
-        await world.fetch(`http://umail.test/messages/${inbound.messageId}`, authorized(world))
-      ).json(),
-    );
-    const thread = await Schema.decodeUnknownPromise(MailThreadDetail)(
-      await (
-        await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
-          authorized(world),
-        )
-      ).json(),
-    );
-
-    const summaries = [list.items[0], message, thread.messages[0]];
-    for (const summary of summaries) {
-      expect(summary?.direction).toBe("inbound");
-      if (summary?.direction === "inbound") {
-        expect(summary).toMatchObject({
+  it.effect(
+    "returns the same envelope, parsed date, and forwarding observation on every REST read",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const mailbox = yield* seedMailbox(world);
+        const inbound = yield* seedInboundMessage(world, mailbox.id, {
+          id: "authoritative-inbound",
+          from: "header-sender@example.com",
+          to: ["visible-recipient@example.com"],
           envelopeFrom: "",
           envelopeTo: FROM_ADDRESS,
           parsedDate: "2026-08-25T10:00:00.000Z",
           occurredAt: "2026-08-25T11:00:00.000Z",
-          forwardOutcome: "failure",
-          forwardDestination: "forward@example.net",
+          forward: { kind: "failure", destination: "forward@example.net" },
         });
-        expect(summary.from.map((contact) => contact.address)).toEqual([
-          "header-sender@example.com",
-        ]);
-        expect(summary.to.map((contact) => contact.address)).toEqual([
-          "visible-recipient@example.com",
-        ]);
-      }
-    }
-  });
+
+        const list = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+          yield* readJson(yield* world.request("http://umail.test/messages", authorized(world))),
+        );
+        const message = yield* Schema.decodeUnknownEffect(ThreadMessage)(
+          yield* readJson(
+            yield* world.request(
+              `http://umail.test/messages/${inbound.messageId}`,
+              authorized(world),
+            ),
+          ),
+        );
+        const thread = yield* Schema.decodeUnknownEffect(MailThreadDetail)(
+          yield* readJson(
+            yield* world.request(
+              `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
+              authorized(world),
+            ),
+          ),
+        );
+
+        const summaries = [list.items[0], message, thread.messages[0]];
+        for (const summary of summaries) {
+          expect(summary?.direction).toBe("inbound");
+          if (summary?.direction === "inbound") {
+            expect(summary).toMatchObject({
+              envelopeFrom: "",
+              envelopeTo: FROM_ADDRESS,
+              parsedDate: "2026-08-25T10:00:00.000Z",
+              occurredAt: "2026-08-25T11:00:00.000Z",
+              forwardOutcome: "failure",
+              forwardDestination: "forward@example.net",
+            });
+            expect(summary.from.map((contact) => contact.address)).toEqual([
+              "header-sender@example.com",
+            ]);
+            expect(summary.to.map((contact) => contact.address)).toEqual([
+              "visible-recipient@example.com",
+            ]);
+          }
+        }
+      }),
+  );
 });
 
 describe("root authorization boundary", () => {
-  it.each([
+  it.effect.each([
     ["absent", undefined],
     ["wrong scheme", "Basic YWJjOmRlZg=="],
     ["empty", "Bearer "],
     ["garbage", "Bearer not-a-valid-credential"],
-  ])("rejects %s credentials without exposing the access token", async (_name, authorization) => {
-    const world = await createWorld();
-    const headers = new Headers();
-    if (authorization !== undefined) headers.set("authorization", authorization);
-    const response = await world.fetch("http://umail.test/threads", { headers });
-    expect(response.status).toBe(401);
-    const body = await response.text();
-    expect(body).not.toContain(world.operatorAccessToken);
-    expect(body).not.toContain(OPERATOR_PASSWORD);
-  });
+  ] as const)(
+    "rejects %s credentials without exposing the access token",
+    ([_name, authorization]) =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const headers = new Headers();
+        if (authorization !== undefined) headers.set("authorization", authorization);
+        const response = yield* world.request("http://umail.test/threads", { headers });
+        expect(response.status).toBe(401);
+        const body = yield* readText(response);
+        expect(body).not.toContain(world.operatorAccessToken);
+        expect(body).not.toContain(OPERATOR_PASSWORD);
+      }),
+  );
 
-  it("lets the exact operator OAuth token reach every retained endpoint group", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, {
-      htmlBody: "<p>sanitized</p>",
-      attachments: [
-        {
-          id: "attachment-1",
-          position: 0,
-          filename: "attachment.bin",
-          mimeType: "application/octet-stream",
-          size: 3,
-          r2Key: "mail/attachment.bin",
-          contentId: null,
-          disposition: null,
-          isInline: false,
-        },
-      ],
-    });
-    world.archive.put("mail/attachment.bin", new Uint8Array([1, 2, 3]));
-    const responses = await Promise.all([
-      world.fetch("http://umail.test/addresses", authorized(world)),
-      world.fetch("http://umail.test/sending-identities", authorized(world)),
-      world.fetch("http://umail.test/threads", authorized(world)),
-      world.fetch("http://umail.test/messages", authorized(world)),
-      world.fetch("http://umail.test/jobs", authorized(world)),
-      world.fetch(`http://umail.test/messages/${inbound.messageId}`, authorized(world)),
-      world.fetch(
-        `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+  it.effect("lets the exact operator OAuth token reach every retained endpoint group", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const inbound = yield* seedInboundMessage(world, mailbox.id, {
+        htmlBody: "<p>sanitized</p>",
+        attachments: [
+          {
+            id: "attachment-1",
+            position: 0,
+            filename: "attachment.bin",
+            mimeType: "application/octet-stream",
+            size: 3,
+            r2Key: "mail/attachment.bin",
+            contentId: null,
+            disposition: null,
+            isInline: false,
+          },
+        ],
+      });
+      world.archive.put("mail/attachment.bin", new Uint8Array([1, 2, 3]));
+      const responses = yield* Effect.all(
+        [
+          world.request("http://umail.test/addresses", authorized(world)),
+          world.request("http://umail.test/sending-identities", authorized(world)),
+          world.request("http://umail.test/threads", authorized(world)),
+          world.request("http://umail.test/messages", authorized(world)),
+          world.request("http://umail.test/jobs", authorized(world)),
+          world.request(`http://umail.test/messages/${inbound.messageId}`, authorized(world)),
+          world.request(
+            `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+            authorized(world),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(responses.map((response) => response.status)).toEqual([
+        200, 200, 200, 200, 200, 200, 200,
+      ]);
+      expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
+    }),
+  );
+
+  it.effect(
+    "performs no account, destination, archive, or email side effect for a wrong OAuth bearer",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const mailbox = yield* seedMailbox(world);
+        const inbound = yield* seedInboundMessage(world, mailbox.id, {
+          attachments: [
+            {
+              id: "attachment-1",
+              position: 0,
+              filename: "attachment.bin",
+              mimeType: "application/octet-stream",
+              size: 3,
+              r2Key: "mail/attachment.bin",
+              contentId: null,
+              disposition: null,
+              isInline: false,
+            },
+          ],
+        });
+        const writesBefore = world.accountStorage.writeCount;
+        const wrong = unauthorized();
+        const responses = yield* Effect.all(
+          [
+            world.request("http://umail.test/addresses", {
+              ...wrong,
+              method: "POST",
+              body: yield* jsonText({ localPart: "blocked" }),
+              headers: jsonHeaders(wrong.headers),
+            }),
+            world.request(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
+              ...wrong,
+              method: "PUT",
+              body: yield* jsonText({ email: "blocked@example.com" }),
+              headers: jsonHeaders(wrong.headers),
+            }),
+            world.request(
+              `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+              wrong,
+            ),
+            world.request("http://umail.test/submissions", {
+              ...wrong,
+              method: "POST",
+              body: yield* jsonText({
+                intent: "compose",
+                requestId: REQUEST_ID,
+                fromAddressId: mailbox.id,
+                to: [{ address: "recipient@example.com", displayName: null }],
+                subject: "blocked",
+                text: "blocked",
+              }),
+              headers: jsonHeaders(wrong.headers),
+            }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401]);
+        expect(world.accountStorage.writeCount).toBe(writesBefore);
+        expect(world.destinations.ensureCalls).toEqual([]);
+        expect(world.archive.getCalls).toEqual([]);
+      }),
+  );
+});
+
+describe("root mailbox API", () => {
+  it.effect("does not retain the old prefixed or browser-only routes", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const current = yield* world.request("http://umail.test/addresses", authorized(world));
+      const old = yield* world.request("http://umail.test/api/addresses", authorized(world));
+      const html = yield* world.request(
+        "http://umail.test/messages/missing/html",
         authorized(world),
-      ),
-    ]);
-    expect(responses.map((response) => response.status)).toEqual([
-      200, 200, 200, 200, 200, 200, 200,
-    ]);
-    expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
-  });
+      );
+      expect(current.status).toBe(200);
+      expect(old.status).toBe(404);
+      expect(html.status).toBe(404);
+    }),
+  );
 
-  it("performs no account, destination, archive, or email side effect for a wrong OAuth bearer", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, {
-      attachments: [
-        {
-          id: "attachment-1",
-          position: 0,
-          filename: "attachment.bin",
-          mimeType: "application/octet-stream",
-          size: 3,
-          r2Key: "mail/attachment.bin",
-          contentId: null,
-          disposition: null,
-          isInline: false,
-        },
-      ],
-    });
-    const writesBefore = world.accountStorage.writeCount;
-    const wrong = unauthorized();
-    const responses = await Promise.all([
-      world.fetch("http://umail.test/addresses", {
-        ...wrong,
+  it.effect("returns thread summaries without bodies and message get with bodies", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const first = yield* seedInboundMessage(world, mailbox.id, {
+        id: "message-html",
+        htmlBody: '<p>safe</p><img src="/messages/message-html/attachments/attachment-1">',
+      });
+      const text = yield* seedInboundMessage(world, mailbox.id, {
+        id: "message-text",
+        htmlBody: null,
+        inReplyToHeader: "<message-html@example.com>",
+      });
+      const response = yield* world.request(
+        `http://umail.test/threads/${encodeURIComponent(first.threadId)}`,
+        authorized(world),
+      );
+      expect(response.status).toBe(200);
+      const detail = yield* Schema.decodeUnknownEffect(MailThreadDetail)(yield* readJson(response));
+      expect(detail.messages.map((message) => message.id)).toEqual([
+        first.messageId,
+        text.messageId,
+      ]);
+      expect(yield* jsonText(detail)).not.toContain("textBody");
+      expect(yield* jsonText(detail)).not.toContain("htmlBody");
+      expect(yield* jsonText(detail)).not.toContain("hasHtmlBody");
+      expect(yield* jsonText(detail)).not.toContain("sentBy");
+      expect(detail.nextCursor).toBeNull();
+
+      const htmlResponse = yield* world.request(
+        `http://umail.test/messages/${first.messageId}`,
+        authorized(world),
+      );
+      expect(htmlResponse.status).toBe(200);
+      const htmlMessage = yield* Schema.decodeUnknownEffect(ThreadMessage)(
+        yield* readJson(htmlResponse),
+      );
+      expect(htmlMessage.textBody).toBe("text");
+      expect(htmlMessage.htmlBody).toBe(
+        '<p>safe</p><img src="/messages/message-html/attachments/attachment-1">',
+      );
+
+      const textResponse = yield* world.request(
+        `http://umail.test/messages/${text.messageId}`,
+        authorized(world),
+      );
+      expect(textResponse.status).toBe(200);
+      const textMessage = yield* Schema.decodeUnknownEffect(ThreadMessage)(
+        yield* readJson(textResponse),
+      );
+      expect(textMessage.textBody).toBe("text");
+      expect(textMessage.htmlBody).toBeNull();
+    }),
+  );
+
+  it.effect("pages getThread with nextCursor when a thread has more than 50 messages", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const first = yield* seedInboundMessage(world, mailbox.id, {
+        id: "thread-page-0",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+      });
+      for (let index = 1; index < 51; index += 1) {
+        yield* seedInboundMessage(world, mailbox.id, {
+          id: `thread-page-${index}`,
+          occurredAt: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"), { seconds: index }),
+          ),
+          inReplyToHeader: "<thread-page-0@example.com>",
+        });
+      }
+      const threadUrl = `http://umail.test/threads/${encodeURIComponent(first.threadId)}`;
+      const response = yield* world.request(threadUrl, authorized(world));
+      expect(response.status).toBe(200);
+      const detail = yield* Schema.decodeUnknownEffect(MailThreadDetail)(yield* readJson(response));
+      expect(detail.threadId).toBe(first.threadId);
+      expect(detail.messages).toHaveLength(50);
+      expect(detail.messages.map((message) => message.id)).not.toContain("thread-page-50");
+      if (detail.nextCursor === null) return yield* Effect.die("expected a second thread page");
+
+      const next = yield* world.request(
+        `${threadUrl}?cursor=${encodeURIComponent(detail.nextCursor)}`,
+        authorized(world),
+      );
+      expect(next.status).toBe(200);
+      const rest = yield* Schema.decodeUnknownEffect(MailThreadDetail)(yield* readJson(next));
+      expect(rest.messages.map((message) => message.id)).toEqual(["thread-page-50"]);
+      expect(rest.nextCursor).toBeNull();
+    }),
+  );
+
+  it.effect("stores sanitized outbound HTML as a durable job without sending", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const response = yield* world.request("http://umail.test/submissions", {
         method: "POST",
-        body: JSON.stringify({ localPart: "blocked" }),
-        headers: jsonHeaders(wrong.headers),
-      }),
-      world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
-        ...wrong,
-        method: "PUT",
-        body: JSON.stringify({ email: "blocked@example.com" }),
-        headers: jsonHeaders(wrong.headers),
-      }),
-      world.fetch(
-        `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
-        wrong,
-      ),
-      world.fetch("http://umail.test/submissions", {
-        ...wrong,
-        method: "POST",
-        body: JSON.stringify({
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
           intent: "compose",
           requestId: REQUEST_ID,
           fromAddressId: mailbox.id,
           to: [{ address: "recipient@example.com", displayName: null }],
-          subject: "blocked",
-          text: "blocked",
+          subject: "Sanitized",
+          html: REMOTE_HTML_SOURCE,
         }),
-        headers: jsonHeaders(wrong.headers),
-      }),
-    ]);
-    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401]);
-    expect(world.accountStorage.writeCount).toBe(writesBefore);
-    expect(world.destinations.ensureCalls).toEqual([]);
-    expect(world.archive.getCalls).toEqual([]);
-  });
-});
-
-describe("root mailbox API", () => {
-  it("does not retain the old prefixed or browser-only routes", async () => {
-    const world = await createWorld();
-    const current = await world.fetch("http://umail.test/addresses", authorized(world));
-    const old = await world.fetch("http://umail.test/api/addresses", authorized(world));
-    const html = await world.fetch("http://umail.test/messages/missing/html", authorized(world));
-    expect(current.status).toBe(200);
-    expect(old.status).toBe(404);
-    expect(html.status).toBe(404);
-  });
-
-  it("returns thread summaries without bodies and message get with bodies", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const first = await seedInboundMessage(world, mailbox.id, {
-      id: "message-html",
-      htmlBody: '<p>safe</p><img src="/messages/message-html/attachments/attachment-1">',
-    });
-    const text = await seedInboundMessage(world, mailbox.id, {
-      id: "message-text",
-      htmlBody: null,
-      inReplyToHeader: "<message-html@example.com>",
-    });
-    const response = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(first.threadId)}`,
-      authorized(world),
-    );
-    expect(response.status).toBe(200);
-    const detail = await Schema.decodeUnknownPromise(MailThreadDetail)(await response.json());
-    expect(detail.messages.map((message) => message.id)).toEqual([first.messageId, text.messageId]);
-    expect(JSON.stringify(detail)).not.toContain("textBody");
-    expect(JSON.stringify(detail)).not.toContain("htmlBody");
-    expect(JSON.stringify(detail)).not.toContain("hasHtmlBody");
-    expect(JSON.stringify(detail)).not.toContain("sentBy");
-    expect(detail.nextCursor).toBeNull();
-
-    const htmlResponse = await world.fetch(
-      `http://umail.test/messages/${first.messageId}`,
-      authorized(world),
-    );
-    expect(htmlResponse.status).toBe(200);
-    const htmlMessage = await Schema.decodeUnknownPromise(ThreadMessage)(await htmlResponse.json());
-    expect(htmlMessage.textBody).toBe("text");
-    expect(htmlMessage.htmlBody).toBe(
-      '<p>safe</p><img src="/messages/message-html/attachments/attachment-1">',
-    );
-
-    const textResponse = await world.fetch(
-      `http://umail.test/messages/${text.messageId}`,
-      authorized(world),
-    );
-    expect(textResponse.status).toBe(200);
-    const textMessage = await Schema.decodeUnknownPromise(ThreadMessage)(await textResponse.json());
-    expect(textMessage.textBody).toBe("text");
-    expect(textMessage.htmlBody).toBeNull();
-  });
-
-  it("pages getThread with nextCursor when a thread has more than 50 messages", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const first = await seedInboundMessage(world, mailbox.id, {
-      id: "thread-page-0",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-    });
-    for (let index = 1; index < 51; index += 1) {
-      await seedInboundMessage(world, mailbox.id, {
-        id: `thread-page-${index}`,
-        occurredAt: new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 1000).toISOString(),
-        inReplyToHeader: "<thread-page-0@example.com>",
       });
-    }
-    const threadUrl = `http://umail.test/threads/${encodeURIComponent(first.threadId)}`;
-    const response = await world.fetch(threadUrl, authorized(world));
-    expect(response.status).toBe(200);
-    const detail = await Schema.decodeUnknownPromise(MailThreadDetail)(await response.json());
-    expect(detail.threadId).toBe(first.threadId);
-    expect(detail.messages).toHaveLength(50);
-    expect(detail.messages.map((message) => message.id)).not.toContain("thread-page-50");
-    if (detail.nextCursor === null) throw new Error("expected a second thread page");
 
-    const next = await world.fetch(
-      `${threadUrl}?cursor=${encodeURIComponent(detail.nextCursor)}`,
-      authorized(world),
-    );
-    expect(next.status).toBe(200);
-    const rest = await Schema.decodeUnknownPromise(MailThreadDetail)(await next.json());
-    expect(rest.messages.map((message) => message.id)).toEqual(["thread-page-50"]);
-    expect(rest.nextCursor).toBeNull();
-  });
-
-  it("stores sanitized outbound HTML as a durable job without sending", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const response = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "compose",
-        requestId: REQUEST_ID,
-        fromAddressId: mailbox.id,
-        to: [{ address: "recipient@example.com", displayName: null }],
-        subject: "Sanitized",
-        html: REMOTE_HTML_SOURCE,
-      }),
-    });
-
-    expect(response.status, await response.clone().text()).toBe(200);
-    const job = await Schema.decodeUnknownPromise(OutboundJobStatus)(await response.json());
-    expect(job.state).toBe("ready");
-    expect(job.state).not.toBe("accepted");
-    const messageResponse = await world.fetch(
-      `http://umail.test/messages/${job.messageId}`,
-      authorized(world),
-    );
-    const message = await Schema.decodeUnknownPromise(OutboundThreadMessage)(
-      await messageResponse.json(),
-    );
-    expect(message.sendState).toBe("ready");
-    expect(message.sendState).not.toBe("accepted");
-    expect(message.htmlBody).toBe(REMOTE_HTML_STORED);
-    expect(message.hasRemoteImages).toBe(true);
-    expect(JSON.stringify(message)).not.toContain("sentBy");
-  });
-
-  it("generates a request id for a submission without one and returns a durable job", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const response = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "compose",
-        fromAddressId: mailbox.id,
-        to: [{ address: "recipient@example.com", displayName: null }],
-        subject: "Compose job",
-        text: "body",
-      }),
-    });
-
-    expect(response.status, await response.clone().text()).toBe(200);
-    const job = await Schema.decodeUnknownPromise(OutboundJobStatus)(await response.json());
-    expect(job.state).toBe("ready");
-    expect(job.state).not.toBe("accepted");
-    expect(job.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
-    const stored = await Schema.decodeUnknownPromise(OutboundThreadMessage)(
-      await (
-        await world.fetch(`http://umail.test/messages/${job.messageId}`, authorized(world))
-      ).json(),
-    );
-    expect(stored.sendState).toBe("ready");
-    expect(stored.direction).toBe("outbound");
-  });
-
-  it("paginates threads without duplicates and rejects malformed cursors", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const seeded = [];
-    for (const [id, occurredAt] of [
-      ["message-old", "2026-01-01T00:00:00.000Z"],
-      ["message-a", "2026-01-02T00:00:00.000Z"],
-      ["message-b", "2026-01-02T00:00:00.001Z"],
-      ["message-new", "2026-01-03T00:00:00.000Z"],
-    ] as const) {
-      seeded.push(await seedInboundMessage(world, mailbox.id, { id, occurredAt }));
-    }
-
-    const firstResponse = await world.fetch("http://umail.test/threads?limit=2", authorized(world));
-    expect(firstResponse.status).toBe(200);
-    const first = await Schema.decodeUnknownPromise(MailThreadPage)(await firstResponse.json());
-    expect(first.items.map((item) => item.threadId)).toEqual([
-      seeded[3]?.threadId,
-      seeded[2]?.threadId,
-    ]);
-    expect(first.nextCursor).not.toBeNull();
-
-    const secondResponse = await world.fetch(
-      `http://umail.test/threads?limit=2&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
-      authorized(world),
-    );
-    expect(secondResponse.status).toBe(200);
-    const second = await Schema.decodeUnknownPromise(MailThreadPage)(await secondResponse.json());
-    expect(second.items.map((item) => item.threadId)).toEqual([
-      seeded[1]?.threadId,
-      seeded[0]?.threadId,
-    ]);
-    expect(second.nextCursor).toBeNull();
-    const allIds = [...first.items, ...second.items].map((item) => item.threadId);
-    expect(new Set(allIds).size).toBe(4);
-
-    for (const cursor of [
-      "not-base64!",
-      Buffer.from("missing separator").toString("base64url"),
-      Buffer.from("not-a-date\nthread").toString("base64url"),
-    ]) {
-      const malformed = await world.fetch(
-        `http://umail.test/threads?cursor=${encodeURIComponent(cursor)}`,
+      expect(response.status, yield* readText(response.clone())).toBe(200);
+      const job = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(yield* readJson(response));
+      expect(job.state).toBe("ready");
+      expect(job.state).not.toBe("accepted");
+      const messageResponse = yield* world.request(
+        `http://umail.test/messages/${job.messageId}`,
         authorized(world),
       );
-      expect(malformed.status).toBe(400);
-    }
-  });
+      const message = yield* Schema.decodeUnknownEffect(OutboundThreadMessage)(
+        yield* readJson(messageResponse),
+      );
+      expect(message.sendState).toBe("ready");
+      expect(message.sendState).not.toBe("accepted");
+      expect(message.htmlBody).toBe(REMOTE_HTML_STORED);
+      expect(message.hasRemoteImages).toBe(true);
+      expect(yield* jsonText(message)).not.toContain("sentBy");
+    }),
+  );
 
-  it("gets, reads, unreads, and soft-deletes an inbound thread", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id);
-    const threadPath = `/threads/${encodeURIComponent(inbound.threadId)}`;
+  it.effect("generates a request id for a submission without one and returns a durable job", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const response = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "compose",
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com", displayName: null }],
+          subject: "Compose job",
+          text: "body",
+        }),
+      });
 
-    const initial = await world.fetch(`http://umail.test${threadPath}`, authorized(world));
-    expect(initial.status).toBe(200);
+      expect(response.status, yield* readText(response.clone())).toBe(200);
+      const job = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(yield* readJson(response));
+      expect(job.state).toBe("ready");
+      expect(job.state).not.toBe("accepted");
+      expect(job.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+      const stored = yield* Schema.decodeUnknownEffect(OutboundThreadMessage)(
+        yield* readJson(
+          yield* world.request(`http://umail.test/messages/${job.messageId}`, authorized(world)),
+        ),
+      );
+      expect(stored.sendState).toBe("ready");
+      expect(stored.direction).toBe("outbound");
+    }),
+  );
 
-    const read = await world.fetch(`http://umail.test${threadPath}/read`, {
-      ...authorized(world),
-      method: "PATCH",
-    });
-    expect(read.status).toBe(200);
-    const readDetail = await Schema.decodeUnknownPromise(MailThreadDetail)(await read.json());
-    expect(readDetail.messages[0]?.direction).toBe("inbound");
-    if (readDetail.messages[0]?.direction === "inbound") {
-      expect(readDetail.messages[0].isRead).toBe(true);
-      expect(readDetail.messages[0].readAt).not.toBeNull();
-    }
+  it.effect("paginates threads without duplicates and rejects malformed cursors", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const seeded = [];
+      for (const [id, occurredAt] of [
+        ["message-old", "2026-01-01T00:00:00.000Z"],
+        ["message-a", "2026-01-02T00:00:00.000Z"],
+        ["message-b", "2026-01-02T00:00:00.001Z"],
+        ["message-new", "2026-01-03T00:00:00.000Z"],
+      ] as const) {
+        seeded.push(yield* seedInboundMessage(world, mailbox.id, { id, occurredAt }));
+      }
 
-    const unread = await world.fetch(`http://umail.test${threadPath}/unread`, {
-      ...authorized(world),
-      method: "PATCH",
-    });
-    expect(unread.status).toBe(200);
-    const unreadDetail = await Schema.decodeUnknownPromise(MailThreadDetail)(await unread.json());
-    if (unreadDetail.messages[0]?.direction === "inbound") {
-      expect(unreadDetail.messages[0].isRead).toBe(false);
-    }
+      const firstResponse = yield* world.request(
+        "http://umail.test/threads?limit=2",
+        authorized(world),
+      );
+      expect(firstResponse.status).toBe(200);
+      const first = yield* Schema.decodeUnknownEffect(MailThreadPage)(
+        yield* readJson(firstResponse),
+      );
+      expect(first.items.map((item) => item.threadId)).toEqual([
+        seeded[3]?.threadId,
+        seeded[2]?.threadId,
+      ]);
+      expect(first.nextCursor).not.toBeNull();
 
-    const removed = await world.fetch(`http://umail.test${threadPath}`, {
-      ...authorized(world),
-      method: "DELETE",
-    });
-    expect(removed.status).toBe(204);
-    expect((await world.fetch(`http://umail.test${threadPath}`, authorized(world))).status).toBe(
-      404,
-    );
-  });
+      const secondResponse = yield* world.request(
+        `http://umail.test/threads?limit=2&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
+        authorized(world),
+      );
+      expect(secondResponse.status).toBe(200);
+      const second = yield* Schema.decodeUnknownEffect(MailThreadPage)(
+        yield* readJson(secondResponse),
+      );
+      expect(second.items.map((item) => item.threadId)).toEqual([
+        seeded[1]?.threadId,
+        seeded[0]?.threadId,
+      ]);
+      expect(second.nextCursor).toBeNull();
+      const allIds = [...first.items, ...second.items].map((item) => item.threadId);
+      expect(new Set(allIds).size).toBe(4);
 
-  it("derives reply-all recipients and submits a threaded reply job", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const target = await seedInboundMessage(world, mailbox.id, {
-      id: "message-parent",
-      to: [FROM_ADDRESS, "other@example.com"],
-      cc: ["copy@example.com"],
-    });
-
-    const replyResponse = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "reply",
-        requestId: REQUEST_ID,
-        fromAddressId: mailbox.id,
-        subject: "Re: parent",
-        text: "reply body",
-        replyToMessageId: target.messageId,
-        replyMode: "reply-all",
-      }),
-    });
-    expect(replyResponse.status, await replyResponse.clone().text()).toBe(200);
-    const job = await Schema.decodeUnknownPromise(OutboundJobStatus)(await replyResponse.json());
-    expect(job.state).toBe("ready");
-    const thread = await Schema.decodeUnknownPromise(MailThreadDetail)(
-      await (
-        await world.fetch(
-          `http://umail.test/threads/${encodeURIComponent(target.threadId)}`,
+      for (const cursor of [
+        "not-base64!",
+        Buffer.from("missing separator").toString("base64url"),
+        Buffer.from("not-a-date\nthread").toString("base64url"),
+      ]) {
+        const malformed = yield* world.request(
+          `http://umail.test/threads?cursor=${encodeURIComponent(cursor)}`,
           authorized(world),
-        )
-      ).json(),
-    );
-    expect(thread.messages.map((message) => message.id)).toContain(job.messageId);
-    const reply = await Schema.decodeUnknownPromise(OutboundThreadMessage)(
-      await (
-        await world.fetch(`http://umail.test/messages/${job.messageId}`, authorized(world))
-      ).json(),
-    );
-    expect(reply.to.map((contact) => contact.address)).toEqual(["sender@example.com"]);
-    expect(reply.cc.map((contact) => contact.address)).toEqual([
-      "other@example.com",
-      "copy@example.com",
-    ]);
-  });
+        );
+        expect(malformed.status).toBe(400);
+      }
+    }),
+  );
 
-  it("threads a reply to our own accepted outbound message onto that message", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const sendResponse = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
+  it.effect("gets, reads, unreads, and soft-deletes an inbound thread", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const inbound = yield* seedInboundMessage(world, mailbox.id);
+      const threadPath = `/threads/${encodeURIComponent(inbound.threadId)}`;
+
+      const initial = yield* world.request(`http://umail.test${threadPath}`, authorized(world));
+      expect(initial.status).toBe(200);
+
+      const read = yield* world.request(`http://umail.test${threadPath}/read`, {
+        ...authorized(world),
+        method: "PATCH",
+      });
+      expect(read.status).toBe(200);
+      const readDetail = yield* Schema.decodeUnknownEffect(MailThreadDetail)(yield* readJson(read));
+      expect(readDetail.messages[0]?.direction).toBe("inbound");
+      if (readDetail.messages[0]?.direction === "inbound") {
+        expect(readDetail.messages[0].isRead).toBe(true);
+        expect(readDetail.messages[0].readAt).not.toBeNull();
+      }
+
+      const unread = yield* world.request(`http://umail.test${threadPath}/unread`, {
+        ...authorized(world),
+        method: "PATCH",
+      });
+      expect(unread.status).toBe(200);
+      const unreadDetail = yield* Schema.decodeUnknownEffect(MailThreadDetail)(
+        yield* readJson(unread),
+      );
+      if (unreadDetail.messages[0]?.direction === "inbound") {
+        expect(unreadDetail.messages[0].isRead).toBe(false);
+      }
+
+      const removed = yield* world.request(`http://umail.test${threadPath}`, {
+        ...authorized(world),
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(204);
+      expect(
+        (yield* world.request(`http://umail.test${threadPath}`, authorized(world))).status,
+      ).toBe(404);
+    }),
+  );
+
+  it.effect("derives reply-all recipients and submits a threaded reply job", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const target = yield* seedInboundMessage(world, mailbox.id, {
+        id: "message-parent",
+        to: [FROM_ADDRESS, "other@example.com"],
+        cc: ["copy@example.com"],
+      });
+
+      const replyResponse = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "reply",
+          requestId: REQUEST_ID,
+          fromAddressId: mailbox.id,
+          subject: "Re: parent",
+          text: "reply body",
+          replyToMessageId: target.messageId,
+          replyMode: "reply-all",
+        }),
+      });
+      expect(replyResponse.status, yield* readText(replyResponse.clone())).toBe(200);
+      const job = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(
+        yield* readJson(replyResponse),
+      );
+      expect(job.state).toBe("ready");
+      const thread = yield* Schema.decodeUnknownEffect(MailThreadDetail)(
+        yield* readJson(
+          yield* world.request(
+            `http://umail.test/threads/${encodeURIComponent(target.threadId)}`,
+            authorized(world),
+          ),
+        ),
+      );
+      expect(thread.messages.map((message) => message.id)).toContain(job.messageId);
+      const reply = yield* Schema.decodeUnknownEffect(OutboundThreadMessage)(
+        yield* readJson(
+          yield* world.request(`http://umail.test/messages/${job.messageId}`, authorized(world)),
+        ),
+      );
+      expect(reply.to.map((contact) => contact.address)).toEqual(["sender@example.com"]);
+      expect(reply.cc.map((contact) => contact.address)).toEqual([
+        "other@example.com",
+        "copy@example.com",
+      ]);
+    }),
+  );
+
+  it.effect("threads a reply to our own accepted outbound message onto that message", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const sendResponse = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "compose",
+          requestId: REQUEST_ID,
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com", displayName: null }],
+          subject: "Hello",
+          text: "outbound body",
+        }),
+      });
+      expect(sendResponse.status, yield* readText(sendResponse.clone())).toBe(200);
+      const sent = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(
+        yield* readJson(sendResponse),
+      );
+
+      yield* runDueWorkPass(world, {
+        outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_RFC_ID },
+      });
+      expect(yield* world.account.getOutboundJob(sent.jobId, { kind: "operator" })).toMatchObject({
+        state: "accepted",
+      });
+
+      const replyResponse = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "reply",
+          requestId: REPLY_REQUEST_ID,
+          fromAddressId: mailbox.id,
+          subject: "Re: Hello",
+          text: "reply body",
+          replyToMessageId: sent.messageId,
+          replyMode: "reply",
+        }),
+      });
+      expect(replyResponse.status, yield* readText(replyResponse.clone())).toBe(200);
+      const replyJob = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(
+        yield* readJson(replyResponse),
+      );
+      const reply = yield* Schema.decodeUnknownEffect(OutboundThreadMessage)(
+        yield* readJson(
+          yield* world.request(
+            `http://umail.test/messages/${replyJob.messageId}`,
+            authorized(world),
+          ),
+        ),
+      );
+      expect(reply.inReplyToRfcMessageId).toBe(PROVIDER_RFC_ID);
+      expect(reply.parentMessageId).toBe(sent.messageId);
+    }),
+  );
+
+  it.effect("returns reply errors without creating a job", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const missing = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "reply",
+          requestId: REQUEST_ID,
+          fromAddressId: mailbox.id,
+          subject: "Re: missing",
+          text: "reply body",
+          replyToMessageId: "missing",
+          replyMode: "reply",
+        }),
+      });
+      expect(missing.status).toBe(404);
+      const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
+      expect(jobs.items).toEqual([]);
+    }),
+  );
+
+  it.effect("forwards an address to any email and reports Cloudflare's live verification", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const forward = Effect.fn("forward")(function* (email: string) {
+        return yield* world.request(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
+          method: "PUT",
+          headers: jsonHeaders(authorized(world).headers),
+          body: yield* jsonText({ email }),
+        });
+      });
+
+      const pending = yield* forward("owner@example.com");
+      expect(pending.status, yield* readText(pending.clone())).toBe(200);
+      expect(
+        yield* Schema.decodeUnknownEffect(AddressForwarding)(yield* readJson(pending)),
+      ).toMatchObject({
+        address: { id: mailbox.id, forwardTo: "owner@example.com" },
+        verified: false,
+      });
+      world.destinations.verify("owner@example.com");
+      const verified = yield* Schema.decodeUnknownEffect(AddressForwarding)(
+        yield* readJson(yield* forward("owner@example.com")),
+      );
+      expect(verified.verified).toBe(true);
+      expect(world.destinations.ensureCalls).toEqual(["owner@example.com", "owner@example.com"]);
+
+      world.destinations.failNext("This email address is not allowed.");
+      const refused = yield* forward("blocked@example.com");
+      expect(refused.status).toBe(400);
+      expect(yield* readJson(refused)).toMatchObject({
+        message: "This email address is not allowed.",
+      });
+      expect((yield* world.account.getAddress(mailbox.id))?.forwardTo).toBe("owner@example.com");
+    }),
+  );
+
+  it.effect("answers an unknown address and clears forwarding without calling Cloudflare", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      yield* world.account.setAddressForwarding(
+        mailbox.id,
+        "owner@example.com",
+        "2026-01-01T00:00:00.000Z",
+      );
+
+      const unknown = yield* world.request("http://umail.test/addresses/missing/forwarding", {
+        method: "PUT",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({ email: "owner@example.com" }),
+      });
+      expect(unknown.status).toBe(404);
+      const removed = yield* world.request(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
+        method: "DELETE",
+        ...authorized(world),
+      });
+      expect(removed.status).toBe(200);
+      expect(yield* readJson(removed)).toMatchObject({ id: mailbox.id, forwardTo: null });
+      expect(world.destinations.ensureCalls).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "serves exact attachment bytes and does not map archive transport failure to NotFound",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const mailbox = yield* seedMailbox(world);
+        const inbound = yield* seedInboundMessage(world, mailbox.id, {
+          attachments: [
+            {
+              id: "attachment-1",
+              position: 0,
+              filename: "attachment.bin",
+              mimeType: "application/octet-stream",
+              size: 3,
+              r2Key: "mail/attachment.bin",
+              contentId: null,
+              disposition: null,
+              isInline: false,
+            },
+          ],
+        });
+
+        const absentRow = yield* world.request(
+          `http://umail.test/messages/${inbound.messageId}/attachments/missing`,
+          authorized(world),
+        );
+        expect(absentRow.status).toBe(404);
+        expect(world.archive.getCalls).toEqual([]);
+
+        const absentObject = yield* world.request(
+          `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+          authorized(world),
+        );
+        expect(absentObject.status).toBe(404);
+        expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
+
+        world.archive.failNextTransport();
+        const transport = yield* world.request(
+          `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+          authorized(world),
+        );
+        expect(transport.status).toBe(502);
+        expect(transport.status).not.toBe(404);
+
+        world.archive.put("mail/attachment.bin", new Uint8Array([0, 1, 2, 255]));
+        const found = yield* world.request(
+          `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
+          authorized(world),
+        );
+        expect(found.status).toBe(200);
+        expect(new Uint8Array(yield* Effect.promise(() => found.arrayBuffer()))).toEqual(
+          new Uint8Array([0, 1, 2, 255]),
+        );
+        expect(found.headers.get("content-type")).toBe("application/octet-stream");
+        expect(found.headers.get("content-disposition")).toContain("attachment.bin");
+        expect(found.headers.get("x-content-type-options")).toBe("nosniff");
+      }),
+  );
+
+  it.effect("serves exact archived source bytes as a download and maps archive faults to 502", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const inbound = yield* seedInboundMessage(world, mailbox.id, { id: "source-in" });
+      const source = new Uint8Array([
+        ...new TextEncoder().encode("Subject: raw\r\n\r\n"),
+        0x00,
+        0xff,
+        0xfe,
+        0x80,
+        0x0a,
+      ]);
+      const sourcePath = `http://umail.test/messages/${inbound.messageId}/source`;
+
+      const absentObject = yield* world.request(sourcePath, authorized(world));
+      expect(absentObject.status).toBe(404);
+      expect(world.archive.getCalls).toEqual(["raw/source-in"]);
+
+      world.archive.put("raw/source-in", source);
+      world.archive.failNextTransport();
+      const transport = yield* world.request(sourcePath, authorized(world));
+      expect(transport.status).toBe(502);
+      expect(transport.status).not.toBe(404);
+
+      const found = yield* world.request(sourcePath, authorized(world));
+      expect(found.status).toBe(200);
+      expect(new Uint8Array(yield* Effect.promise(() => found.arrayBuffer()))).toEqual(source);
+      expect(found.headers.get("content-type")).toBe("message/rfc822");
+      expect(found.headers.get("content-disposition")).toBe(
+        `attachment; filename="source-in.eml"; filename*=UTF-8''source-in.eml`,
+      );
+      expect(found.headers.get("x-content-type-options")).toBe("nosniff");
+    }),
+  );
+
+  it.effect("answers 409 for outbound and 404 for unknown or soft-deleted message source", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const inbound = yield* seedInboundMessage(world, mailbox.id, { id: "deleted-in" });
+      world.archive.put("raw/deleted-in", new Uint8Array([1, 2, 3]));
+      const sendResponse = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "compose",
+          requestId: REQUEST_ID,
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com", displayName: null }],
+          subject: "Outbound",
+          text: "outbound body",
+        }),
+      });
+      expect(sendResponse.status).toBe(200);
+      const job = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(
+        yield* readJson(sendResponse),
+      );
+
+      const outbound = yield* world.request(
+        `http://umail.test/messages/${job.messageId}/source`,
+        authorized(world),
+      );
+      expect(outbound.status).toBe(409);
+      expect(yield* readJson(outbound)).toEqual({ _tag: "OutboundMessageHasNoSource" });
+
+      const unknown = yield* world.request(
+        "http://umail.test/messages/unknown/source",
+        authorized(world),
+      );
+      expect(unknown.status).toBe(404);
+
+      const removed = yield* world.request(
+        `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
+        { ...authorized(world), method: "DELETE" },
+      );
+      expect(removed.status).toBe(204);
+      const deleted = yield* world.request(
+        `http://umail.test/messages/${inbound.messageId}/source`,
+        authorized(world),
+      );
+      expect(deleted.status).toBe(404);
+      expect(world.archive.getCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("reads no archived source before the principal is authorized and in scope", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      const probe = yield* seedMailbox(world, "probe");
+      const inbound = yield* seedInboundMessage(world, inbox.id, { id: "scoped-in" });
+      world.archive.put("raw/scoped-in", new Uint8Array([1, 2, 3]));
+
+      const wrongBearer = yield* world.request(
+        `http://umail.test/messages/${inbound.messageId}/source`,
+        unauthorized(),
+      );
+      expect(wrongBearer.status).toBe(401);
+
+      const outOfScope = mcpPrincipal(world, "out-of-scope-reader", {
+        mailboxIds: [probe.id],
+        canRead: true,
+      });
+      expect(
+        yield* Effect.flip(world.run(readMessageSource(world.deps, outOfScope, inbound.messageId))),
+      ).toMatchObject({ _tag: "NotFound" });
+
+      const cannotRead = mcpPrincipal(world, "no-read-client", {
+        mailboxIds: "all",
+        canRead: false,
+      });
+      expect(
+        yield* Effect.flip(world.run(readMessageSource(world.deps, cannotRead, inbound.messageId))),
+      ).toMatchObject({ _tag: "Forbidden" });
+
+      expect(world.archive.getCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("lists last-24h inbound, address, unread, and pages by cursor", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      const probe = yield* seedMailbox(world, "probe");
+      yield* seedInboundMessage(world, inbox.id, {
+        id: "old-in",
+        occurredAt: "2026-08-24T10:00:00.000Z",
+      });
+      const recent = yield* seedInboundMessage(world, inbox.id, {
+        id: "recent-in",
+        occurredAt: "2026-08-25T18:00:00.000Z",
+      });
+      yield* seedInboundMessage(world, probe.id, {
+        id: "probe-in",
+        occurredAt: "2026-08-25T19:00:00.000Z",
+      });
+      const sendResponse = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({
+          intent: "compose",
+          requestId: REQUEST_ID,
+          fromAddressId: inbox.id,
+          to: [{ address: "recipient@example.com", displayName: null }],
+          subject: "Outbound",
+          text: "outbound body",
+        }),
+      });
+      expect(sendResponse.status, yield* readText(sendResponse.clone())).toBe(200);
+
+      const since = "2026-08-25T00:00:00.000Z";
+      const inboundResponse = yield* world.request(
+        `http://umail.test/messages?direction=inbound&since=${encodeURIComponent(since)}`,
+        authorized(world),
+      );
+      expect(inboundResponse.status).toBe(200);
+      const inbound = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+        yield* readJson(inboundResponse),
+      );
+      expect(inbound.items.map((item) => item.id)).toEqual(["probe-in", recent.messageId]);
+      expect(yield* jsonText(inbound)).not.toContain("textBody");
+      expect(yield* jsonText(inbound)).not.toContain("htmlBody");
+      expect(yield* jsonText(inbound)).not.toContain("outbound body");
+
+      const addressResponse = yield* world.request(
+        `http://umail.test/messages?addressId=${encodeURIComponent(inbox.id)}`,
+        authorized(world),
+      );
+      expect(addressResponse.status).toBe(200);
+      const byAddress = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+        yield* readJson(addressResponse),
+      );
+      expect(byAddress.items.every((item) => item.addressId === inbox.id)).toBe(true);
+      expect(byAddress.items.map((item) => item.id)).not.toContain("probe-in");
+
+      yield* world.account.markThreadRead(recent.threadId, true, "all", "2026-08-25T18:01:00.000Z");
+      const unreadResponse = yield* world.request(
+        "http://umail.test/messages?unread=true",
+        authorized(world),
+      );
+      expect(unreadResponse.status).toBe(200);
+      const unread = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+        yield* readJson(unreadResponse),
+      );
+      expect(unread.items.map((item) => item.id)).toEqual(["probe-in", "old-in"]);
+      expect(unread.items.every((item) => item.direction === "inbound")).toBe(true);
+
+      const firstResponse = yield* world.request(
+        "http://umail.test/messages?limit=2",
+        authorized(world),
+      );
+      expect(firstResponse.status).toBe(200);
+      const first = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+        yield* readJson(firstResponse),
+      );
+      expect(first.items).toHaveLength(2);
+      expect(first.nextCursor).not.toBeNull();
+      const secondResponse = yield* world.request(
+        `http://umail.test/messages?limit=2&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
+        authorized(world),
+      );
+      expect(secondResponse.status).toBe(200);
+      const second = yield* Schema.decodeUnknownEffect(MailMessagePage)(
+        yield* readJson(secondResponse),
+      );
+      const pagedIds = [...first.items, ...second.items].map((item) => item.id);
+      expect(new Set(pagedIds).size).toBe(pagedIds.length);
+      expect(pagedIds).toEqual(expect.arrayContaining(["probe-in", recent.messageId, "old-in"]));
+
+      for (const cursor of [
+        "not-base64!",
+        Buffer.from("missing separator").toString("base64url"),
+        Buffer.from("not-a-date\nmessage").toString("base64url"),
+      ]) {
+        const malformed = yield* world.request(
+          `http://umail.test/messages?cursor=${encodeURIComponent(cursor)}`,
+          authorized(world),
+        );
+        expect(malformed.status).toBe(400);
+      }
+    }),
+  );
+
+  it.effect("replays an identical submission key and conflicts on a changed payload", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const body = {
         intent: "compose",
         requestId: REQUEST_ID,
         fromAddressId: mailbox.id,
         to: [{ address: "recipient@example.com", displayName: null }],
         subject: "Hello",
-        text: "outbound body",
-      }),
-    });
-    expect(sendResponse.status, await sendResponse.clone().text()).toBe(200);
-    const sent = await Schema.decodeUnknownPromise(OutboundJobStatus)(await sendResponse.json());
-
-    await runDueWorkPass(world, {
-      outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_RFC_ID },
-    });
-    expect(
-      await Effect.runPromise(world.account.getOutboundJob(sent.jobId, { kind: "operator" })),
-    ).toMatchObject({ state: "accepted" });
-
-    const replyResponse = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "reply",
-        requestId: REPLY_REQUEST_ID,
-        fromAddressId: mailbox.id,
-        subject: "Re: Hello",
-        text: "reply body",
-        replyToMessageId: sent.messageId,
-        replyMode: "reply",
-      }),
-    });
-    expect(replyResponse.status, await replyResponse.clone().text()).toBe(200);
-    const replyJob = await Schema.decodeUnknownPromise(OutboundJobStatus)(
-      await replyResponse.json(),
-    );
-    const reply = await Schema.decodeUnknownPromise(OutboundThreadMessage)(
-      await (
-        await world.fetch(`http://umail.test/messages/${replyJob.messageId}`, authorized(world))
-      ).json(),
-    );
-    expect(reply.inReplyToRfcMessageId).toBe(PROVIDER_RFC_ID);
-    expect(reply.parentMessageId).toBe(sent.messageId);
-  });
-
-  it("returns reply errors without creating a job", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const missing = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "reply",
-        requestId: REQUEST_ID,
-        fromAddressId: mailbox.id,
-        subject: "Re: missing",
-        text: "reply body",
-        replyToMessageId: "missing",
-        replyMode: "reply",
-      }),
-    });
-    expect(missing.status).toBe(404);
-    const jobs = await Effect.runPromise(
-      world.account.listOutboundJobs({ viewer: { kind: "operator" } }),
-    );
-    expect(jobs.items).toEqual([]);
-  });
-
-  it("forwards an address to any email and reports Cloudflare's live verification", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const forward = (email: string) =>
-      world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
-        method: "PUT",
-        headers: jsonHeaders(authorized(world).headers),
-        body: JSON.stringify({ email }),
-      });
-
-    const pending = await forward("owner@example.com");
-    expect(pending.status, await pending.clone().text()).toBe(200);
-    expect(
-      await Schema.decodeUnknownPromise(AddressForwarding)(await pending.json()),
-    ).toMatchObject({
-      address: { id: mailbox.id, forwardTo: "owner@example.com" },
-      verified: false,
-    });
-    world.destinations.verify("owner@example.com");
-    const verified = await Schema.decodeUnknownPromise(AddressForwarding)(
-      await (await forward("owner@example.com")).json(),
-    );
-    expect(verified.verified).toBe(true);
-    expect(world.destinations.ensureCalls).toEqual(["owner@example.com", "owner@example.com"]);
-
-    world.destinations.failNext("This email address is not allowed.");
-    const refused = await forward("blocked@example.com");
-    expect(refused.status).toBe(400);
-    expect(await refused.json()).toMatchObject({ message: "This email address is not allowed." });
-    expect((await Effect.runPromise(world.account.getAddress(mailbox.id)))?.forwardTo).toBe(
-      "owner@example.com",
-    );
-  });
-
-  it("answers an unknown address and clears forwarding without calling Cloudflare", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    await Effect.runPromise(
-      world.account.setAddressForwarding(
-        mailbox.id,
-        "owner@example.com",
-        "2026-01-01T00:00:00.000Z",
-      ),
-    );
-
-    const unknown = await world.fetch("http://umail.test/addresses/missing/forwarding", {
-      method: "PUT",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ email: "owner@example.com" }),
-    });
-    expect(unknown.status).toBe(404);
-    const removed = await world.fetch(`http://umail.test/addresses/${mailbox.id}/forwarding`, {
-      method: "DELETE",
-      ...authorized(world),
-    });
-    expect(removed.status).toBe(200);
-    expect(await removed.json()).toMatchObject({ id: mailbox.id, forwardTo: null });
-    expect(world.destinations.ensureCalls).toEqual([]);
-  });
-
-  it("serves exact attachment bytes and does not map archive transport failure to NotFound", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, {
-      attachments: [
-        {
-          id: "attachment-1",
-          position: 0,
-          filename: "attachment.bin",
-          mimeType: "application/octet-stream",
-          size: 3,
-          r2Key: "mail/attachment.bin",
-          contentId: null,
-          disposition: null,
-          isInline: false,
-        },
-      ],
-    });
-
-    const absentRow = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/attachments/missing`,
-      authorized(world),
-    );
-    expect(absentRow.status).toBe(404);
-    expect(world.archive.getCalls).toEqual([]);
-
-    const absentObject = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
-      authorized(world),
-    );
-    expect(absentObject.status).toBe(404);
-    expect(world.archive.getCalls).toEqual(["mail/attachment.bin"]);
-
-    world.archive.failNextTransport();
-    const transport = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
-      authorized(world),
-    );
-    expect(transport.status).toBe(502);
-    expect(transport.status).not.toBe(404);
-
-    world.archive.put("mail/attachment.bin", new Uint8Array([0, 1, 2, 255]));
-    const found = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/attachments/attachment-1`,
-      authorized(world),
-    );
-    expect(found.status).toBe(200);
-    expect(new Uint8Array(await found.arrayBuffer())).toEqual(new Uint8Array([0, 1, 2, 255]));
-    expect(found.headers.get("content-type")).toBe("application/octet-stream");
-    expect(found.headers.get("content-disposition")).toContain("attachment.bin");
-    expect(found.headers.get("x-content-type-options")).toBe("nosniff");
-  });
-
-  it("serves exact archived source bytes as a download and maps archive faults to 502", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, { id: "source-in" });
-    const source = new Uint8Array([
-      ...new TextEncoder().encode("Subject: raw\r\n\r\n"),
-      0x00,
-      0xff,
-      0xfe,
-      0x80,
-      0x0a,
-    ]);
-    const sourcePath = `http://umail.test/messages/${inbound.messageId}/source`;
-
-    const absentObject = await world.fetch(sourcePath, authorized(world));
-    expect(absentObject.status).toBe(404);
-    expect(world.archive.getCalls).toEqual(["raw/source-in"]);
-
-    world.archive.put("raw/source-in", source);
-    world.archive.failNextTransport();
-    const transport = await world.fetch(sourcePath, authorized(world));
-    expect(transport.status).toBe(502);
-    expect(transport.status).not.toBe(404);
-
-    const found = await world.fetch(sourcePath, authorized(world));
-    expect(found.status).toBe(200);
-    expect(new Uint8Array(await found.arrayBuffer())).toEqual(source);
-    expect(found.headers.get("content-type")).toBe("message/rfc822");
-    expect(found.headers.get("content-disposition")).toBe(
-      `attachment; filename="source-in.eml"; filename*=UTF-8''source-in.eml`,
-    );
-    expect(found.headers.get("x-content-type-options")).toBe("nosniff");
-  });
-
-  it("answers 409 for outbound and 404 for unknown or soft-deleted message source", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const inbound = await seedInboundMessage(world, mailbox.id, { id: "deleted-in" });
-    world.archive.put("raw/deleted-in", new Uint8Array([1, 2, 3]));
-    const sendResponse = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "compose",
-        requestId: REQUEST_ID,
-        fromAddressId: mailbox.id,
-        to: [{ address: "recipient@example.com", displayName: null }],
-        subject: "Outbound",
-        text: "outbound body",
-      }),
-    });
-    expect(sendResponse.status).toBe(200);
-    const job = await Schema.decodeUnknownPromise(OutboundJobStatus)(await sendResponse.json());
-
-    const outbound = await world.fetch(
-      `http://umail.test/messages/${job.messageId}/source`,
-      authorized(world),
-    );
-    expect(outbound.status).toBe(409);
-    expect(await outbound.json()).toEqual({ _tag: "OutboundMessageHasNoSource" });
-
-    const unknown = await world.fetch(
-      "http://umail.test/messages/unknown/source",
-      authorized(world),
-    );
-    expect(unknown.status).toBe(404);
-
-    const removed = await world.fetch(
-      `http://umail.test/threads/${encodeURIComponent(inbound.threadId)}`,
-      { ...authorized(world), method: "DELETE" },
-    );
-    expect(removed.status).toBe(204);
-    const deleted = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/source`,
-      authorized(world),
-    );
-    expect(deleted.status).toBe(404);
-    expect(world.archive.getCalls).toEqual([]);
-  });
-
-  it("reads no archived source before the principal is authorized and in scope", async () => {
-    const world = await createWorld();
-    const inbox = await seedMailbox(world, "inbox");
-    const probe = await seedMailbox(world, "probe");
-    const inbound = await seedInboundMessage(world, inbox.id, { id: "scoped-in" });
-    world.archive.put("raw/scoped-in", new Uint8Array([1, 2, 3]));
-
-    const wrongBearer = await world.fetch(
-      `http://umail.test/messages/${inbound.messageId}/source`,
-      unauthorized(),
-    );
-    expect(wrongBearer.status).toBe(401);
-
-    const outOfScope = mcpPrincipal(world, "out-of-scope-reader", {
-      mailboxIds: [probe.id],
-      canRead: true,
-    });
-    await expect(
-      world.run(readMessageSource(world.deps, outOfScope, inbound.messageId)),
-    ).rejects.toMatchObject({ _tag: "NotFound" });
-
-    const cannotRead = mcpPrincipal(world, "no-read-client", {
-      mailboxIds: "all",
-      canRead: false,
-    });
-    await expect(
-      world.run(readMessageSource(world.deps, cannotRead, inbound.messageId)),
-    ).rejects.toMatchObject({ _tag: "Forbidden" });
-
-    expect(world.archive.getCalls).toEqual([]);
-  });
-
-  it("lists last-24h inbound, address, unread, and pages by cursor", async () => {
-    const world = await createWorld();
-    const inbox = await seedMailbox(world, "inbox");
-    const probe = await seedMailbox(world, "probe");
-    await seedInboundMessage(world, inbox.id, {
-      id: "old-in",
-      occurredAt: "2026-08-24T10:00:00.000Z",
-    });
-    const recent = await seedInboundMessage(world, inbox.id, {
-      id: "recent-in",
-      occurredAt: "2026-08-25T18:00:00.000Z",
-    });
-    await seedInboundMessage(world, probe.id, {
-      id: "probe-in",
-      occurredAt: "2026-08-25T19:00:00.000Z",
-    });
-    const sendResponse = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "compose",
-        requestId: REQUEST_ID,
-        fromAddressId: inbox.id,
-        to: [{ address: "recipient@example.com", displayName: null }],
-        subject: "Outbound",
-        text: "outbound body",
-      }),
-    });
-    expect(sendResponse.status, await sendResponse.clone().text()).toBe(200);
-
-    const since = "2026-08-25T00:00:00.000Z";
-    const inboundResponse = await world.fetch(
-      `http://umail.test/messages?direction=inbound&since=${encodeURIComponent(since)}`,
-      authorized(world),
-    );
-    expect(inboundResponse.status).toBe(200);
-    const inbound = await Schema.decodeUnknownPromise(MailMessagePage)(
-      await inboundResponse.json(),
-    );
-    expect(inbound.items.map((item) => item.id)).toEqual(["probe-in", recent.messageId]);
-    expect(JSON.stringify(inbound)).not.toContain("textBody");
-    expect(JSON.stringify(inbound)).not.toContain("htmlBody");
-    expect(JSON.stringify(inbound)).not.toContain("outbound body");
-
-    const addressResponse = await world.fetch(
-      `http://umail.test/messages?addressId=${encodeURIComponent(inbox.id)}`,
-      authorized(world),
-    );
-    expect(addressResponse.status).toBe(200);
-    const byAddress = await Schema.decodeUnknownPromise(MailMessagePage)(
-      await addressResponse.json(),
-    );
-    expect(byAddress.items.every((item) => item.addressId === inbox.id)).toBe(true);
-    expect(byAddress.items.map((item) => item.id)).not.toContain("probe-in");
-
-    await Effect.runPromise(
-      world.account.markThreadRead(recent.threadId, true, "all", "2026-08-25T18:01:00.000Z"),
-    );
-    const unreadResponse = await world.fetch(
-      "http://umail.test/messages?unread=true",
-      authorized(world),
-    );
-    expect(unreadResponse.status).toBe(200);
-    const unread = await Schema.decodeUnknownPromise(MailMessagePage)(await unreadResponse.json());
-    expect(unread.items.map((item) => item.id)).toEqual(["probe-in", "old-in"]);
-    expect(unread.items.every((item) => item.direction === "inbound")).toBe(true);
-
-    const firstResponse = await world.fetch(
-      "http://umail.test/messages?limit=2",
-      authorized(world),
-    );
-    expect(firstResponse.status).toBe(200);
-    const first = await Schema.decodeUnknownPromise(MailMessagePage)(await firstResponse.json());
-    expect(first.items).toHaveLength(2);
-    expect(first.nextCursor).not.toBeNull();
-    const secondResponse = await world.fetch(
-      `http://umail.test/messages?limit=2&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
-      authorized(world),
-    );
-    expect(secondResponse.status).toBe(200);
-    const second = await Schema.decodeUnknownPromise(MailMessagePage)(await secondResponse.json());
-    const pagedIds = [...first.items, ...second.items].map((item) => item.id);
-    expect(new Set(pagedIds).size).toBe(pagedIds.length);
-    expect(pagedIds).toEqual(expect.arrayContaining(["probe-in", recent.messageId, "old-in"]));
-
-    for (const cursor of [
-      "not-base64!",
-      Buffer.from("missing separator").toString("base64url"),
-      Buffer.from("not-a-date\nmessage").toString("base64url"),
-    ]) {
-      const malformed = await world.fetch(
-        `http://umail.test/messages?cursor=${encodeURIComponent(cursor)}`,
-        authorized(world),
-      );
-      expect(malformed.status).toBe(400);
-    }
-  });
-
-  it("replays an identical submission key and conflicts on a changed payload", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const body = {
-      intent: "compose",
-      requestId: REQUEST_ID,
-      fromAddressId: mailbox.id,
-      to: [{ address: "recipient@example.com", displayName: null }],
-      subject: "Hello",
-      text: "body",
-    };
-    const first = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify(body),
-    });
-    const replay = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify(body),
-    });
-    const conflict = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ ...body, subject: "Changed" }),
-    });
-    const firstJob = await Schema.decodeUnknownPromise(OutboundJobStatus)(await first.json());
-    const replayJob = await Schema.decodeUnknownPromise(OutboundJobStatus)(await replay.json());
-    expect(first.status).toBe(200);
-    expect(replay.status).toBe(200);
-    expect(replayJob.jobId).toBe(firstJob.jobId);
-    expect(conflict.status).toBe(409);
-    const listed = await world.fetch("http://umail.test/jobs", authorized(world));
-    const page = Schema.decodeUnknownSync(
-      Schema.Struct({ items: Schema.Array(OutboundJobStatus) }),
-    )(await listed.json());
-    expect(page.items.map((item) => item.jobId)).toEqual([firstJob.jobId]);
-  });
-
-  it("rejects a submission with more than 50 To and CC recipients without creating a job", async () => {
-    const world = await createWorld();
-    const mailbox = await seedMailbox(world);
-    const recipients = Array.from({ length: 51 }, (_, index) => ({
-      address: `recipient-${String(index)}@example.com`,
-      displayName: null,
-    }));
-    const response = await world.fetch("http://umail.test/submissions", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({
-        intent: "compose",
-        fromAddressId: mailbox.id,
-        to: recipients.slice(0, 40),
-        cc: recipients.slice(40),
-        subject: "Too many",
         text: "body",
-      }),
-    });
+      };
+      const first = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText(body),
+      });
+      const replay = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText(body),
+      });
+      const conflict = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({ ...body, subject: "Changed" }),
+      });
+      const firstJob = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(yield* readJson(first));
+      const replayJob = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(
+        yield* readJson(replay),
+      );
+      expect(first.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(replayJob.jobId).toBe(firstJob.jobId);
+      expect(conflict.status).toBe(409);
+      const listed = yield* world.request("http://umail.test/jobs", authorized(world));
+      const page = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({ items: Schema.Array(OutboundJobStatus) }),
+      )(yield* readJson(listed));
+      expect(page.items.map((item) => item.jobId)).toEqual([firstJob.jobId]);
+    }),
+  );
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      _tag: "ApiProblem",
-      message: "A message may have at most 50 To and CC recipients.",
-    });
-    const jobs = await Effect.runPromise(
-      world.account.listOutboundJobs({ viewer: { kind: "operator" } }),
-    );
-    expect(jobs.items).toEqual([]);
-  });
+  it.effect(
+    "rejects a submission with more than 50 To and CC recipients without creating a job",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const mailbox = yield* seedMailbox(world);
+        const recipients = Array.from({ length: 51 }, (_, index) => ({
+          address: `recipient-${String(index)}@example.com`,
+          displayName: null,
+        }));
+        const response = yield* world.request("http://umail.test/submissions", {
+          method: "POST",
+          headers: jsonHeaders(authorized(world).headers),
+          body: yield* jsonText({
+            intent: "compose",
+            fromAddressId: mailbox.id,
+            to: recipients.slice(0, 40),
+            cc: recipients.slice(40),
+            subject: "Too many",
+            text: "body",
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(yield* readJson(response)).toEqual({
+          _tag: "ApiProblem",
+          message: "A message may have at most 50 To and CC recipients.",
+        });
+        const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
+        expect(jobs.items).toEqual([]);
+      }),
+  );
 });
 
 describe("store failures and query input at the HTTP edge", () => {
-  it("answers 409 when creating an address fails with a plain conflict envelope", async () => {
-    const world = await createWorld({
-      account: {
-        createAddress: () =>
-          failOverRpc({ _tag: "AccountConflictError", resource: "address", id: "inbox" }),
-      },
-    });
-    const response = await world.fetch("http://umail.test/addresses", {
-      method: "POST",
-      headers: jsonHeaders(authorized(world).headers),
-      body: JSON.stringify({ localPart: "inbox" }),
-    });
-    expect(response.status).toBe(409);
-  });
-
-  it("answers 500, not 400, when the store call fails with an RpcCallError", async () => {
-    const world = await createWorld({
-      account: {
-        listAddresses: () =>
-          failOverRpc(new RpcCallError({ method: "listAddresses", cause: new Error("DO reset") })),
-      },
-    });
-    const response = await world.fetch("http://umail.test/addresses", authorized(world));
-    expect(response.status).toBe(500);
-  });
-
-  it("normalizes an offset since before the store call and rejects malformed ones with 400", async () => {
-    const queries: Array<ListMessageSummariesQuery> = [];
-    const world = await createWorld({
-      account: {
-        listMessageSummaries: (query) => {
-          queries.push(query);
-          return Effect.succeed({ items: [], nextCursor: null });
+  it.effect("answers 409 when creating an address fails with a plain conflict envelope", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld({
+        account: {
+          createAddress: () =>
+            failOverRpc({ _tag: "AccountConflictError", resource: "address", id: "inbox" }),
         },
-      },
-    });
-    const offset = await world.fetch(
-      `http://umail.test/messages?since=${encodeURIComponent("2026-08-25T02:00:00+02:00")}`,
-      authorized(world),
-    );
-    expect(offset.status).toBe(200);
-    expect(queries.map((query) => query.since)).toEqual(["2026-08-25T00:00:00.000Z"]);
+      });
+      const response = yield* world.request("http://umail.test/addresses", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: yield* jsonText({ localPart: "inbox" }),
+      });
+      expect(response.status).toBe(409);
+    }),
+  );
 
-    for (const since of ["not-a-date", "+275760-09-13T00:00:00.000Z"]) {
-      const malformed = await world.fetch(
-        `http://umail.test/messages?since=${encodeURIComponent(since)}`,
-        authorized(world),
-      );
-      expect(malformed.status).toBe(400);
-    }
-    expect(queries).toHaveLength(1);
-  });
+  it.effect("answers 500, not 400, when the store call fails with an RpcCallError", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld({
+        account: {
+          listAddresses: () =>
+            failOverRpc(
+              new RpcCallError({ method: "listAddresses", cause: new Error("DO reset") }),
+            ),
+        },
+      });
+      const response = yield* world.request("http://umail.test/addresses", authorized(world));
+      expect(response.status).toBe(500);
+    }),
+  );
 
-  it("answers 400 for a list cursor whose timestamp is out of range", async () => {
-    const world = await createWorld();
-    const cursor = Buffer.from("+010000-01-01T00:00:00.000Z\nx").toString("base64url");
-    for (const path of ["/jobs", "/threads", "/messages"]) {
-      const response = await world.fetch(
-        `http://umail.test${path}?cursor=${encodeURIComponent(cursor)}`,
-        authorized(world),
-      );
-      expect(response.status, path).toBe(400);
-    }
-  });
+  it.effect(
+    "normalizes an offset since before the store call and rejects malformed ones with 400",
+    () =>
+      Effect.gen(function* () {
+        const queries: Array<ListMessageSummariesQuery> = [];
+        const world = yield* createWorld({
+          account: {
+            listMessageSummaries: (query) => {
+              queries.push(query);
+              return Effect.succeed({ items: [], nextCursor: null });
+            },
+          },
+        });
+        const offset = yield* world.request(
+          `http://umail.test/messages?since=${encodeURIComponent("2026-08-25T02:00:00+02:00")}`,
+          authorized(world),
+        );
+        expect(offset.status).toBe(200);
+        expect(queries.map((query) => query.since)).toEqual(["2026-08-25T00:00:00.000Z"]);
+
+        for (const since of ["not-a-date", "+275760-09-13T00:00:00.000Z"]) {
+          const malformed = yield* world.request(
+            `http://umail.test/messages?since=${encodeURIComponent(since)}`,
+            authorized(world),
+          );
+          expect(malformed.status).toBe(400);
+        }
+        expect(queries).toHaveLength(1);
+      }),
+  );
+
+  it.effect("answers 400 for a list cursor whose timestamp is out of range", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const cursor = Buffer.from("+010000-01-01T00:00:00.000Z\nx").toString("base64url");
+      for (const path of ["/jobs", "/threads", "/messages"]) {
+        const response = yield* world.request(
+          `http://umail.test${path}?cursor=${encodeURIComponent(cursor)}`,
+          authorized(world),
+        );
+        expect(response.status, path).toBe(400);
+      }
+    }),
+  );
 });
 
 // Expected DO failures reach the Api as plain `{ _tag, ... }` objects, never class instances.

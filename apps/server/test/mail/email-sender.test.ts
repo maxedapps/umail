@@ -1,8 +1,8 @@
 import type * as Runtime from "@cloudflare/workers-types";
+import { describe, expect, it } from "@effect/vitest";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
 
 import {
   cloudflareEmailSender,
@@ -16,27 +16,29 @@ const STORED =
   '<p>html body</p><img data-umail-remote-src="https://tracker.example/pixel">' as const;
 
 describe("provider mail mapping", () => {
-  it("materializes the canonical body with the configured application URL at the provider boundary", async () => {
-    const htmlPolicy = new FakeMailHtmlPolicy();
-    const applicationUrl = new URL("https://preview.umail.example.com");
-    const mail: OutboundMail = {
-      from: { email: "inbox@umail.example.com", name: "Inbox" },
-      replyTo: { email: "inbox@umail.example.com", name: "Inbox" },
-      to: ["alice@example.com"],
-      cc: [],
-      subject: "Hello",
-      text: "plain",
-      html: { body: STORED, hasRemoteImages: true },
-      inReplyTo: null,
-      references: null,
-    };
+  it.effect(
+    "materializes the canonical body with the configured application URL at the provider boundary",
+    () =>
+      Effect.gen(function* () {
+        const htmlPolicy = new FakeMailHtmlPolicy();
+        const applicationUrl = new URL("https://preview.umail.example.com");
+        const mail: OutboundMail = {
+          from: { email: "inbox@umail.example.com", name: "Inbox" },
+          replyTo: { email: "inbox@umail.example.com", name: "Inbox" },
+          to: ["alice@example.com"],
+          cc: [],
+          subject: "Hello",
+          text: "plain",
+          html: { body: STORED, hasRemoteImages: true },
+          inReplyTo: null,
+          references: null,
+        };
 
-    const providerMail = await Effect.runPromise(
-      materializeProviderMail(htmlPolicy, applicationUrl, mail),
-    );
+        const providerMail = yield* materializeProviderMail(htmlPolicy, applicationUrl, mail);
 
-    expect(providerMail.html).toBe(STORED);
-  });
+        expect(providerMail.html).toBe(STORED);
+      }),
+  );
 
   it("serializes named From and Reply-To, string To/CC, and threading headers", () => {
     const mail: ProviderOutboundMail = {
@@ -100,75 +102,81 @@ const MAIL = {
 } satisfies ProviderOutboundMail;
 
 describe("Cloudflare email sender", () => {
-  it("captures each event's native binding and preserves its method receiver", async () => {
-    const firstBinding = new RecordingSendEmail({
-      kind: "accepted",
-      messageId: "<first@example.com>",
-    });
-    const secondBinding = new RecordingSendEmail({
-      kind: "accepted",
-      messageId: "<second@example.com>",
-    });
-    const client = new ContextualSendClient(
-      new Map([
-        ["first-event", firstBinding],
-        ["second-event", secondBinding],
-      ]),
-    );
+  it.effect("captures each event's native binding and preserves its method receiver", () =>
+    Effect.gen(function* () {
+      const firstBinding = new RecordingSendEmail({
+        kind: "accepted",
+        messageId: "<first@example.com>",
+      });
+      const secondBinding = new RecordingSendEmail({
+        kind: "accepted",
+        messageId: "<second@example.com>",
+      });
+      const client = new ContextualSendClient(
+        new Map([
+          ["first-event", firstBinding],
+          ["second-event", secondBinding],
+        ]),
+      );
 
-    const firstSender = await constructSender(client, testRuntimeContext("first-event"));
-    const secondSender = await constructSender(client, testRuntimeContext("second-event"));
-    expect(client.resolvedContexts).toEqual(["first-event", "second-event"]);
+      const firstSender = yield* constructSender(client, testRuntimeContext("first-event"));
+      const secondSender = yield* constructSender(client, testRuntimeContext("second-event"));
+      expect(client.resolvedContexts).toEqual(["first-event", "second-event"]);
 
-    expect(await Effect.runPromise(firstSender.send(MAIL))).toEqual({
-      kind: "accepted",
-      providerMessageId: "<first@example.com>",
-      rfcMessageId: "<first@example.com>",
-    });
-    expect(await Effect.runPromise(secondSender.send(MAIL))).toEqual({
-      kind: "accepted",
-      providerMessageId: "<second@example.com>",
-      rfcMessageId: "<second@example.com>",
-    });
-    expect(client.resolvedContexts).toEqual(["first-event", "second-event"]);
-    expect(firstBinding.messages).toHaveLength(1);
-    expect(secondBinding.messages).toHaveLength(1);
-  });
+      expect(yield* firstSender.send(MAIL)).toEqual({
+        kind: "accepted",
+        providerMessageId: "<first@example.com>",
+        rfcMessageId: "<first@example.com>",
+      });
+      expect(yield* secondSender.send(MAIL)).toEqual({
+        kind: "accepted",
+        providerMessageId: "<second@example.com>",
+        rfcMessageId: "<second@example.com>",
+      });
+      expect(client.resolvedContexts).toEqual(["first-event", "second-event"]);
+      expect(firstBinding.messages).toHaveLength(1);
+      expect(secondBinding.messages).toHaveLength(1);
+    }),
+  );
 
-  it("rejects known provider codes, including rate limits, and leaves the rest unknown", async () => {
-    const binding = new RecordingSendEmail({
-      kind: "failed",
-      error: { code: "E_RECIPIENT_SUPPRESSED", message: "suppressed" },
-    });
-    const client = new ContextualSendClient(new Map([["provider-event", binding]]));
-    const sender = await constructSender(client, testRuntimeContext("provider-event"));
+  it.effect(
+    "rejects known provider codes, including rate limits, and leaves the rest unknown",
+    () =>
+      Effect.gen(function* () {
+        const binding = new RecordingSendEmail({
+          kind: "failed",
+          error: { code: "E_RECIPIENT_SUPPRESSED", message: "suppressed" },
+        });
+        const client = new ContextualSendClient(new Map([["provider-event", binding]]));
+        const sender = yield* constructSender(client, testRuntimeContext("provider-event"));
 
-    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
-      kind: "rejected",
-      failureDetail: "E_RECIPIENT_SUPPRESSED",
-    });
+        expect(yield* sender.send(MAIL)).toEqual({
+          kind: "rejected",
+          failureDetail: "E_RECIPIENT_SUPPRESSED",
+        });
 
-    binding.next = {
-      kind: "failed",
-      error: { code: "E_VALIDATION_ERROR", message: "bad sender" },
-    };
-    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
-      kind: "rejected",
-      failureDetail: "E_VALIDATION_ERROR",
-    });
+        binding.next = {
+          kind: "failed",
+          error: { code: "E_VALIDATION_ERROR", message: "bad sender" },
+        };
+        expect(yield* sender.send(MAIL)).toEqual({
+          kind: "rejected",
+          failureDetail: "E_VALIDATION_ERROR",
+        });
 
-    binding.next = {
-      kind: "failed",
-      error: { code: "E_RATE_LIMIT_EXCEEDED", message: "too many sends" },
-    };
-    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({
-      kind: "rejected",
-      failureDetail: "E_RATE_LIMIT_EXCEEDED",
-    });
+        binding.next = {
+          kind: "failed",
+          error: { code: "E_RATE_LIMIT_EXCEEDED", message: "too many sends" },
+        };
+        expect(yield* sender.send(MAIL)).toEqual({
+          kind: "rejected",
+          failureDetail: "E_RATE_LIMIT_EXCEEDED",
+        });
 
-    binding.next = { kind: "failed", error: new Error("connection lost") };
-    expect(await Effect.runPromise(sender.send(MAIL))).toEqual({ kind: "unknown" });
-  });
+        binding.next = { kind: "failed", error: new Error("connection lost") };
+        expect(yield* sender.send(MAIL)).toEqual({ kind: "unknown" });
+      }),
+  );
 });
 
 type NativeSendBehavior =
@@ -188,14 +196,14 @@ class RecordingSendEmail implements Runtime.SendEmail {
 
   send(message: Runtime.EmailMessage): Promise<Runtime.EmailSendResult>;
   send(builder: Runtime.EmailMessageBuilder): Promise<Runtime.EmailSendResult>;
-  async send(
+  send(
     message: Runtime.EmailMessage | Runtime.EmailMessageBuilder,
   ): Promise<Runtime.EmailSendResult> {
     this.messages.push(message);
     if (this.next.kind === "failed") {
-      throw this.next.error;
+      return Promise.reject(this.next.error);
     }
-    return { messageId: this.next.messageId };
+    return Promise.resolve({ messageId: this.next.messageId });
   }
 }
 
@@ -239,7 +247,5 @@ function testRuntimeContext(id: string) {
 }
 
 function constructSender(client: Cloudflare.Email.SendClient, context: Alchemy.BaseRuntimeContext) {
-  return Effect.runPromise(
-    cloudflareEmailSender(client).pipe(Effect.provideService(Alchemy.RuntimeContext, context)),
-  );
+  return cloudflareEmailSender(client).pipe(Effect.provideService(Alchemy.RuntimeContext, context));
 }

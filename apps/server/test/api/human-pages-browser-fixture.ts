@@ -10,11 +10,13 @@ import {
   type PrincipalPolicy,
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as Schema from "effect/Schema";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Frame, Locator, Page } from "playwright";
+import type { BrowserContext, Frame, Locator, Page } from "playwright";
 import type { Plugin } from "vitest/config";
+import type { Vite } from "vitest/node";
 
+import { randomId, webCrypto } from "../../src/crypto.ts";
 import { submitMessage } from "../../src/api/operations.ts";
 import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "./fakes.ts";
 import { registerMcpClient } from "./oauth-flow.ts";
@@ -24,6 +26,7 @@ import {
   OPERATOR_EMAIL,
   OPERATOR_PASSWORD,
   createWorld,
+  readText,
   runDueWorkPass,
   seedMailbox,
   type World,
@@ -35,19 +38,20 @@ import {
 } from "./human-pages-browser-model.ts";
 
 const FIXTURE_PREFIX = "/__human-pages__";
-const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const BIDI_CONTROL = /[؜‎‏‪-‮⁦-⁩]/gu;
 const NOW = "2026-08-28T10:00:00.000Z";
 // The "expired" approval is submitted a day early, so a pass at its deadline leaves the rest open.
 const EXPIRED_SUBMITTED_AT = "2026-08-27T09:00:00.000Z";
 const EXPIRE_AT = "2026-08-28T09:00:00.000Z";
 const UNKNOWN_APPROVAL_PATH = `/approvals/${"f".repeat(64)}`;
-const HOSTILE_SUBJECT = "Quarterly\r\nreview \u202e<script data-hostile-subject>subject</script>";
-const HOSTILE_FROM = "Sender \u2066<script data-hostile-from>name</script>";
-const HOSTILE_RECIPIENT = "Recipient \u202a<svg data-hostile-recipient>name</svg>";
-const HOSTILE_REQUESTER = "Reviewer\r\n\u202e<script data-hostile-requester>requester</script>";
+const HOSTILE_SUBJECT = "Quarterly\r\nreview ‮<script data-hostile-subject>subject</script>";
+const HOSTILE_FROM = "Sender ⁦<script data-hostile-from>name</script>";
+const HOSTILE_RECIPIENT = "Recipient ‪<svg data-hostile-recipient>name</svg>";
+const HOSTILE_REQUESTER = "Reviewer\r\n‮<script data-hostile-requester>requester</script>";
 
-type HumanPageFixtureRequest = IncomingMessage;
-type HumanPageFixtureResponse = ServerResponse<IncomingMessage>;
+type HumanPageFixtureRequest = Parameters<Vite.Connect.NextHandleFunction>[0];
+type HumanPageFixtureResponse = Parameters<Vite.Connect.NextHandleFunction>[1];
+type HumanPageFixtureNext = Parameters<Vite.Connect.NextHandleFunction>[2];
 
 type PreparedBrowserWorld = {
   readonly world: World;
@@ -56,185 +60,219 @@ type PreparedBrowserWorld = {
 
 export const humanPageBrowserCommands = {
   observeHumanPage: defineBrowserCommand(
-    async (
+    (
       { context, page: runnerPage },
       input: HumanPageBrowserVisit,
-    ): Promise<HumanPageBrowserObservation> => {
-      const visit = Schema.decodeSync(HumanPageBrowserVisit)(input);
-      const existingPages = new Set(context.pages());
-      const page = await context.newPage();
-      const consoleMessages: Array<string> = [];
-      const externalRequests: Array<string> = [];
-      page.on("console", (message) => consoleMessages.push(message.text()));
-      page.on("request", (request) => {
-        if (request.url().startsWith(PREVIEW_EXTERNAL_ORIGIN)) {
-          externalRequests.push(request.url());
-        }
-      });
-
-      try {
-        const prepared = await preparedBrowserWorld();
-        await context.clearCookies();
-        await context.addCookies(sessionCookies(prepared.world, runnerPage.url()));
-        await page.setViewportSize({
-          width: visit.viewportWidth,
-          height: visit.viewportHeight,
-        });
-        await page.emulateMedia({ colorScheme: visit.colorScheme });
-        const fixtureUrl = new URL(fixturePath(visit.fixture, visit.search), runnerPage.url());
-        const previewResponsePromise =
-          visit.fixture === "pending"
-            ? page.waitForResponse((response) => isPreviewPath(new URL(response.url()).pathname))
-            : null;
-        const navigationResponse = await page.goto(fixtureUrl.href, { waitUntil: "load" });
-        if (navigationResponse === null) {
-          throw new Error("Human-page browser fixture navigation returned no response.");
-        }
-        const previewResponse =
-          previewResponsePromise === null ? null : await previewResponsePromise;
-        const focus = await exerciseFixture(page, visit);
-        const buttons = await buttonObservations(page);
-        const form = page.locator("form").first();
-        const formCount = await page.locator("form").count();
-        const formMethod = formCount === 0 ? null : await form.getAttribute("method");
-        const formAction = formCount === 0 ? null : await form.getAttribute("action");
-        const metadataText = await optionalText(page.locator(".message-details"));
-        const messageBodyBox = await optionalBoundingBox(page.locator(".message-preview"));
-        const decisionBox = await optionalBoundingBox(page.locator(".decision-panel"));
-        const clientId = await optionalText(page.locator("#client-id"));
-        const scope = await optionalText(page.locator("#scope"));
-        const redirectHost = await optionalText(page.locator("#redirect-host"));
-        const scriptNonce = await page.evaluate(pageOwnedScriptNonce);
-        const heading = (await page.locator("h1").textContent()) ?? "";
-        const title = await page.title();
-        const bodyText = await page.locator("body").innerText();
-        const hostileElementCount = await page
-          .locator(
-            "[data-hostile-subject], [data-hostile-from], [data-hostile-recipient], [data-hostile-requester]",
-          )
-          .count();
-        const layout = await page.evaluate(() => {
-          const bodyStyle = getComputedStyle(document.body);
-          return {
-            documentClientWidth: document.documentElement.clientWidth,
-            documentScrollWidth: document.documentElement.scrollWidth,
-            bodyBackground: bodyStyle.backgroundColor,
-            bodyColor: bodyStyle.color,
-            darkSchemeMatches: matchMedia("(prefers-color-scheme: dark)").matches,
-          };
-        });
-        const consentAuth = visit.fixture === "consent" ? await submitConsent(page) : null;
-
-        let iframeSandbox: string | null = null;
-        let previewBodyText: string | null = null;
-        let previewUrlBeforeActivation: string | null = null;
-        let previewUrlAfterActivation: string | null = null;
-        let openedPageCount = 0;
-        if (visit.fixture === "pending") {
-          const iframe = page.locator('iframe[title="HTML email preview"]');
-          iframeSandbox = await iframe.getAttribute("sandbox");
-          const previewFrame = requiredPreviewFrame(page);
-          previewBodyText = await previewFrame.locator("body").innerText();
-          previewUrlBeforeActivation = previewFrame.url();
-          const pagesBeforeActivation = context.pages().length;
-          await previewFrame.locator("#external-preview-link").click();
-          previewUrlAfterActivation = requiredPreviewFrame(page).url();
-          openedPageCount = context.pages().length - pagesBeforeActivation;
-        }
-
-        return {
-          status: navigationResponse.status(),
-          contentType: navigationResponse.headers()["content-type"] ?? null,
-          contentSecurityPolicy: navigationResponse.headers()["content-security-policy"] ?? null,
-          frameOptions: navigationResponse.headers()["x-frame-options"] ?? null,
-          title,
-          heading,
-          bodyText,
-          formCount,
-          formMethod,
-          formAction,
-          buttons,
-          keyboardFocusId: focus.keyboardFocusId,
-          keyboardFocusText: focus.keyboardFocusText,
-          focusOutlineStyle: focus.outlineStyle,
-          focusOutlineWidth: focus.outlineWidth,
-          controlHeight: focus.controlHeight,
-          scriptNonce,
-          clientId,
-          scope,
-          redirectHost,
-          statusText: consentAuth?.statusText ?? focus.statusText,
-          authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
-          authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
-          authRequestBody: consentAuth?.authRequestBody ?? focus.authRequestBody,
-          finalPath: new URL(page.url()).pathname,
-          secretValue: focus.secretValue,
-          hostileElementCount,
-          metadataText,
-          metadataBidiControlCount: metadataText?.match(BIDI_CONTROL)?.length ?? 0,
-          automaticIsolationCount: await page.locator('.message-details bdi[dir="auto"]').count(),
-          addressIsolationCount: await page.locator('.message-details bdi[dir="ltr"]').count(),
-          sectionsSeparated:
-            messageBodyBox === null || decisionBox === null
-              ? null
-              : decisionBox.y >= messageBodyBox.y + messageBodyBox.height,
-          ...layout,
-          iframeSandbox,
-          previewContentSecurityPolicy:
-            previewResponse?.headers()["content-security-policy"] ?? null,
-          previewFrameOptions: previewResponse?.headers()["x-frame-options"] ?? null,
-          previewBodyText,
-          previewUrlBeforeActivation,
-          previewUrlAfterActivation,
-          externalRequests,
-          openedPageCount,
-          consoleMessages,
-        };
-      } finally {
-        for (const openPage of context.pages()) {
-          if (!existingPages.has(openPage)) {
-            await openPage.close();
-          }
-        }
-      }
-    },
+    ): Promise<HumanPageBrowserObservation> =>
+      Effect.runPromise(
+        observeHumanPage(context, runnerPage, Schema.decodeSync(HumanPageBrowserVisit)(input)),
+      ),
   ),
 };
+
+const observeHumanPage = Effect.fn("observeHumanPage")(function* (
+  context: BrowserContext,
+  runnerPage: Page,
+  visit: HumanPageBrowserVisit,
+) {
+  const existingPages = new Set(context.pages());
+  const page = yield* Effect.acquireRelease(
+    Effect.promise(() => context.newPage()),
+    () => closeNewPages(context, existingPages),
+  );
+  const consoleMessages: Array<string> = [];
+  const externalRequests: Array<string> = [];
+  page.on("console", (message) => consoleMessages.push(message.text()));
+  page.on("request", (request) => {
+    if (request.url().startsWith(PREVIEW_EXTERNAL_ORIGIN)) {
+      externalRequests.push(request.url());
+    }
+  });
+
+  const prepared = yield* preparedBrowserWorld;
+  yield* Effect.promise(() => context.clearCookies());
+  yield* Effect.promise(() => context.addCookies(sessionCookies(prepared.world, runnerPage.url())));
+  yield* Effect.promise(() =>
+    page.setViewportSize({ width: visit.viewportWidth, height: visit.viewportHeight }),
+  );
+  yield* Effect.promise(() => page.emulateMedia({ colorScheme: visit.colorScheme }));
+  const fixtureUrl = new URL(fixturePath(visit.fixture, visit.search), runnerPage.url());
+  // Started before navigation so the preview response cannot be missed.
+  const previewResponsePromise =
+    visit.fixture === "pending"
+      ? page.waitForResponse((response) => isPreviewPath(new URL(response.url()).pathname))
+      : null;
+  const navigationResponse = yield* Effect.promise(() =>
+    page.goto(fixtureUrl.href, { waitUntil: "load" }),
+  );
+  if (navigationResponse === null) {
+    return yield* Effect.die("Human-page browser fixture navigation returned no response.");
+  }
+  const previewResponse =
+    previewResponsePromise === null ? null : yield* Effect.promise(() => previewResponsePromise);
+  const focus = yield* exerciseFixture(page, visit);
+  const buttons = yield* buttonObservations(page);
+  const form = page.locator("form").first();
+  const formCount = yield* Effect.promise(() => page.locator("form").count());
+  const formMethod =
+    formCount === 0 ? null : yield* Effect.promise(() => form.getAttribute("method"));
+  const formAction =
+    formCount === 0 ? null : yield* Effect.promise(() => form.getAttribute("action"));
+  const metadataText = yield* optionalText(page.locator(".message-details"));
+  const messageBodyBox = yield* optionalBoundingBox(page.locator(".message-preview"));
+  const decisionBox = yield* optionalBoundingBox(page.locator(".decision-panel"));
+  const clientId = yield* optionalText(page.locator("#client-id"));
+  const scope = yield* optionalText(page.locator("#scope"));
+  const redirectHost = yield* optionalText(page.locator("#redirect-host"));
+  const scriptNonce = yield* Effect.promise(() => page.evaluate(pageOwnedScriptNonce));
+  const heading = (yield* Effect.promise(() => page.locator("h1").textContent())) ?? "";
+  const title = yield* Effect.promise(() => page.title());
+  const bodyText = yield* Effect.promise(() => page.locator("body").innerText());
+  const hostileElementCount = yield* Effect.promise(() =>
+    page
+      .locator(
+        "[data-hostile-subject], [data-hostile-from], [data-hostile-recipient], [data-hostile-requester]",
+      )
+      .count(),
+  );
+  const layout = yield* Effect.promise(() =>
+    page.evaluate(() => {
+      const bodyStyle = getComputedStyle(document.body);
+      return {
+        documentClientWidth: document.documentElement.clientWidth,
+        documentScrollWidth: document.documentElement.scrollWidth,
+        bodyBackground: bodyStyle.backgroundColor,
+        bodyColor: bodyStyle.color,
+        darkSchemeMatches: matchMedia("(prefers-color-scheme: dark)").matches,
+      };
+    }),
+  );
+  const consentAuth = visit.fixture === "consent" ? yield* submitConsent(page) : null;
+
+  let iframeSandbox: string | null = null;
+  let previewBodyText: string | null = null;
+  let previewUrlBeforeActivation: string | null = null;
+  let previewUrlAfterActivation: string | null = null;
+  let openedPageCount = 0;
+  if (visit.fixture === "pending") {
+    const iframe = page.locator('iframe[title="HTML email preview"]');
+    iframeSandbox = yield* Effect.promise(() => iframe.getAttribute("sandbox"));
+    const previewFrame = requiredPreviewFrame(page);
+    previewBodyText = yield* Effect.promise(() => previewFrame.locator("body").innerText());
+    previewUrlBeforeActivation = previewFrame.url();
+    const pagesBeforeActivation = context.pages().length;
+    yield* Effect.promise(() => previewFrame.locator("#external-preview-link").click());
+    previewUrlAfterActivation = requiredPreviewFrame(page).url();
+    openedPageCount = context.pages().length - pagesBeforeActivation;
+  }
+
+  const automaticIsolationCount = yield* Effect.promise(() =>
+    page.locator('.message-details bdi[dir="auto"]').count(),
+  );
+  const addressIsolationCount = yield* Effect.promise(() =>
+    page.locator('.message-details bdi[dir="ltr"]').count(),
+  );
+  return {
+    status: navigationResponse.status(),
+    contentType: navigationResponse.headers()["content-type"] ?? null,
+    contentSecurityPolicy: navigationResponse.headers()["content-security-policy"] ?? null,
+    frameOptions: navigationResponse.headers()["x-frame-options"] ?? null,
+    title,
+    heading,
+    bodyText,
+    formCount,
+    formMethod,
+    formAction,
+    buttons,
+    keyboardFocusId: focus.keyboardFocusId,
+    keyboardFocusText: focus.keyboardFocusText,
+    focusOutlineStyle: focus.outlineStyle,
+    focusOutlineWidth: focus.outlineWidth,
+    controlHeight: focus.controlHeight,
+    scriptNonce,
+    clientId,
+    scope,
+    redirectHost,
+    statusText: consentAuth?.statusText ?? focus.statusText,
+    authRequestPath: consentAuth?.authRequestPath ?? focus.authRequestPath,
+    authRequestMethod: consentAuth?.authRequestMethod ?? focus.authRequestMethod,
+    authRequestBody: consentAuth?.authRequestBody ?? focus.authRequestBody,
+    finalPath: new URL(page.url()).pathname,
+    secretValue: focus.secretValue,
+    hostileElementCount,
+    metadataText,
+    metadataBidiControlCount: metadataText?.match(BIDI_CONTROL)?.length ?? 0,
+    automaticIsolationCount,
+    addressIsolationCount,
+    sectionsSeparated:
+      messageBodyBox === null || decisionBox === null
+        ? null
+        : decisionBox.y >= messageBodyBox.y + messageBodyBox.height,
+    ...layout,
+    iframeSandbox,
+    previewContentSecurityPolicy: previewResponse?.headers()["content-security-policy"] ?? null,
+    previewFrameOptions: previewResponse?.headers()["x-frame-options"] ?? null,
+    previewBodyText,
+    previewUrlBeforeActivation,
+    previewUrlAfterActivation,
+    externalRequests,
+    openedPageCount,
+    consoleMessages,
+  };
+}, Effect.scoped);
+
+const closeNewPages = Effect.fn("closeNewPages")(function* (
+  context: BrowserContext,
+  existingPages: ReadonlySet<Page>,
+) {
+  for (const openPage of context.pages()) {
+    if (!existingPages.has(openPage)) {
+      yield* Effect.promise(() => openPage.close());
+    }
+  }
+});
 
 export function humanPageBrowserFixture(): Plugin {
   return {
     name: "human-page-browser-fixture",
     configureServer(server) {
-      server.middlewares.use(async (request, response, next) => {
-        const url = requestUrl(request);
-        if (url === null) {
-          writeStatus(response, 400);
-          return;
-        }
-        const prepared = await preparedBrowserWorld();
-        const fixture = fixtureFromPath(url.pathname);
-        if (fixture !== null) {
-          const target = resolveFixtureUrl(url, prepared);
-          response.statusCode = 302;
-          response.setHeader("location", `${target.pathname}${target.search}`);
-          response.setHeader("cache-control", "no-store");
-          response.end();
-          return;
-        }
-        if (!shouldProxy(url.pathname)) {
-          next();
-          return;
-        }
-        const webRequest = await incomingToWebRequest(request, url);
-        const worldResponse = await prepared.world.fetch(
-          worldUrl(url).href,
-          await worldRequestInit(webRequest, prepared.world),
-        );
-        await writeWorldResponse(response, worldResponse, `http://${request.headers.host ?? ""}`);
+      server.middlewares.use((request, response, next) => {
+        void Effect.runPromise(serveFixtureRequest(request, response, next));
       });
     },
   };
 }
+
+const serveFixtureRequest = Effect.fn("serveFixtureRequest")(function* (
+  request: HumanPageFixtureRequest,
+  response: HumanPageFixtureResponse,
+  next: HumanPageFixtureNext,
+) {
+  const url = requestUrl(request);
+  if (url === null) {
+    writeStatus(response, 400);
+    return;
+  }
+  const prepared = yield* preparedBrowserWorld;
+  const fixture = fixtureFromPath(url.pathname);
+  if (fixture !== null) {
+    const target = resolveFixtureUrl(url, prepared);
+    response.statusCode = 302;
+    response.setHeader("location", `${target.pathname}${target.search}`);
+    response.setHeader("cache-control", "no-store");
+    response.end();
+    return;
+  }
+  if (!shouldProxy(url.pathname)) {
+    next();
+    return;
+  }
+  const worldResponse = yield* prepared.world.request(
+    worldUrl(url).href,
+    yield* worldRequestInit(request, url, prepared.world),
+  );
+  yield* writeWorldResponse(response, worldResponse, `http://${request.headers.host ?? ""}`);
+});
 
 type BrowserFocusObservation = {
   readonly keyboardFocusId: string | null;
@@ -249,29 +287,29 @@ type BrowserFocusObservation = {
   readonly secretValue: string | null;
 };
 
-async function exerciseFixture(
+const exerciseFixture = Effect.fn("exerciseFixture")(function* (
   page: Page,
   visit: HumanPageBrowserVisit,
-): Promise<BrowserFocusObservation> {
+): Effect.fn.Return<BrowserFocusObservation> {
   if (visit.fixture === "login") {
     const email = page.getByLabel("Operator email");
     const secret = page.getByLabel("Operator secret");
-    await email.focus();
-    await page.keyboard.press("Tab");
-    const focus = await focusedControl(page);
-    await email.fill(OPERATOR_EMAIL);
-    await secret.fill(OPERATOR_PASSWORD);
+    yield* Effect.promise(() => email.focus());
+    yield* Effect.promise(() => page.keyboard.press("Tab"));
+    const focus = yield* focusedControl(page);
+    yield* Effect.promise(() => email.fill(OPERATOR_EMAIL));
+    yield* Effect.promise(() => secret.fill(OPERATOR_PASSWORD));
     const requestPromise = page.waitForRequest(
       (request) => new URL(request.url()).pathname === "/api/auth/sign-in/email",
     );
-    await page.locator("#login-submit").focus();
-    await page.keyboard.press("Enter");
-    const authRequest = await requestPromise;
+    yield* Effect.promise(() => page.locator("#login-submit").focus());
+    yield* Effect.promise(() => page.keyboard.press("Enter"));
+    const authRequest = yield* Effect.promise(() => requestPromise);
     const authRequestBody = authRequest.postData();
     const authRequestPath = new URL(authRequest.url()).pathname;
     const authRequestMethod = authRequest.method();
     if (visit.search === "next=/clients") {
-      await page.waitForURL((url) => new URL(url).pathname === "/clients");
+      yield* Effect.promise(() => page.waitForURL((url) => new URL(url).pathname === "/clients"));
       return {
         ...focus,
         statusText: null,
@@ -291,26 +329,28 @@ async function exerciseFixture(
         secretValue: null,
       };
     }
-    await page.waitForFunction(
-      () =>
-        document.getElementById("status")?.textContent ===
-        "Signed in. Continue to the authorization request or use umail login.",
+    yield* Effect.promise(() =>
+      page.waitForFunction(
+        () =>
+          document.getElementById("status")?.textContent ===
+          "Signed in. Continue to the authorization request or use umail login.",
+      ),
     );
     return {
       ...focus,
-      statusText: await optionalText(page.locator("#status")),
+      statusText: yield* optionalText(page.locator("#status")),
       authRequestPath: new URL(authRequest.url()).pathname,
       authRequestMethod: authRequest.method(),
       authRequestBody: authRequest.postData(),
-      secretValue: await secret.inputValue(),
+      secretValue: yield* Effect.promise(() => secret.inputValue()),
     };
   }
   if (visit.fixture === "consent") {
     const accept = page.getByRole("button", { name: "Allow access" });
-    await accept.focus();
-    await page.keyboard.press("Tab");
+    yield* Effect.promise(() => accept.focus());
+    yield* Effect.promise(() => page.keyboard.press("Tab"));
     return {
-      ...(await focusedControl(page)),
+      ...(yield* focusedControl(page)),
       statusText: null,
       authRequestPath: null,
       authRequestMethod: null,
@@ -319,10 +359,10 @@ async function exerciseFixture(
     };
   }
   if (visit.fixture === "pending") {
-    await page.getByRole("button", { name: "Approve & send" }).focus();
-    await page.keyboard.press("Tab");
+    yield* Effect.promise(() => page.getByRole("button", { name: "Approve & send" }).focus());
+    yield* Effect.promise(() => page.keyboard.press("Tab"));
     return {
-      ...(await focusedControl(page)),
+      ...(yield* focusedControl(page)),
       statusText: null,
       authRequestPath: null,
       authRequestMethod: null,
@@ -342,66 +382,73 @@ async function exerciseFixture(
     authRequestBody: null,
     secretValue: null,
   };
-}
+});
 
-async function submitConsent(page: Page) {
+const submitConsent = Effect.fn("submitConsent")(function* (page: Page) {
   const accept = page.getByRole("button", { name: "Allow access" });
   const requestPromise = page.waitForRequest(
     (request) => new URL(request.url()).pathname === "/api/auth/oauth2/consent",
   );
-  await accept.focus();
-  await page.keyboard.press("Enter");
-  const authRequest = await requestPromise;
-  await Promise.race([
-    page.waitForFunction(
-      () => {
-        const text = document.getElementById("status")?.textContent ?? "";
-        return text === "Consent recorded." || text === "Could not complete consent.";
-      },
-      { timeout: 2000 },
-    ),
-    page.waitForURL(
-      (url) => {
-        const path = new URL(url).pathname;
-        return path !== "/consent" && !path.startsWith("/__human-pages__/");
-      },
-      { timeout: 2000, waitUntil: "commit" },
-    ),
-  ]).catch(() => undefined);
+  yield* Effect.promise(() => accept.focus());
+  yield* Effect.promise(() => page.keyboard.press("Enter"));
+  const authRequest = yield* Effect.promise(() => requestPromise);
+  // Either outcome settles the page; a timeout leaves the status as it is.
+  yield* Effect.tryPromise(() =>
+    Promise.race([
+      page.waitForFunction(
+        () => {
+          const text = document.getElementById("status")?.textContent ?? "";
+          return text === "Consent recorded." || text === "Could not complete consent.";
+        },
+        { timeout: 2000 },
+      ),
+      page.waitForURL(
+        (url) => {
+          const path = new URL(url).pathname;
+          return path !== "/consent" && !path.startsWith("/__human-pages__/");
+        },
+        { timeout: 2000, waitUntil: "commit" },
+      ),
+    ]),
+  ).pipe(Effect.ignore);
   return {
-    statusText: await optionalText(page.locator("#status")).catch(() => null),
+    statusText: yield* optionalText(page.locator("#status")).pipe(
+      Effect.catchDefect(() => Effect.succeed(null)),
+    ),
     authRequestPath: new URL(authRequest.url()).pathname,
     authRequestMethod: authRequest.method(),
     authRequestBody: authRequest.postData(),
   };
-}
+});
 
-async function focusedControl(page: Page) {
+const focusedControl = Effect.fn("focusedControl")(function* (page: Page) {
   const focused = page.locator(":focus");
-  const styles = await focused.evaluate((element) => {
-    const computed = getComputedStyle(element);
-    return { outlineStyle: computed.outlineStyle, outlineWidth: computed.outlineWidth };
-  });
-  const box = await focused.boundingBox();
+  const styles = yield* Effect.promise(() =>
+    focused.evaluate((element) => {
+      const computed = getComputedStyle(element);
+      return { outlineStyle: computed.outlineStyle, outlineWidth: computed.outlineWidth };
+    }),
+  );
+  const box = yield* Effect.promise(() => focused.boundingBox());
   return {
-    keyboardFocusId: await focused.getAttribute("id"),
-    keyboardFocusText: (await focused.textContent())?.trim() ?? null,
+    keyboardFocusId: yield* Effect.promise(() => focused.getAttribute("id")),
+    keyboardFocusText: (yield* Effect.promise(() => focused.textContent()))?.trim() ?? null,
     ...styles,
     controlHeight: box?.height ?? null,
   };
-}
+});
 
-async function buttonObservations(page: Page) {
+const buttonObservations = Effect.fn("buttonObservations")(function* (page: Page) {
   const observations = [];
-  for (const button of await page.locator("button").all()) {
+  for (const button of yield* Effect.promise(() => page.locator("button").all())) {
     observations.push({
-      name: (await button.textContent())?.trim() ?? "",
-      type: (await button.getAttribute("type")) ?? "",
-      formAction: (await button.getAttribute("formaction")) ?? "",
+      name: (yield* Effect.promise(() => button.textContent()))?.trim() ?? "",
+      type: (yield* Effect.promise(() => button.getAttribute("type"))) ?? "",
+      formAction: (yield* Effect.promise(() => button.getAttribute("formaction"))) ?? "",
     });
   }
   return observations;
-}
+});
 
 function requiredPreviewFrame(page: Page): Frame {
   const frame = page.frames().find((candidate) => isPreviewPath(new URL(candidate.url()).pathname));
@@ -411,13 +458,17 @@ function requiredPreviewFrame(page: Page): Frame {
   return frame;
 }
 
-async function optionalText(locator: Locator): Promise<string | null> {
-  return (await locator.count()) === 0 ? null : await locator.first().textContent();
-}
+const optionalText = Effect.fn("optionalText")(function* (locator: Locator) {
+  return (yield* Effect.promise(() => locator.count())) === 0
+    ? null
+    : yield* Effect.promise(() => locator.first().textContent());
+});
 
-async function optionalBoundingBox(locator: Locator) {
-  return (await locator.count()) === 0 ? null : await locator.first().boundingBox();
-}
+const optionalBoundingBox = Effect.fn("optionalBoundingBox")(function* (locator: Locator) {
+  return (yield* Effect.promise(() => locator.count())) === 0
+    ? null
+    : yield* Effect.promise(() => locator.first().boundingBox());
+});
 
 function fixturePath(fixture: HumanPageBrowserFixture, search: string | undefined): string {
   const path = `${FIXTURE_PREFIX}/${fixture}`;
@@ -472,8 +523,18 @@ function worldUrl(url: URL): URL {
   return new URL(`${url.pathname}${url.search}`, APPLICATION_URL);
 }
 
-async function worldRequestInit(request: Request, world: World): Promise<RequestInit> {
-  const headers = new Headers(request.headers);
+// Rewrites the browser's request for the world: its origin, referer and session cookie.
+const worldRequestInit = Effect.fn("worldRequestInit")(function* (
+  request: HumanPageFixtureRequest,
+  url: URL,
+  world: World,
+) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (typeof value === "string") {
+      headers.set(name, value);
+    }
+  }
   headers.set("host", APPLICATION_URL.host);
   if (headers.has("origin")) {
     headers.set("origin", APPLICATION_ORIGIN);
@@ -485,34 +546,34 @@ async function worldRequestInit(request: Request, world: World): Promise<Request
       headers.set("referer", new URL(`${parsed.pathname}${parsed.search}`, APPLICATION_URL).href);
     }
   }
-  const pathname = new URL(request.url).pathname;
-  if (pathname === "/api/auth/sign-in/email") {
+  if (url.pathname === "/api/auth/sign-in/email") {
     headers.delete("cookie");
-  } else if (pathname === "/api/auth/oauth2/consent") {
+  } else if (url.pathname === "/api/auth/oauth2/consent") {
     headers.set("cookie", world.sessionCookie);
   } else {
     headers.set("cookie", cookieHeaderForWorld(headers.get("cookie"), world.sessionCookie));
   }
-  const init: RequestInit = {
-    method: request.method,
-    headers,
-  };
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = Buffer.from(await request.arrayBuffer());
+  const method = request.method ?? "GET";
+  const init: RequestInit = { method, headers };
+  if (method !== "GET" && method !== "HEAD") {
+    const chunks = yield* Effect.promise(() => Array.fromAsync<Buffer | string>(request));
+    init.body = Buffer.concat(
+      chunks.map((chunk) => (typeof chunk === "string" ? Buffer.from(chunk) : chunk)),
+    );
   }
   return init;
-}
+});
 
 function requestUrl(request: HumanPageFixtureRequest): URL | null {
   const host = request.headers.host;
   return host === undefined ? null : new URL(request.url ?? "/", `http://${host}`);
 }
 
-async function writeWorldResponse(
+const writeWorldResponse = Effect.fn("writeWorldResponse")(function* (
   response: HumanPageFixtureResponse,
   webResponse: Response,
   browserOrigin: string,
-): Promise<void> {
+) {
   response.statusCode = webResponse.status;
   const location = webResponse.headers.get("location");
   webResponse.headers.forEach((value, name) => {
@@ -528,8 +589,8 @@ async function writeWorldResponse(
   for (const cookie of cookies) {
     response.appendHeader("set-cookie", rewriteSetCookie(cookie));
   }
-  response.end(await webResponse.text());
-}
+  response.end(yield* readText(webResponse));
+});
 
 function rewriteLocation(location: string, browserOrigin: string): string {
   if (!location.startsWith(APPLICATION_ORIGIN)) {
@@ -604,37 +665,28 @@ function writeStatus(response: HumanPageFixtureResponse, status: number): void {
   response.end();
 }
 
-let sharedWorld: Promise<PreparedBrowserWorld> | null = null;
-
-function preparedBrowserWorld(): Promise<PreparedBrowserWorld> {
-  if (sharedWorld === null) {
-    sharedWorld = createPreparedBrowserWorld();
-  }
-  return sharedWorld;
-}
-
-async function createPreparedBrowserWorld(): Promise<PreparedBrowserWorld> {
-  const world = await createWorld();
-  const mailbox = await seedMailbox(world, "inbox", HOSTILE_FROM);
+const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(function* () {
+  const world = yield* createWorld();
+  const mailbox = yield* seedMailbox(world, "inbox", HOSTILE_FROM);
   const principal = approvalPrincipal();
-  const pending = await submitApproval(world, principal, mailbox.id, {
+  const pending = yield* submitApproval(world, principal, mailbox.id, {
     subject: HOSTILE_SUBJECT,
     html: PREVIEW_HTML_SOURCE,
   });
-  const accepted = await submitApproval(world, principal, mailbox.id, { subject: "Accepted" });
-  const failed = await submitApproval(world, principal, mailbox.id, { subject: "Failed" });
-  const queued = await submitApproval(world, principal, mailbox.id, { subject: "Queued" });
-  const denied = await submitApproval(world, principal, mailbox.id, { subject: "Denied" });
-  await world.setTime(EXPIRED_SUBMITTED_AT);
-  const expired = await submitApproval(world, principal, mailbox.id, { subject: "Expired" });
-  await world.setTime(NOW);
-  await approveAndAccept(world, accepted);
-  await approveAndFail(world, failed);
-  await decide(world, denied.token, "denied");
-  await expire(world, expired.token);
+  const accepted = yield* submitApproval(world, principal, mailbox.id, { subject: "Accepted" });
+  const failed = yield* submitApproval(world, principal, mailbox.id, { subject: "Failed" });
+  const queued = yield* submitApproval(world, principal, mailbox.id, { subject: "Queued" });
+  const denied = yield* submitApproval(world, principal, mailbox.id, { subject: "Denied" });
+  yield* world.setTime(EXPIRED_SUBMITTED_AT);
+  const expired = yield* submitApproval(world, principal, mailbox.id, { subject: "Expired" });
+  yield* world.setTime(NOW);
+  yield* approveAndAccept(world, accepted);
+  yield* approveAndFail(world, failed);
+  yield* decide(world, denied.token, "denied");
+  yield* expire(world, expired.token);
   // Approved last, so no pass sends it: its page shows the approved message as sending.
-  await decide(world, queued.token, "approved");
-  const consentPath = await consentAuthorizePath(world);
+  yield* decide(world, queued.token, "approved");
+  const consentPath = yield* consentAuthorizePath(world);
   return {
     world,
     paths: {
@@ -648,8 +700,11 @@ async function createPreparedBrowserWorld(): Promise<PreparedBrowserWorld> {
       expired: approvalPath(expired.token),
       unknown: UNKNOWN_APPROVAL_PATH,
     },
-  };
-}
+  } satisfies PreparedBrowserWorld;
+});
+
+// One world serves both the fixture middleware and the browser command, built on first use.
+const preparedBrowserWorld = Effect.runSync(Effect.cached(createPreparedBrowserWorld()));
 
 type BrowserComposeDraft = {
   intent: "compose";
@@ -683,7 +738,7 @@ function approvalPrincipal(): Principal {
   };
 }
 
-async function submitApproval(
+const submitApproval = Effect.fn("submitApproval")(function* (
   world: World,
   principal: Principal,
   mailboxId: string,
@@ -691,7 +746,7 @@ async function submitApproval(
 ) {
   const draft: BrowserComposeDraft = {
     intent: "compose",
-    requestId: Schema.decodeSync(SubmissionRequestId)(crypto.randomUUID()),
+    requestId: yield* Schema.decodeEffect(SubmissionRequestId)(yield* world.run(randomId)),
     fromAddressId: mailboxId,
     to: [
       {
@@ -709,72 +764,83 @@ async function submitApproval(
   if (input.html !== undefined) {
     draft.html = input.html;
   }
-  const job = await world.run(
-    submitMessage(world.deps, principal, Schema.decodeSync(SubmitMessagePayload)(draft)),
-  );
+  const payload = yield* Schema.decodeEffect(SubmitMessagePayload)(draft);
+  const job = yield* world.run(submitMessage(world.deps, principal, payload));
   if (job.state !== "waiting_approval") {
-    throw new Error("expected a parked approval job");
+    return yield* Effect.die("expected a parked approval job");
   }
-  return { job, token: await notifiedApprovalToken(world) };
-}
+  return { job, token: yield* notifiedApprovalToken(world) };
+});
 
 // Sends the message's approval notification through the store's due-work pass and reads the review
 // token from the email, as the operator would.
-async function notifiedApprovalToken(world: World): Promise<string> {
-  const mails = await runDueWorkPass(world, { mcpPolicy: APPROVAL_POLICY });
+const notifiedApprovalToken = Effect.fn("notifiedApprovalToken")(function* (world: World) {
+  const mails = yield* runDueWorkPass(world, { mcpPolicy: APPROVAL_POLICY });
   const token = /\/approvals\/([0-9a-f]{64})/u.exec(mails.at(-1)?.text ?? "")?.[1];
   if (token === undefined) {
-    throw new Error("expected an approval notification email");
+    return yield* Effect.die("expected an approval notification email");
   }
   return token;
-}
+});
 
-async function decide(world: World, token: string, decision: "approved" | "denied") {
-  const tokenHash = await world.run(hashApprovalToken(Schema.decodeSync(ApprovalToken)(token)));
-  const claimed = await Effect.runPromise(
-    world.account.decideApproval({ tokenHash, decision, nowIso: NOW }),
-  );
+const decide = Effect.fn("decide")(function* (
+  world: World,
+  token: string,
+  decision: "approved" | "denied",
+) {
+  const approvalToken = yield* Schema.decodeEffect(ApprovalToken)(token);
+  const tokenHash = yield* world.run(hashApprovalToken(approvalToken));
+  const claimed = yield* world.account.decideApproval({ tokenHash, decision, nowIso: NOW });
   if (claimed.kind !== "claimed") {
-    throw new Error("expected the approval decision to be claimed");
+    return yield* Effect.die("expected the approval decision to be claimed");
   }
-}
+});
 
-async function approveAndAccept(world: World, submitted: { readonly token: string }) {
-  await decide(world, submitted.token, "approved");
-  await runDueWorkPass(world, {
+const approveAndAccept = Effect.fn("approveAndAccept")(function* (
+  world: World,
+  submitted: { readonly token: string },
+) {
+  yield* decide(world, submitted.token, "approved");
+  yield* runDueWorkPass(world, {
     mcpPolicy: APPROVAL_POLICY,
     outcome: {
       kind: "accepted",
       providerMessageId: "provider-browser",
-      rfcMessageId: Schema.decodeSync(NormalizedRfcMessageId)("<provider-browser@example.test>"),
+      rfcMessageId: yield* Schema.decodeEffect(NormalizedRfcMessageId)(
+        "<provider-browser@example.test>",
+      ),
     },
   });
-}
+});
 
-async function approveAndFail(world: World, submitted: { readonly token: string }) {
-  await decide(world, submitted.token, "approved");
-  await runDueWorkPass(world, {
+const approveAndFail = Effect.fn("approveAndFail")(function* (
+  world: World,
+  submitted: { readonly token: string },
+) {
+  yield* decide(world, submitted.token, "approved");
+  yield* runDueWorkPass(world, {
     mcpPolicy: APPROVAL_POLICY,
     outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED" },
   });
-}
+});
 
-async function expire(world: World, token: string) {
-  const tokenHash = await world.run(hashApprovalToken(Schema.decodeSync(ApprovalToken)(token)));
-  await runDueWorkPass(world, { at: EXPIRE_AT, mcpPolicy: APPROVAL_POLICY });
-  const expired = await Effect.runPromise(world.account.lookupApprovalByTokenHash(tokenHash));
+const expire = Effect.fn("expire")(function* (world: World, token: string) {
+  const approvalToken = yield* Schema.decodeEffect(ApprovalToken)(token);
+  const tokenHash = yield* world.run(hashApprovalToken(approvalToken));
+  yield* runDueWorkPass(world, { at: EXPIRE_AT, mcpPolicy: APPROVAL_POLICY });
+  const expired = yield* world.account.lookupApprovalByTokenHash(tokenHash);
   if (expired.kind !== "found" || expired.approval.state !== "expired") {
-    throw new Error("expected the approval to expire");
+    return yield* Effect.die("expected the approval to expire");
   }
-}
+});
 
-async function consentAuthorizePath(world: World): Promise<string> {
-  const registered = await registerMcpClient(world, { label: "Browser consent" });
+const consentAuthorizePath = Effect.fn("consentAuthorizePath")(function* (world: World) {
+  const registered = yield* registerMcpClient(world, { label: "Browser consent" });
   const verifier = "umail-browser-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
-  const challenge = Buffer.from(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
-  ).toString("base64url");
-  const authorize = await world.fetch(
+  const challenge = Encoding.encodeBase64Url(
+    yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+  );
+  const authorize = yield* world.request(
     `http://umail.test/api/auth/oauth2/authorize?${new URLSearchParams({
       response_type: "code",
       client_id: registered.clientId,
@@ -789,11 +855,11 @@ async function consentAuthorizePath(world: World): Promise<string> {
   );
   const location = authorize.headers.get("location");
   if (location === null) {
-    throw new Error("OAuth authorization did not return a consent location");
+    return yield* Effect.die("OAuth authorization did not return a consent location");
   }
   const consent = new URL(location, APPLICATION_URL);
   return `${consent.pathname}${consent.search}`;
-}
+});
 
 function approvalPath(token: string): string {
   return `/approvals/${token}`;
@@ -832,28 +898,6 @@ function parseSessionCookie(sessionCookie: string, pageUrl: string) {
     value,
     url: `${parsedUrl.protocol}//${parsedUrl.host}/`,
   };
-}
-
-async function incomingToWebRequest(request: HumanPageFixtureRequest, url: URL): Promise<Request> {
-  const chunks: Array<Buffer> = [];
-  for await (const chunk of request) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  const body = Buffer.concat(chunks);
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (typeof value === "string") {
-      headers.set(name, value);
-    }
-  }
-  const init: RequestInit = {
-    method: request.method ?? "GET",
-    headers,
-  };
-  if (body.byteLength > 0) {
-    init.body = body;
-  }
-  return new Request(url.href, init);
 }
 
 function pageOwnedScriptNonce(): string | null {

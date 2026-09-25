@@ -2,16 +2,18 @@
 
 import { parseMailboxAddress } from "@umail/api-contract";
 import { env, reset } from "cloudflare:test";
+import { beforeEach, expect, layer } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import { beforeEach, describe, expect, it } from "vitest";
+import * as Exit from "effect/Exit";
 
 import { createMailHtmlPolicy } from "../../src/mail/html-policy.ts";
 import type { MessageConflictError } from "../../src/account/errors.ts";
 import { inboundMessageId } from "../../src/mail/archive.ts";
-import { sha256Hex } from "../../src/crypto.ts";
+import { sha256Hex, WebCrypto } from "../../src/crypto.ts";
 import { INBOUND_MIME_LIMITS, rawObjectKey } from "../../src/mail/policy.ts";
 import { indexReceipt, type IndexDeps } from "../../src/mail/process-index.ts";
-import { effectAccount, effectBucket, runWithCrypto } from "./fakes.ts";
+import { effectAccount, effectBucket } from "./fakes.ts";
 import { foldedBase64Fixture } from "./mail-capacity-fixtures.ts";
 import type { AccountStoreTestHost } from "../account/worker-host.ts";
 
@@ -26,145 +28,168 @@ const INBOX = "inbox@umail.example.com";
 const SENDER = "sender@example.com";
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
 
-describe("index consumer", () => {
-  beforeEach(async () => {
-    await reset();
-  });
+layer(WebCrypto)("index consumer", (it) => {
+  beforeEach(() => reset());
 
-  it("indexes a registered receipt with its attachment", async () => {
-    const world = await createWorld("index-ok");
-    const fixture = foldedBase64Fixture();
-    if (fixture.expected.kind !== "indexed") {
-      throw new Error("expected the folded attachment fixture to be indexed");
-    }
-    const receiptId = await archiveRegistered(world, fixture.raw);
+  it.effect("indexes a registered receipt with its attachment", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-ok");
+      const fixture = indexedFoldedBase64Fixture();
+      const receiptId = yield* archiveRegistered(world, fixture.raw);
 
-    await run(world, receiptId);
+      yield* run(world, receiptId);
 
-    expect((await world.stub.getInboundReceipt(receiptId))?.workState).toBe("indexed");
-    const listed = await world.stub.listMessageSummaries({ mailboxScope: "all" });
-    expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
-    expect(listed.items[0]?.subject).toBe(fixture.expected.subject);
-    const expectedAttachment = fixture.expected.attachments[0];
-    const stored = await testEnv.ARCHIVE.get(`attachments/${receiptId}/0`);
-    const bytes = new Uint8Array((await stored?.arrayBuffer()) ?? new ArrayBuffer(0));
-    expect(bytes.byteLength).toBe(expectedAttachment?.byteLength);
-    expect(await runWithCrypto(sha256Hex(bytes))).toBe(expectedAttachment?.sha256);
-  });
+      expect((yield* receiptOf(world, receiptId))?.workState).toBe("indexed");
+      const listed = yield* listMessages(world);
+      expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
+      expect(listed.items[0]?.subject).toBe(fixture.expected.subject);
+      const expectedAttachment = fixture.expected.attachments[0];
+      const stored = yield* effectBucket(testEnv.ARCHIVE).get(`attachments/${receiptId}/0`);
+      const bytes = new Uint8Array(
+        stored === null ? new ArrayBuffer(0) : yield* stored.arrayBuffer(),
+      );
+      expect(bytes.byteLength).toBe(expectedAttachment?.byteLength);
+      expect(yield* sha256Hex(bytes)).toBe(expectedAttachment?.sha256);
+    }),
+  );
 
-  it("acks a duplicate delivery without storing a second message", async () => {
-    const world = await createWorld("index-duplicate");
-    const receiptId = await archiveRegistered(world, plainTextEml("dup"));
+  it.effect("acks a duplicate delivery without storing a second message", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-duplicate");
+      const receiptId = yield* archiveRegistered(world, plainTextEml("dup"));
 
-    await run(world, receiptId);
-    await run(world, receiptId);
+      yield* run(world, receiptId);
+      yield* run(world, receiptId);
 
-    const listed = await world.stub.listMessageSummaries({ mailboxScope: "all" });
-    expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
-  });
+      const listed = yield* listMessages(world);
+      expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
+    }),
+  );
 
-  it("stores one message when two deliveries of a receipt run concurrently", async () => {
-    const world = await createWorld("index-concurrent");
-    const receiptId = await archiveRegistered(world, plainTextEml("race"));
+  it.effect("stores one message when two deliveries of a receipt run concurrently", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-concurrent");
+      const receiptId = yield* archiveRegistered(world, plainTextEml("race"));
 
-    await Promise.all([run(world, receiptId), run(world, receiptId)]);
+      yield* Effect.all([run(world, receiptId), run(world, receiptId)], { concurrency: 2 });
 
-    expect((await world.stub.getInboundReceipt(receiptId))?.workState).toBe("indexed");
-    const listed = await world.stub.listMessageSummaries({ mailboxScope: "all" });
-    expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
-  });
+      expect((yield* receiptOf(world, receiptId))?.workState).toBe("indexed");
+      const listed = yield* listMessages(world);
+      expect(listed.items.map((message) => message.id)).toEqual([receiptId]);
+    }),
+  );
 
-  it("fails on a raw read error and leaves the receipt ready for a retry", async () => {
-    const world = await createWorld("index-read-fail");
-    const receiptId = await archiveRegistered(world, plainTextEml("read"));
-    const archive = effectBucket(testEnv.ARCHIVE);
+  it.effect("fails on a raw read error and leaves the receipt ready for a retry", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-read-fail");
+      const receiptId = yield* archiveRegistered(world, plainTextEml("read"));
+      const archive = effectBucket(testEnv.ARCHIVE);
 
-    await expect(
-      run(world, receiptId, {
-        archive: { ...archive, get: () => Effect.die(new Error("R2 read failed")) },
-      }),
-    ).rejects.toThrow("R2 read failed");
-    expect((await world.stub.getInboundReceipt(receiptId))?.workState).toBe("ready");
-    expect((await world.stub.listMessageSummaries({ mailboxScope: "all" })).items).toEqual([]);
+      const exit = yield* Effect.exit(
+        run(world, receiptId, {
+          archive: { ...archive, get: () => Effect.die(new Error("R2 read failed")) },
+        }),
+      );
+      expect(Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : "succeeded").toContain(
+        "R2 read failed",
+      );
+      expect((yield* receiptOf(world, receiptId))?.workState).toBe("ready");
+      expect((yield* listMessages(world)).items).toEqual([]);
 
-    await run(world, receiptId);
-    expect((await world.stub.getInboundReceipt(receiptId))?.workState).toBe("indexed");
-  });
+      yield* run(world, receiptId);
+      expect((yield* receiptOf(world, receiptId))?.workState).toBe("indexed");
+    }),
+  );
 
-  it("records a content-policy failure and acks it", async () => {
-    const world = await createWorld("index-policy");
-    const receiptId = await archiveRegistered(world, oversizedHeaderEml());
+  it.effect("records a content-policy failure and acks it", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-policy");
+      const receiptId = yield* archiveRegistered(world, oversizedHeaderEml());
 
-    await run(world, receiptId);
+      yield* run(world, receiptId);
 
-    expect(await world.stub.getInboundReceipt(receiptId)).toMatchObject({
-      workState: "policy_failed",
-      policyError: "parse_failed",
-    });
-    expect((await world.stub.listMessageSummaries({ mailboxScope: "all" })).items).toEqual([]);
-  });
+      expect(yield* receiptOf(world, receiptId)).toMatchObject({
+        workState: "policy_failed",
+        policyError: "parse_failed",
+      });
+      expect((yield* listMessages(world)).items).toEqual([]);
+    }),
+  );
 
-  it("treats a message conflict that arrives as a plain RPC error object as indexed", async () => {
-    const world = await createWorld("index-conflict");
-    const receiptId = await archiveRegistered(world, plainTextEml("conflict"));
-    const account = effectAccount(world.stub);
-    // Alchemy's DO bridge delivers expected errors as plain `{ _tag, ... }` objects.
-    const conflict = { _tag: "MessageConflictError", messageId: receiptId };
+  it.effect("treats a message conflict that arrives as a plain RPC error object as indexed", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld("index-conflict");
+      const receiptId = yield* archiveRegistered(world, plainTextEml("conflict"));
+      const account = effectAccount(world.stub);
+      // Alchemy's DO bridge delivers expected errors as plain `{ _tag, ... }` objects.
+      const conflict = { _tag: "MessageConflictError", messageId: receiptId };
 
-    await expect(
-      run(world, receiptId, {
-        account: {
-          ...account,
-          acceptInbound: () => Effect.fail(conflict as MessageConflictError),
-        },
-      }),
-    ).resolves.toBeUndefined();
-  });
+      expect(
+        yield* run(world, receiptId, {
+          account: {
+            ...account,
+            acceptInbound: () => Effect.fail(conflict as MessageConflictError),
+          },
+        }),
+      ).toBeUndefined();
+    }),
+  );
 });
 
 type World = {
   readonly stub: DurableObjectStub<AccountStoreTestHost>;
 };
 
-async function createWorld(accountName: string): Promise<World> {
+const createWorld = Effect.fn("createWorld")(function* (accountName: string) {
   const stub = testEnv.ACCOUNT_STORE.getByName(accountName);
   const mailbox = parsedInbox();
-  const created = await stub.createAddress(
-    mailbox.localPart,
-    mailbox.domain,
-    "Inbox",
-    TEST_NOW_ISO,
+  const created = yield* Effect.promise(() =>
+    stub.createAddress(mailbox.localPart, mailbox.domain, "Inbox", TEST_NOW_ISO),
   );
   expect(created).not.toBeNull();
   return { stub };
+});
+
+const archiveRegistered = Effect.fn("archiveRegistered")(function* (world: World, raw: Uint8Array) {
+  const digest = yield* sha256Hex(raw);
+  const receiptId = yield* inboundMessageId(digest, { from: SENDER, to: parsedInbox().address });
+  yield* Effect.promise(() => testEnv.ARCHIVE.put(rawObjectKey(digest), raw));
+  yield* Effect.promise(() =>
+    world.stub.registerInboundReceipt({
+      receiptId,
+      envelopeFrom: SENDER,
+      envelopeTo: INBOX,
+      rawKey: rawObjectKey(digest),
+      receivedAt: TEST_NOW_ISO,
+    }),
+  );
+  return receiptId;
+});
+
+function receiptOf(world: World, receiptId: string) {
+  return Effect.promise(() => world.stub.getInboundReceipt(receiptId));
 }
 
-async function archiveRegistered(world: World, raw: Uint8Array): Promise<string> {
-  const digest = await runWithCrypto(sha256Hex(raw));
-  const receiptId = await runWithCrypto(
-    inboundMessageId(digest, { from: SENDER, to: parsedInbox().address }),
-  );
-  await testEnv.ARCHIVE.put(rawObjectKey(digest), raw);
-  await world.stub.registerInboundReceipt({
-    receiptId,
-    envelopeFrom: SENDER,
-    envelopeTo: INBOX,
-    rawKey: rawObjectKey(digest),
-    receivedAt: TEST_NOW_ISO,
-  });
-  return receiptId;
+function listMessages(world: World) {
+  return Effect.promise(() => world.stub.listMessageSummaries({ mailboxScope: "all" }));
 }
 
 function run(world: World, receiptId: string, overrides: Partial<IndexDeps<never>> = {}) {
-  return Effect.runPromise(
-    indexReceipt(receiptId, {
-      archive: effectBucket(testEnv.ARCHIVE),
-      account: effectAccount(world.stub),
-      htmlPolicy: createMailHtmlPolicy(),
-      nowIso: TEST_NOW_ISO,
-      ...overrides,
-    }),
-  );
+  return indexReceipt(receiptId, {
+    archive: effectBucket(testEnv.ARCHIVE),
+    account: effectAccount(world.stub),
+    htmlPolicy: createMailHtmlPolicy(),
+    nowIso: TEST_NOW_ISO,
+    ...overrides,
+  });
+}
+
+function indexedFoldedBase64Fixture() {
+  const fixture = foldedBase64Fixture();
+  if (fixture.expected.kind !== "indexed") {
+    throw new Error("expected the folded attachment fixture to be indexed");
+  }
+  return { raw: fixture.raw, expected: fixture.expected };
 }
 
 function parsedInbox() {

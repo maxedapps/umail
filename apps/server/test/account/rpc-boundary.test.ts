@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { AccountConflictError, isExpectedStoreFailure } from "../../src/account/errors.ts";
 import { createMemoryAccount } from "../api/memory-account-store.ts";

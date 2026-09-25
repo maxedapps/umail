@@ -1,5 +1,5 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
 
 import {
   INBOUND_MIME_LIMITS,
@@ -18,145 +18,162 @@ const RECEIVED_AT = "2025-12-31T23:59:00.000Z";
 const RECEIPT_ID = "in_prepare";
 
 describe("prepareInbound", () => {
-  it("builds the AccountStore write with the sanitizer result", async () => {
-    const prepared = ready(
-      await prepare(plainHtmlEml(INBOX, "<html><body><p>Hi</p></body></html>")),
-    );
+  it.effect("builds the AccountStore write with the sanitizer result", () =>
+    Effect.gen(function* () {
+      const prepared = ready(
+        yield* prepare(plainHtmlEml(INBOX, "<html><body><p>Hi</p></body></html>")),
+      );
 
-    expect(prepared.input).toMatchObject({
-      messageId: RECEIPT_ID,
-      mailboxId: "addr-1",
-      occurredAt: RECEIVED_AT,
-      nowIso: TEST_NOW_ISO,
-      subject: "Hello",
-      htmlBody: expect.stringContaining("<p>Hi</p>"),
-      hasRemoteImages: false,
-      attachments: [],
-    });
-    expect(prepared.attachments).toEqual([]);
-  });
-
-  it("normalizes supported MIME dates and stores null for absent or unparseable dates", async () => {
-    const cases = [
-      {
-        label: "valid offset",
-        dateHeader: "Tue, 25 Aug 2026 12:00:00 +0200",
-        parsedDate: "2026-08-25T10:00:00.000Z",
-      },
-      { label: "absent", dateHeader: null, parsedDate: null },
-      { label: "invalid", dateHeader: "not a date", parsedDate: null },
-    ] as const;
-    for (const fixture of cases) {
-      const prepared = ready(await prepare(datedTextEml(INBOX, fixture.dateHeader)));
-      expect(prepared.input.parsedDate, fixture.label).toBe(fixture.parsedDate);
-      expect(prepared.input.occurredAt, fixture.label).toBe(RECEIVED_AT);
-    }
-  });
-
-  it("passes deterministic attachment metadata to the sanitizer", async () => {
-    const htmlPolicy = new FakeMailHtmlPolicy();
-    htmlPolicy.setOutput("<p>sanitized CID body</p>", true);
-
-    const prepared = ready(await prepare(relatedImageEml(INBOX), htmlPolicy));
-
-    const attachment = prepared.input.attachments?.[0];
-    expect(prepared.input.attachments).toHaveLength(1);
-    expect(attachment).toMatchObject({
-      filename: "logo.png",
-      mimeType: "image/png",
-      r2Key: `attachments/${RECEIPT_ID}/0`,
-      isInline: true,
-    });
-    expect(prepared.attachments.map((upload) => upload.r2Key)).toEqual([attachment?.r2Key]);
-    expect(prepared.input.htmlBody).toBe("<p>sanitized CID body</p>");
-    expect(prepared.input.hasRemoteImages).toBe(true);
-    expect(htmlPolicy.calls.map((call) => call.sanitization)).toEqual([
-      {
+      expect(prepared.input).toMatchObject({
         messageId: RECEIPT_ID,
-        attachments: [{ id: attachment?.id, contentId: "logo@umail", mimeType: "image/png" }],
-      },
-    ]);
-  });
-
-  it.each(["rewrite_failed", "resource_exhausted"] as const)(
-    "indexes the message text-only when the sanitizer fails with %s",
-    async (reason) => {
-      const htmlPolicy = new FakeMailHtmlPolicy();
-      htmlPolicy.fail(reason);
-
-      const prepared = ready(await prepare(alternativeEml(INBOX), htmlPolicy));
-
-      expect(prepared.input.htmlBody).toBeNull();
-      expect(prepared.input.hasRemoteImages).toBe(false);
-      expect(prepared.input.textBody).toContain("Plain part");
-    },
+        mailboxId: "addr-1",
+        occurredAt: RECEIVED_AT,
+        nowIso: TEST_NOW_ISO,
+        subject: "Hello",
+        htmlBody: expect.stringContaining("<p>Hi</p>"),
+        hasRemoteImages: false,
+        attachments: [],
+      });
+      expect(prepared.attachments).toEqual([]);
+    }),
   );
 
-  it("enforces the exact aggregate MIME header boundary", async () => {
-    ready(await prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize)));
-    expect(await prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize + 1))).toEqual(
-      policyFailure("parse_failed"),
-    );
-  });
+  it.effect("normalizes supported MIME dates and stores null for absent or unparseable dates", () =>
+    Effect.gen(function* () {
+      const cases = [
+        {
+          label: "valid offset",
+          dateHeader: "Tue, 25 Aug 2026 12:00:00 +0200",
+          parsedDate: "2026-08-25T10:00:00.000Z",
+        },
+        { label: "absent", dateHeader: null, parsedDate: null },
+        { label: "invalid", dateHeader: "not a date", parsedDate: null },
+      ] as const;
+      for (const fixture of cases) {
+        const prepared = ready(yield* prepare(datedTextEml(INBOX, fixture.dateHeader)));
+        expect(prepared.input.parsedDate, fixture.label).toBe(fixture.parsedDate);
+        expect(prepared.input.occurredAt, fixture.label).toBe(RECEIVED_AT);
+      }
+    }),
+  );
 
-  it("enforces the exact MIME tree-depth boundary", async () => {
-    ready(await prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth)));
-    expect(
-      await prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth + 1)),
-    ).toEqual(policyFailure("parse_failed"));
-  });
+  it.effect("passes deterministic attachment metadata to the sanitizer", () =>
+    Effect.gen(function* () {
+      const htmlPolicy = new FakeMailHtmlPolicy();
+      htmlPolicy.setOutput("<p>sanitized CID body</p>", true);
 
-  it("rejects the PostalMime RFC822 depth marker at the configured boundary", async () => {
-    ready(await prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth)));
-    expect(
-      await prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth + 1)),
-    ).toEqual(policyFailure("rfc822_depth"));
-  });
+      const prepared = ready(yield* prepare(relatedImageEml(INBOX), htmlPolicy));
 
-  it("rejects a post-sanitizer body that exceeds the persisted message budget", async () => {
-    const allowed = new FakeMailHtmlPolicy();
-    allowed.setOutput("ok");
-    ready(await prepare(relatedImageEml(INBOX), allowed));
+      const attachment = prepared.input.attachments?.[0];
+      expect(prepared.input.attachments).toHaveLength(1);
+      expect(attachment).toMatchObject({
+        filename: "logo.png",
+        mimeType: "image/png",
+        r2Key: `attachments/${RECEIPT_ID}/0`,
+        isInline: true,
+      });
+      expect(prepared.attachments.map((upload) => upload.r2Key)).toEqual([attachment?.r2Key]);
+      expect(prepared.input.htmlBody).toBe("<p>sanitized CID body</p>");
+      expect(prepared.input.hasRemoteImages).toBe(true);
+      expect(htmlPolicy.calls.map((call) => call.sanitization)).toEqual([
+        {
+          messageId: RECEIPT_ID,
+          attachments: [{ id: attachment?.id, contentId: "logo@umail", mimeType: "image/png" }],
+        },
+      ]);
+    }),
+  );
 
-    const exceeded = new FakeMailHtmlPolicy();
-    exceeded.setOutput("x".repeat(MAX_PERSISTED_MESSAGE_BYTES + 1));
-    expect(await prepare(relatedImageEml(INBOX), exceeded)).toEqual(
-      policyFailure("message_budget"),
-    );
-  });
+  it.effect.each(["rewrite_failed", "resource_exhausted"] as const)(
+    "indexes the message text-only when the sanitizer fails with %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const htmlPolicy = new FakeMailHtmlPolicy();
+        htmlPolicy.fail(reason);
 
-  it("enforces the exact attachment-count boundary", async () => {
-    const allowed = ready(await prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS)));
-    expect(allowed.input.attachments).toHaveLength(MAX_ATTACHMENTS);
-    expect(new Set(allowed.attachments.map((upload) => upload.r2Key)).size).toBe(MAX_ATTACHMENTS);
+        const prepared = ready(yield* prepare(alternativeEml(INBOX), htmlPolicy));
 
-    expect(await prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS + 1))).toEqual(
-      policyFailure("attachment_cap"),
-    );
-  });
+        expect(prepared.input.htmlBody).toBeNull();
+        expect(prepared.input.hasRemoteImages).toBe(false);
+        expect(prepared.input.textBody).toContain("Plain part");
+      }),
+  );
 
-  it("keeps raw threading headers and parsed contacts", async () => {
-    const prepared = ready(await prepare(threadedEml(INBOX)));
+  it.effect("enforces the exact aggregate MIME header boundary", () =>
+    Effect.gen(function* () {
+      ready(yield* prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize)));
+      expect(yield* prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize + 1))).toEqual(
+        policyFailure("parse_failed"),
+      );
+    }),
+  );
 
-    expect(prepared.input.rfcMessageId).toBe("<child@example.com>");
-    expect(prepared.input.inReplyToHeader).toBe("<parent@example.com>");
-    expect(prepared.input.referencesHeader).toBe("<root@example.com> <parent@example.com>");
-    expect(prepared.input.from?.map((contact) => contact.address)).toEqual([SENDER]);
-    expect(prepared.input.replyTo?.map((contact) => contact.address)).toEqual([
-      "replies@example.com",
-    ]);
-    expect(prepared.input.to?.map((contact) => contact.address)).toEqual([INBOX]);
-    expect(prepared.input.cc?.map((contact) => contact.address)).toEqual(["cc@example.com"]);
-  });
+  it.effect("enforces the exact MIME tree-depth boundary", () =>
+    Effect.gen(function* () {
+      ready(yield* prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth)));
+      expect(
+        yield* prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth + 1)),
+      ).toEqual(policyFailure("parse_failed"));
+    }),
+  );
+
+  it.effect("rejects the PostalMime RFC822 depth marker at the configured boundary", () =>
+    Effect.gen(function* () {
+      ready(yield* prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth)));
+      expect(
+        yield* prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth + 1)),
+      ).toEqual(policyFailure("rfc822_depth"));
+    }),
+  );
+
+  it.effect("rejects a post-sanitizer body that exceeds the persisted message budget", () =>
+    Effect.gen(function* () {
+      const allowed = new FakeMailHtmlPolicy();
+      allowed.setOutput("ok");
+      ready(yield* prepare(relatedImageEml(INBOX), allowed));
+
+      const exceeded = new FakeMailHtmlPolicy();
+      exceeded.setOutput("x".repeat(MAX_PERSISTED_MESSAGE_BYTES + 1));
+      expect(yield* prepare(relatedImageEml(INBOX), exceeded)).toEqual(
+        policyFailure("message_budget"),
+      );
+    }),
+  );
+
+  it.effect("enforces the exact attachment-count boundary", () =>
+    Effect.gen(function* () {
+      const allowed = ready(yield* prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS)));
+      expect(allowed.input.attachments).toHaveLength(MAX_ATTACHMENTS);
+      expect(new Set(allowed.attachments.map((upload) => upload.r2Key)).size).toBe(MAX_ATTACHMENTS);
+
+      expect(yield* prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS + 1))).toEqual(
+        policyFailure("attachment_cap"),
+      );
+    }),
+  );
+
+  it.effect("keeps raw threading headers and parsed contacts", () =>
+    Effect.gen(function* () {
+      const prepared = ready(yield* prepare(threadedEml(INBOX)));
+
+      expect(prepared.input.rfcMessageId).toBe("<child@example.com>");
+      expect(prepared.input.inReplyToHeader).toBe("<parent@example.com>");
+      expect(prepared.input.referencesHeader).toBe("<root@example.com> <parent@example.com>");
+      expect(prepared.input.from?.map((contact) => contact.address)).toEqual([SENDER]);
+      expect(prepared.input.replyTo?.map((contact) => contact.address)).toEqual([
+        "replies@example.com",
+      ]);
+      expect(prepared.input.to?.map((contact) => contact.address)).toEqual([INBOX]);
+      expect(prepared.input.cc?.map((contact) => contact.address)).toEqual(["cc@example.com"]);
+    }),
+  );
 });
 
 function prepare(raw: Uint8Array, htmlPolicy = new FakeMailHtmlPolicy()) {
-  return Effect.runPromise(
-    prepareInbound(
-      raw.slice().buffer,
-      { messageId: RECEIPT_ID, mailboxId: "addr-1", occurredAt: RECEIVED_AT, nowIso: TEST_NOW_ISO },
-      htmlPolicy,
-    ),
+  return prepareInbound(
+    raw.slice().buffer,
+    { messageId: RECEIPT_ID, mailboxId: "addr-1", occurredAt: RECEIVED_AT, nowIso: TEST_NOW_ISO },
+    htmlPolicy,
   );
 }
 

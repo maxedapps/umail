@@ -5,7 +5,7 @@ import {
   type PrincipalSendMode,
 } from "@umail/api-contract";
 import { env, runInDurableObject } from "cloudflare:test";
-import * as Encoding from "effect/Encoding";
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -38,24 +38,29 @@ export function taggedName(cause: unknown): string | undefined {
 export function failureOf(
   store: DurableObjectStub<AccountStoreTestHost>,
   call: (host: AccountStoreTestHost) => unknown,
-): Promise<unknown> {
-  return runInDurableObject(store, async (host: AccountStoreTestHost) => {
-    try {
-      await call(host);
-    } catch (cause) {
-      return cause;
-    }
-    return undefined;
-  });
+) {
+  return Effect.promise(() =>
+    runInDurableObject(store, (host: AccountStoreTestHost) =>
+      Promise.resolve()
+        .then(() => call(host))
+        .then(
+          () => undefined,
+          (cause: unknown) => cause,
+        ),
+    ),
+  );
 }
 
+let approvalSequence = 0;
+
 // Every submit carries approval material; the store keeps it only when the job needs approval.
-// Account specs decide by hash, so a random hash stands in for a real token's.
+// Account specs decide by hash, so a unique fixed hash stands in for a real token's.
 export function approvalMaterial(expiresAt: string) {
+  approvalSequence += 1;
   return {
-    approvalId: crypto.randomUUID(),
+    approvalId: `approval-${approvalSequence}`,
     tokenHash: Schema.decodeSync(ApprovalTokenHash)(
-      Encoding.encodeHex(crypto.getRandomValues(new Uint8Array(32))),
+      approvalSequence.toString(16).padStart(64, "0"),
     ),
     expiresAt,
   };

@@ -224,8 +224,8 @@ layer(WorkerServices)("auth provisioning", (it) => {
     "signs in a mixed-case operator email through Better Auth using the credential issuer mapping",
     () =>
       Effect.gen(function* () {
-        const mixedCaseEmail = Schema.decodeSync(ExternalMailAddress)("Admin@example.com");
-        const lookupEmail = Schema.decodeSync(ExternalMailAddress)("admin@example.com");
+        const mixedCaseEmail = yield* Schema.decodeEffect(ExternalMailAddress)("Admin@example.com");
+        const lookupEmail = yield* Schema.decodeEffect(ExternalMailAddress)("admin@example.com");
         const db = new MemoryD1();
         yield* provision(db, { ...provisionRequest("mixed-case"), operatorEmail: mixedCaseEmail });
         expect(yield* query(db, "SELECT email FROM user")).toEqual([{ email: lookupEmail }]);
@@ -383,16 +383,23 @@ function betterAuthFor(db: MemoryD1) {
   );
 }
 
-function signIn(db: MemoryD1, email: string) {
-  return Effect.flatMap(betterAuthFor(db), (auth) =>
-    Effect.promise(() =>
-      auth.handler(
-        new Request("http://umail.test/api/auth/sign-in/email", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password: OPERATOR_PASSWORD }),
-        }),
-      ),
+const SignInBody = Schema.fromJsonString(
+  Schema.Struct({ email: Schema.String, password: Schema.String }),
+);
+
+const signIn = Effect.fn("signIn")(function* (db: MemoryD1, email: string) {
+  const auth = yield* betterAuthFor(db);
+  const body = yield* Schema.encodeEffect(SignInBody)({
+    email,
+    password: OPERATOR_PASSWORD,
+  });
+  return yield* Effect.promise(() =>
+    auth.handler(
+      new Request("http://umail.test/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }),
     ),
   );
-}
+});

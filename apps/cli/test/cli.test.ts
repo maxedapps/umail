@@ -1,16 +1,15 @@
 import { inspect } from "node:util";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { ApprovalToken } from "@umail/api-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it } from "@effect/vitest";
-import { describe, expect } from "vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
@@ -55,7 +54,8 @@ const testCredentialStore = {
     scope: "umail:access offline_access",
     accessToken: "test-oauth-access-token",
     refreshToken: "test-oauth-refresh-token",
-    expiresAt: Date.now() + 3_600_000,
+    // An hour after the TestClock's start at the epoch.
+    expiresAt: 3_600_000,
   }),
   write: () => Effect.void,
   remove: Effect.void,
@@ -63,7 +63,7 @@ const testCredentialStore = {
 } satisfies OAuthCredentialStoreService;
 
 const testScheduler = {
-  now: Effect.sync(() => Date.now()),
+  now: Clock.currentTimeMillis,
   sleep: () => Effect.void,
 } satisfies OAuthSchedulerService;
 
@@ -188,6 +188,8 @@ const messagePage = {
   nextCursor: "next-message-cursor",
 };
 
+const JsonString = Schema.fromJsonString(Schema.Json);
+
 function jsonBody(request: HttpClientRequest.HttpClientRequest) {
   if (request.body._tag === "Uint8Array") {
     return new TextDecoder().decode(request.body.body);
@@ -199,6 +201,18 @@ function jsonResponse(value: Json) {
   return new Response(JSON.stringify(value), {
     headers: { "content-type": "application/json" },
   });
+}
+
+const SubmittedRequest = Schema.fromJsonString(Schema.Struct({ requestId: Schema.String }));
+
+// Echoes the submitted request id back in the job, as the server does.
+function submissionResponse(request: HttpClientRequest.HttpClientRequest) {
+  const body = jsonBody(request);
+  const requestId =
+    body === undefined
+      ? outboundJob.requestId
+      : Schema.decodeSync(SubmittedRequest)(body).requestId;
+  return jsonResponse({ ...outboundJob, requestId });
 }
 
 function defaultResponse(request: HttpClientRequest.HttpClientRequest, url: URL) {
@@ -224,10 +238,7 @@ function defaultResponse(request: HttpClientRequest.HttpClientRequest, url: URL)
     return jsonResponse(threadDetail);
   }
   if (url.pathname === "/submissions") {
-    const body = jsonBody(request);
-    const parsed = body === undefined ? outboundJob : JSON.parse(body);
-    const requestId = Schema.decodeUnknownSync(Schema.String)(parsed.requestId);
-    return jsonResponse({ ...outboundJob, requestId });
+    return submissionResponse(request);
   }
   if (url.pathname === "/jobs") {
     return jsonResponse({ items: [outboundJob], nextCursor: null });
@@ -270,27 +281,6 @@ const unusedApprovalTokenSource = {
 
 function cliTestLayer() {
   return Layer.mergeAll(NodeServices.layer, Layer.fresh(TestConsole.layer));
-}
-
-function runDispatch(
-  argv: ReadonlyArray<string>,
-  env: CliEnv,
-  httpClient: HttpClient.HttpClient,
-  tokenSource: ApprovalTokenSourceService = unusedApprovalTokenSource,
-  credentialStore: OAuthCredentialStoreService = testCredentialStore,
-) {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const captured = yield* runProgram(argv, env, httpClient, tokenSource, credentialStore);
-      if (Exit.isFailure(captured.outcome)) {
-        return yield* Effect.failCause(captured.outcome.cause);
-      }
-      if (captured.stdout.length === 0) {
-        return yield* Effect.die("Expected JSON command output");
-      }
-      return JSON.parse(captured.stdout.join("\n"));
-    }),
-  );
 }
 
 function runProgram(
@@ -337,8 +327,13 @@ function dispatchEffect(
     if (captured.stdout.length === 0) {
       return yield* Effect.die("Expected JSON command output");
     }
-    return JSON.parse(captured.stdout.join("\n"));
+    return yield* Schema.decodeEffect(JsonString)(captured.stdout.join("\n"));
   });
+}
+
+// Decodes the JSON body the CLI sent with a captured request.
+function requestJson(request: CapturedRequest | undefined) {
+  return Schema.decodeEffect(JsonString)(request?.body ?? "");
 }
 
 function approvalRedirectResponse(state: "approved" | "denied") {
@@ -418,296 +413,315 @@ function serializeApprovalFailureCapture(captured: ApprovalFailureCapture): stri
   return JSON.stringify(captured);
 }
 
-describe("retained CLI dispatch", () => {
-  it("dispatches every address and sending-identity operation to root routes", async () => {
-    const { captured, httpClient } = capturingClient();
+layer(NodeServices.layer)("retained CLI dispatch", (it) => {
+  it.effect("dispatches every address and sending-identity operation to root routes", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
 
-    await runDispatch(["addresses", "list"], testEnv, httpClient);
-    await runDispatch(
-      ["addresses", "create", "--local-part", "inbox", "--display-name", "Inbox"],
-      testEnv,
-      httpClient,
-    );
-    await runDispatch(["addresses", "get", "--id", "address-1"], testEnv, httpClient);
-    await runDispatch(
-      ["addresses", "update", "--id", "address-1", "--display-name", "Team Inbox"],
-      testEnv,
-      httpClient,
-    );
-    await runDispatch(["addresses", "enable", "--id", "address-1"], testEnv, httpClient);
-    await runDispatch(["addresses", "disable", "--id", "address-1"], testEnv, httpClient);
-    const identities = await runDispatch(["sending-identities", "list"], testEnv, httpClient);
-
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/addresses"],
-      ["POST", "/addresses"],
-      ["GET", "/addresses/address-1"],
-      ["PATCH", "/addresses/address-1"],
-      ["PATCH", "/addresses/address-1"],
-      ["PATCH", "/addresses/address-1"],
-      ["GET", "/sending-identities"],
-    ]);
-    expect(JSON.parse(captured[1]?.body ?? "")).toEqual({
-      localPart: "inbox",
-      displayName: "Inbox",
-    });
-    expect(JSON.parse(captured[3]?.body ?? "")).toEqual({ displayName: "Team Inbox" });
-    expect(JSON.parse(captured[4]?.body ?? "")).toEqual({ active: true });
-    expect(JSON.parse(captured[5]?.body ?? "")).toEqual({ active: false });
-    expect(identities).toEqual([sendingIdentity]);
-  });
-
-  it("dispatches forwarding set and remove with exact payloads", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    expect(
-      await runDispatch(
-        ["forwarding", "set", "--address-id", "address-1", "--email", "owner@example.com"],
+      yield* dispatchEffect(["addresses", "list"], testEnv, httpClient);
+      yield* dispatchEffect(
+        ["addresses", "create", "--local-part", "inbox", "--display-name", "Inbox"],
         testEnv,
         httpClient,
-      ),
-    ).toMatchObject({ verified: false });
-    await runDispatch(["forwarding", "remove", "--address-id", "address-1"], testEnv, httpClient);
+      );
+      yield* dispatchEffect(["addresses", "get", "--id", "address-1"], testEnv, httpClient);
+      yield* dispatchEffect(
+        ["addresses", "update", "--id", "address-1", "--display-name", "Team Inbox"],
+        testEnv,
+        httpClient,
+      );
+      yield* dispatchEffect(["addresses", "enable", "--id", "address-1"], testEnv, httpClient);
+      yield* dispatchEffect(["addresses", "disable", "--id", "address-1"], testEnv, httpClient);
+      const identities = yield* dispatchEffect(["sending-identities", "list"], testEnv, httpClient);
 
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["PUT", "/addresses/address-1/forwarding"],
-      ["DELETE", "/addresses/address-1/forwarding"],
-    ]);
-    expect(JSON.parse(captured[0]?.body ?? "")).toEqual({ email: "owner@example.com" });
-  });
-
-  it("dispatches thread list/detail/state/delete operations and preserves query values", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    const page = await runDispatch(
-      ["threads", "list", "--limit", "10", "--cursor", "cursor with +/="],
-      testEnv,
-      httpClient,
-    );
-    const thread = await runDispatch(
-      ["threads", "get", "--id", "thread-1", "--limit", "20", "--cursor", "cursor with +/="],
-      testEnv,
-      httpClient,
-    );
-    await runDispatch(["threads", "read", "--id", "thread-1"], testEnv, httpClient);
-    await runDispatch(["threads", "unread", "--id", "thread-1"], testEnv, httpClient);
-    await runDispatch(["threads", "delete", "--id", "thread-1"], testEnv, httpClient);
-
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/threads"],
-      ["GET", "/threads/thread-1"],
-      ["PATCH", "/threads/thread-1/read"],
-      ["PATCH", "/threads/thread-1/unread"],
-      ["DELETE", "/threads/thread-1"],
-    ]);
-    expect(captured[0]?.url.searchParams.get("limit")).toBe("10");
-    expect(captured[0]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
-    expect(captured[1]?.url.searchParams.get("limit")).toBe("20");
-    expect(captured[1]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
-    expect(page).toEqual(threadPage);
-    expect(thread).toEqual(threadDetail);
-  });
-
-  it("submits compose and reply jobs with actor-free request bodies and visible ids", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    const composed = await runDispatch(
-      [
-        "messages",
-        "compose",
-        "--from",
-        " Inbox@UMAIL.EXAMPLE.TEST ",
-        "--subject",
-        "Hello",
-        "--to",
-        "alice@example.com",
-        "--to",
-        "bob@example.com",
-        "--cc",
-        "copy@example.com",
-        "--text",
-        "Hi",
-        "--request-id",
-        REQUEST_ID,
-      ],
-      testEnv,
-      httpClient,
-    );
-    const replied = await runDispatch(
-      [
-        "messages",
-        "reply",
-        "--from",
-        "inbox@umail.example.test",
-        "--subject",
-        "Re: Hello",
-        "--reply-to",
-        "message-in-1",
-        "--reply-all",
-        "--html",
-        "<p>Thanks</p>",
-        "--request-id",
-        REQUEST_ID,
-      ],
-      testEnv,
-      httpClient,
-    );
-
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/sending-identities"],
-      ["POST", "/submissions"],
-      ["GET", "/sending-identities"],
-      ["POST", "/submissions"],
-    ]);
-    expect(JSON.parse(captured[1]?.body ?? "")).toEqual({
-      intent: "compose",
-      requestId: REQUEST_ID,
-      fromAddressId: "address-1",
-      subject: "Hello",
-      to: [
-        { address: "alice@example.com", displayName: null },
-        { address: "bob@example.com", displayName: null },
-      ],
-      cc: [{ address: "copy@example.com", displayName: null }],
-      text: "Hi",
-    });
-    expect(JSON.parse(captured[3]?.body ?? "")).toEqual({
-      intent: "reply",
-      requestId: REQUEST_ID,
-      fromAddressId: "address-1",
-      subject: "Re: Hello",
-      replyToMessageId: "message-in-1",
-      replyMode: "reply-all",
-      html: "<p>Thanks</p>",
-    });
-    expect(composed).toMatchObject({ jobId: "job-1", requestId: REQUEST_ID, state: "ready" });
-    expect(replied).toMatchObject({ jobId: "job-1", requestId: REQUEST_ID, state: "ready" });
-  });
-
-  it("accepts equals syntax for repeated recipients", async () => {
-    const { captured, httpClient } = capturingClient();
-
-    await runDispatch(
-      [
-        "messages",
-        "compose",
-        "--from=inbox@umail.example.test",
-        "--subject=Hello",
-        "--to=alice@example.com",
-        "--to=bob@example.com",
-        "--text=Hi",
-        `--request-id=${REQUEST_ID}`,
-      ],
-      testEnv,
-      httpClient,
-    );
-
-    expect(JSON.parse(captured[1]?.body ?? "")).toEqual({
-      intent: "compose",
-      requestId: REQUEST_ID,
-      fromAddressId: "address-1",
-      subject: "Hello",
-      to: [
-        { address: "alice@example.com", displayName: null },
-        { address: "bob@example.com", displayName: null },
-      ],
-      text: "Hi",
-    });
-  });
-
-  it("reuses a generated request id across automatic transport retries", async () => {
-    const captured: Array<CapturedRequest> = [];
-    let submissionAttempts = 0;
-    const httpClient = HttpClient.make((request, url) => {
-      captured.push({
-        method: request.method,
-        url,
-        authorization: request.headers.authorization,
-        contentType: request.headers["content-type"],
-        origin: request.headers.origin,
-        body: jsonBody(request),
+      expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+        ["GET", "/addresses"],
+        ["POST", "/addresses"],
+        ["GET", "/addresses/address-1"],
+        ["PATCH", "/addresses/address-1"],
+        ["PATCH", "/addresses/address-1"],
+        ["PATCH", "/addresses/address-1"],
+        ["GET", "/sending-identities"],
+      ]);
+      expect(yield* requestJson(captured[1])).toEqual({
+        localPart: "inbox",
+        displayName: "Inbox",
       });
-      if (url.pathname === "/sending-identities") {
-        return Effect.succeed(HttpClientResponse.fromWeb(request, jsonResponse([sendingIdentity])));
-      }
-      if (url.pathname === "/submissions") {
-        submissionAttempts += 1;
-        if (submissionAttempts === 1) {
-          return Effect.fail(
-            new HttpClientError.HttpClientError({
-              reason: new HttpClientError.TransportError({
-                request,
-                description: "temporary",
-              }),
-            }),
+      expect(yield* requestJson(captured[3])).toEqual({ displayName: "Team Inbox" });
+      expect(yield* requestJson(captured[4])).toEqual({ active: true });
+      expect(yield* requestJson(captured[5])).toEqual({ active: false });
+      expect(identities).toEqual([sendingIdentity]);
+    }),
+  );
+
+  it.effect("dispatches forwarding set and remove with exact payloads", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
+
+      expect(
+        yield* dispatchEffect(
+          ["forwarding", "set", "--address-id", "address-1", "--email", "owner@example.com"],
+          testEnv,
+          httpClient,
+        ),
+      ).toMatchObject({ verified: false });
+      yield* dispatchEffect(
+        ["forwarding", "remove", "--address-id", "address-1"],
+        testEnv,
+        httpClient,
+      );
+
+      expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+        ["PUT", "/addresses/address-1/forwarding"],
+        ["DELETE", "/addresses/address-1/forwarding"],
+      ]);
+      expect(yield* requestJson(captured[0])).toEqual({ email: "owner@example.com" });
+    }),
+  );
+
+  it.effect(
+    "dispatches thread list/detail/state/delete operations and preserves query values",
+    () =>
+      Effect.gen(function* () {
+        const { captured, httpClient } = capturingClient();
+
+        const page = yield* dispatchEffect(
+          ["threads", "list", "--limit", "10", "--cursor", "cursor with +/="],
+          testEnv,
+          httpClient,
+        );
+        const thread = yield* dispatchEffect(
+          ["threads", "get", "--id", "thread-1", "--limit", "20", "--cursor", "cursor with +/="],
+          testEnv,
+          httpClient,
+        );
+        yield* dispatchEffect(["threads", "read", "--id", "thread-1"], testEnv, httpClient);
+        yield* dispatchEffect(["threads", "unread", "--id", "thread-1"], testEnv, httpClient);
+        yield* dispatchEffect(["threads", "delete", "--id", "thread-1"], testEnv, httpClient);
+
+        expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+          ["GET", "/threads"],
+          ["GET", "/threads/thread-1"],
+          ["PATCH", "/threads/thread-1/read"],
+          ["PATCH", "/threads/thread-1/unread"],
+          ["DELETE", "/threads/thread-1"],
+        ]);
+        expect(captured[0]?.url.searchParams.get("limit")).toBe("10");
+        expect(captured[0]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
+        expect(captured[1]?.url.searchParams.get("limit")).toBe("20");
+        expect(captured[1]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
+        expect(page).toEqual(threadPage);
+        expect(thread).toEqual(threadDetail);
+      }),
+  );
+
+  it.effect("submits compose and reply jobs with actor-free request bodies and visible ids", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
+
+      const composed = yield* dispatchEffect(
+        [
+          "messages",
+          "compose",
+          "--from",
+          " Inbox@UMAIL.EXAMPLE.TEST ",
+          "--subject",
+          "Hello",
+          "--to",
+          "alice@example.com",
+          "--to",
+          "bob@example.com",
+          "--cc",
+          "copy@example.com",
+          "--text",
+          "Hi",
+          "--request-id",
+          REQUEST_ID,
+        ],
+        testEnv,
+        httpClient,
+      );
+      const replied = yield* dispatchEffect(
+        [
+          "messages",
+          "reply",
+          "--from",
+          "inbox@umail.example.test",
+          "--subject",
+          "Re: Hello",
+          "--reply-to",
+          "message-in-1",
+          "--reply-all",
+          "--html",
+          "<p>Thanks</p>",
+          "--request-id",
+          REQUEST_ID,
+        ],
+        testEnv,
+        httpClient,
+      );
+
+      expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+        ["GET", "/sending-identities"],
+        ["POST", "/submissions"],
+        ["GET", "/sending-identities"],
+        ["POST", "/submissions"],
+      ]);
+      expect(yield* requestJson(captured[1])).toEqual({
+        intent: "compose",
+        requestId: REQUEST_ID,
+        fromAddressId: "address-1",
+        subject: "Hello",
+        to: [
+          { address: "alice@example.com", displayName: null },
+          { address: "bob@example.com", displayName: null },
+        ],
+        cc: [{ address: "copy@example.com", displayName: null }],
+        text: "Hi",
+      });
+      expect(yield* requestJson(captured[3])).toEqual({
+        intent: "reply",
+        requestId: REQUEST_ID,
+        fromAddressId: "address-1",
+        subject: "Re: Hello",
+        replyToMessageId: "message-in-1",
+        replyMode: "reply-all",
+        html: "<p>Thanks</p>",
+      });
+      expect(composed).toMatchObject({ jobId: "job-1", requestId: REQUEST_ID, state: "ready" });
+      expect(replied).toMatchObject({ jobId: "job-1", requestId: REQUEST_ID, state: "ready" });
+    }),
+  );
+
+  it.effect("accepts equals syntax for repeated recipients", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
+
+      yield* dispatchEffect(
+        [
+          "messages",
+          "compose",
+          "--from=inbox@umail.example.test",
+          "--subject=Hello",
+          "--to=alice@example.com",
+          "--to=bob@example.com",
+          "--text=Hi",
+          `--request-id=${REQUEST_ID}`,
+        ],
+        testEnv,
+        httpClient,
+      );
+
+      expect(yield* requestJson(captured[1])).toEqual({
+        intent: "compose",
+        requestId: REQUEST_ID,
+        fromAddressId: "address-1",
+        subject: "Hello",
+        to: [
+          { address: "alice@example.com", displayName: null },
+          { address: "bob@example.com", displayName: null },
+        ],
+        text: "Hi",
+      });
+    }),
+  );
+
+  it.effect("reuses a generated request id across automatic transport retries", () =>
+    Effect.gen(function* () {
+      const captured: Array<CapturedRequest> = [];
+      let submissionAttempts = 0;
+      const httpClient = HttpClient.make((request, url) => {
+        captured.push({
+          method: request.method,
+          url,
+          authorization: request.headers.authorization,
+          contentType: request.headers["content-type"],
+          origin: request.headers.origin,
+          body: jsonBody(request),
+        });
+        if (url.pathname === "/sending-identities") {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, jsonResponse([sendingIdentity])),
           );
         }
-        const body = jsonBody(request);
-        const parsed = body === undefined ? outboundJob : JSON.parse(body);
-        const requestId = Schema.decodeUnknownSync(Schema.String)(parsed.requestId);
+        if (url.pathname === "/submissions") {
+          submissionAttempts += 1;
+          if (submissionAttempts === 1) {
+            return Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request,
+                  description: "temporary",
+                }),
+              }),
+            );
+          }
+          return Effect.succeed(HttpClientResponse.fromWeb(request, submissionResponse(request)));
+        }
         return Effect.succeed(
-          HttpClientResponse.fromWeb(request, jsonResponse({ ...outboundJob, requestId })),
+          HttpClientResponse.fromWeb(request, new Response(null, { status: 404 })),
         );
-      }
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(request, new Response(null, { status: 404 })),
+      });
+
+      const result = yield* dispatchEffect(
+        [
+          "messages",
+          "compose",
+          "--from",
+          "inbox@umail.example.test",
+          "--subject",
+          "Hello",
+          "--to",
+          "bob@example.com",
+          "--text",
+          "Hi",
+        ],
+        testEnv,
+        httpClient,
       );
-    });
 
-    const result = await runDispatch(
-      [
-        "messages",
-        "compose",
-        "--from",
-        "inbox@umail.example.test",
-        "--subject",
-        "Hello",
-        "--to",
-        "bob@example.com",
-        "--text",
-        "Hi",
-      ],
-      testEnv,
-      httpClient,
-    );
+      const firstBody = yield* Schema.decodeEffect(SubmittedRequest)(captured[1]?.body ?? "");
+      const secondBody = yield* Schema.decodeEffect(SubmittedRequest)(captured[2]?.body ?? "");
+      expect(firstBody.requestId).toEqual(secondBody.requestId);
+      expect(firstBody.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+      expect(result).toMatchObject({ requestId: firstBody.requestId, state: "ready" });
+      expect(submissionAttempts).toBe(2);
+    }),
+  );
 
-    const firstBody = JSON.parse(captured[1]?.body ?? "");
-    const secondBody = JSON.parse(captured[2]?.body ?? "");
-    expect(firstBody.requestId).toEqual(secondBody.requestId);
-    expect(firstBody.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
-    expect(result).toMatchObject({ requestId: firstBody.requestId, state: "ready" });
-    expect(submissionAttempts).toBe(2);
-  });
+  it.effect("lists and gets job status", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
+      const page = yield* dispatchEffect(["jobs", "list", "--limit", "5"], testEnv, httpClient);
+      const job = yield* dispatchEffect(["jobs", "get", "--id", "job-1"], testEnv, httpClient);
+      expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+        ["GET", "/jobs"],
+        ["GET", "/jobs/job-1"],
+      ]);
+      expect(captured[0]?.url.searchParams.get("limit")).toBe("5");
+      expect(page).toEqual({ items: [outboundJob], nextCursor: null });
+      expect(job).toEqual(outboundJob);
+    }),
+  );
 
-  it("lists and gets job status", async () => {
-    const { captured, httpClient } = capturingClient();
-    const page = await runDispatch(["jobs", "list", "--limit", "5"], testEnv, httpClient);
-    const job = await runDispatch(["jobs", "get", "--id", "job-1"], testEnv, httpClient);
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/jobs"],
-      ["GET", "/jobs/job-1"],
-    ]);
-    expect(captured[0]?.url.searchParams.get("limit")).toBe("5");
-    expect(page).toEqual({ items: [outboundJob], nextCursor: null });
-    expect(job).toEqual(outboundJob);
-  });
-
-  it("writes attachment bytes to the requested file and returns safe metadata", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "umail-cli-attachment-"));
-    const output = join(directory, "message.txt");
-    const bytes = new TextEncoder().encode("attachment bytes");
-    const { captured, httpClient } = capturingClient(
-      () =>
-        new Response(bytes, {
-          headers: {
-            "content-type": "text/plain",
-            "content-disposition": 'attachment; filename="message.txt"',
-            "x-content-type-options": "nosniff",
-          },
-        }),
-    );
-    try {
-      const result = await runDispatch(
+  it.effect("writes attachment bytes to the requested file and returns safe metadata", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "umail-cli-attachment-" });
+      const output = path.join(directory, "message.txt");
+      const bytes = new TextEncoder().encode("attachment bytes");
+      const { captured, httpClient } = capturingClient(
+        () =>
+          new Response(bytes, {
+            headers: {
+              "content-type": "text/plain",
+              "content-disposition": 'attachment; filename="message.txt"',
+              "x-content-type-options": "nosniff",
+            },
+          }),
+      );
+      const result = yield* dispatchEffect(
         [
           "attachments",
           "get",
@@ -725,35 +739,35 @@ describe("retained CLI dispatch", () => {
       expect(captured).toHaveLength(1);
       expect(captured[0]?.method).toBe("GET");
       expect(captured[0]?.url.pathname).toBe("/messages/message-1/attachments/attachment-1");
-      expect(readFileSync(output, "utf8")).toBe("attachment bytes");
+      expect(yield* fs.readFileString(output)).toBe("attachment bytes");
       expect(result).toEqual({ output, bytes: bytes.byteLength, contentType: "text/plain" });
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
 
-  it("writes the exact archived message source to the requested file", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "umail-cli-source-"));
-    const output = join(directory, "message-1.eml");
-    const bytes = Uint8Array.from([
-      ...new TextEncoder().encode("Subject: hi\r\n\r\n"),
-      0x00,
-      0xff,
-      0x0d,
-      0x0a,
-    ]);
-    const { captured, httpClient } = capturingClient(
-      () =>
-        new Response(bytes, {
-          headers: {
-            "content-type": "message/rfc822",
-            "content-disposition": 'attachment; filename="message-1.eml"',
-            "x-content-type-options": "nosniff",
-          },
-        }),
-    );
-    try {
-      const result = await runDispatch(
+  it.effect("writes the exact archived message source to the requested file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "umail-cli-source-" });
+      const output = path.join(directory, "message-1.eml");
+      const bytes = Uint8Array.from([
+        ...new TextEncoder().encode("Subject: hi\r\n\r\n"),
+        0x00,
+        0xff,
+        0x0d,
+        0x0a,
+      ]);
+      const { captured, httpClient } = capturingClient(
+        () =>
+          new Response(bytes, {
+            headers: {
+              "content-type": "message/rfc822",
+              "content-disposition": 'attachment; filename="message-1.eml"',
+              "x-content-type-options": "nosniff",
+            },
+          }),
+      );
+      const result = yield* dispatchEffect(
         ["messages", "source", "--id", "message-1", "--output", output],
         testEnv,
         httpClient,
@@ -763,16 +777,14 @@ describe("retained CLI dispatch", () => {
       expect(captured[0]?.method).toBe("GET");
       expect(captured[0]?.url.pathname).toBe("/messages/message-1/source");
       expect(captured[0]?.authorization).toBe("Bearer test-oauth-access-token");
-      expect(new Uint8Array(readFileSync(output))).toEqual(bytes);
+      expect(new Uint8Array(yield* fs.readFile(output))).toEqual(bytes);
       expect(result).toEqual({ output, bytes: bytes.byteLength, contentType: "message/rfc822" });
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
 
-  it("rejects malformed or ineligible senders before sending", async () => {
-    const malformed = await Effect.runPromise(
-      runProgram(
+  it.effect("rejects malformed or ineligible senders before sending", () =>
+    Effect.gen(function* () {
+      const malformed = yield* runProgram(
         [
           "messages",
           "compose",
@@ -787,39 +799,42 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(malformed.outcome)).toBe(true);
-    expect(malformed.stderr.join("\n")).toContain("--from");
-    expect(malformed.stderr.join("\n")).toContain("valid mailbox address");
+      );
+      expect(Exit.isFailure(malformed.outcome)).toBe(true);
+      expect(malformed.stderr.join("\n")).toContain("--from");
+      expect(malformed.stderr.join("\n")).toContain("valid mailbox address");
 
-    const { captured, httpClient } = capturingClient((request, url) =>
-      url.pathname === "/sending-identities" ? jsonResponse([]) : jsonResponse(outboundJob),
-    );
-    await expect(
-      runDispatch(
-        [
-          "messages",
-          "compose",
-          "--from",
-          "inbox@umail.example.test",
-          "--subject",
-          "Hello",
-          "--to",
-          "bob@example.com",
-          "--text",
-          "Hi",
-        ],
-        testEnv,
-        httpClient,
-      ),
-    ).rejects.toThrow("No eligible sending identity matches --from: inbox@umail.example.test");
-    expect(captured).toHaveLength(1);
-  });
+      const { captured, httpClient } = capturingClient((request, url) =>
+        url.pathname === "/sending-identities" ? jsonResponse([]) : jsonResponse(outboundJob),
+      );
+      const ineligible = yield* Effect.flip(
+        dispatchEffect(
+          [
+            "messages",
+            "compose",
+            "--from",
+            "inbox@umail.example.test",
+            "--subject",
+            "Hello",
+            "--to",
+            "bob@example.com",
+            "--text",
+            "Hi",
+          ],
+          testEnv,
+          httpClient,
+        ),
+      );
+      expect(ineligible.message).toContain(
+        "No eligible sending identity matches --from: inbox@umail.example.test",
+      );
+      expect(captured).toHaveLength(1);
+    }),
+  );
 
-  it("rejects invalid recipients, missing values, and overflow dates without sending", async () => {
-    const invalidRecipient = await Effect.runPromise(
-      runProgram(
+  it.effect("rejects invalid recipients, missing values, and overflow dates without sending", () =>
+    Effect.gen(function* () {
+      const invalidRecipient = yield* runProgram(
         [
           "messages",
           "compose",
@@ -834,13 +849,11 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(invalidRecipient.outcome)).toBe(true);
-    expect(invalidRecipient.stderr.join("\n")).toContain("not-an-address");
+      );
+      expect(Exit.isFailure(invalidRecipient.outcome)).toBe(true);
+      expect(invalidRecipient.stderr.join("\n")).toContain("not-an-address");
 
-    const missingTo = await Effect.runPromise(
-      runProgram(
+      const missingTo = yield* runProgram(
         [
           "messages",
           "compose",
@@ -854,41 +867,39 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(missingTo.outcome)).toBe(true);
-    expect(missingTo.stderr.join("\n")).toMatch(/--to/u);
+      );
+      expect(Exit.isFailure(missingTo.outcome)).toBe(true);
+      expect(missingTo.stderr.join("\n")).toMatch(/--to/u);
 
-    const overflow = await Effect.runPromise(
-      runProgram(
+      const overflow = yield* runProgram(
         ["messages", "list", "--since", "+275760-09-13T00:00:00.000Z"],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(overflow.outcome)).toBe(true);
-    expect(overflow.stderr.join("\n")).toContain("--since");
+      );
+      expect(Exit.isFailure(overflow.outcome)).toBe(true);
+      expect(overflow.stderr.join("\n")).toContain("--since");
 
-    const hoursOverflow = await Effect.runPromise(
-      runProgram(["messages", "list", "--since-hours", "3000000000"], testEnv, unusedHttpClient()),
-    );
-    expect(Exit.isFailure(hoursOverflow.outcome)).toBe(true);
-    expect(hoursOverflow.stderr).toEqual(["--since-hours produced a date outside years 1-9999"]);
+      const hoursOverflow = yield* runProgram(
+        ["messages", "list", "--since-hours", "3000000000"],
+        testEnv,
+        unusedHttpClient(),
+      );
+      expect(Exit.isFailure(hoursOverflow.outcome)).toBe(true);
+      expect(hoursOverflow.stderr).toEqual(["--since-hours produced a date outside years 1-9999"]);
 
-    const conflicting = await Effect.runPromise(
-      runProgram(
+      const conflicting = yield* runProgram(
         ["messages", "list", "--since", "2026-08-25T00:00:00.000Z", "--since-hours", "24"],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(conflicting.outcome)).toBe(true);
-    expect(conflicting.stderr.join("\n")).toContain("--since and --since-hours");
-  });
+      );
+      expect(Exit.isFailure(conflicting.outcome)).toBe(true);
+      expect(conflicting.stderr.join("\n")).toContain("--since and --since-hours");
+    }),
+  );
 
-  it("rejects mutually exclusive compose and reply options before credentials or HTTP", async () => {
-    const send = await Effect.runPromise(
-      runProgram(
+  it.effect("rejects mutually exclusive compose and reply options before credentials or HTTP", () =>
+    Effect.gen(function* () {
+      const send = yield* runProgram(
         [
           "messages",
           "send",
@@ -903,13 +914,11 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(send.outcome)).toBe(true);
-    expect(send.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
+      );
+      expect(Exit.isFailure(send.outcome)).toBe(true);
+      expect(send.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
 
-    const composeReplyTo = await Effect.runPromise(
-      runProgram(
+      const composeReplyTo = yield* runProgram(
         [
           "messages",
           "compose",
@@ -926,13 +935,11 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(composeReplyTo.outcome)).toBe(true);
-    expect(composeReplyTo.stderr.join("\n")).toContain("--reply-to");
+      );
+      expect(Exit.isFailure(composeReplyTo.outcome)).toBe(true);
+      expect(composeReplyTo.stderr.join("\n")).toContain("--reply-to");
 
-    const replyTo = await Effect.runPromise(
-      runProgram(
+      const replyTo = yield* runProgram(
         [
           "messages",
           "reply",
@@ -949,101 +956,106 @@ describe("retained CLI dispatch", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(replyTo.outcome)).toBe(true);
-    expect(replyTo.stderr.join("\n")).toContain("--to");
-  });
+      );
+      expect(Exit.isFailure(replyTo.outcome)).toBe(true);
+      expect(replyTo.stderr.join("\n")).toContain("--to");
+    }),
+  );
 
-  it("dispatches message list/get with query mapping and local --since-hours", async () => {
-    const { captured, httpClient } = capturingClient();
+  it.effect("dispatches message list/get with query mapping and local --since-hours", () =>
+    Effect.gen(function* () {
+      const { captured, httpClient } = capturingClient();
 
-    const page = await runDispatch(
-      [
-        "messages",
-        "list",
-        "--direction",
-        "inbound",
-        "--address-id",
-        "address-1",
-        "--since",
-        "2026-08-25T00:00:00.000Z",
-        "--unread",
-        "--limit",
-        "10",
-        "--cursor",
-        "cursor with +/=",
-      ],
-      testEnv,
-      httpClient,
-    );
-    const message = await runDispatch(
-      ["messages", "get", "--id", "message-1"],
-      testEnv,
-      httpClient,
-    );
+      const page = yield* dispatchEffect(
+        [
+          "messages",
+          "list",
+          "--direction",
+          "inbound",
+          "--address-id",
+          "address-1",
+          "--since",
+          "2026-08-25T00:00:00.000Z",
+          "--unread",
+          "--limit",
+          "10",
+          "--cursor",
+          "cursor with +/=",
+        ],
+        testEnv,
+        httpClient,
+      );
+      const message = yield* dispatchEffect(
+        ["messages", "get", "--id", "message-1"],
+        testEnv,
+        httpClient,
+      );
 
-    expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
-      ["GET", "/messages"],
-      ["GET", "/messages/message-1"],
-    ]);
-    expect(captured[0]?.url.searchParams.get("direction")).toBe("inbound");
-    expect(captured[0]?.url.searchParams.get("addressId")).toBe("address-1");
-    expect(captured[0]?.url.searchParams.get("since")).toBe("2026-08-25T00:00:00.000Z");
-    expect(captured[0]?.url.searchParams.get("unread")).toBe("true");
-    expect(captured[0]?.url.searchParams.get("limit")).toBe("10");
-    expect(captured[0]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
-    expect(captured[0]?.url.searchParams.has("until")).toBe(false);
-    expect(page).toEqual(messagePage);
-    expect(message).toEqual(sentMessage);
+      expect(captured.map(({ method, url }) => [method, url.pathname])).toEqual([
+        ["GET", "/messages"],
+        ["GET", "/messages/message-1"],
+      ]);
+      expect(captured[0]?.url.searchParams.get("direction")).toBe("inbound");
+      expect(captured[0]?.url.searchParams.get("addressId")).toBe("address-1");
+      expect(captured[0]?.url.searchParams.get("since")).toBe("2026-08-25T00:00:00.000Z");
+      expect(captured[0]?.url.searchParams.get("unread")).toBe("true");
+      expect(captured[0]?.url.searchParams.get("limit")).toBe("10");
+      expect(captured[0]?.url.searchParams.get("cursor")).toBe("cursor with +/=");
+      expect(captured[0]?.url.searchParams.has("until")).toBe(false);
+      expect(page).toEqual(messagePage);
+      expect(message).toEqual(sentMessage);
 
-    const inboundClient = capturingClient((_request, url) => {
-      if (url.pathname === "/messages") {
-        return jsonResponse({ items: [receivedMessage], nextCursor: null });
-      }
-      return jsonResponse(receivedMessage);
-    });
-    const inboundPage = await runDispatch(
-      ["messages", "list", "--direction", "inbound"],
-      testEnv,
-      inboundClient.httpClient,
-    );
-    const inboundMessage = await runDispatch(
-      ["messages", "get", "--id", "received-1"],
-      testEnv,
-      inboundClient.httpClient,
-    );
-    expect(inboundPage.items[0]).toMatchObject({
-      envelopeFrom: "",
-      envelopeTo: "inbox@umail.example.test",
-      parsedDate: "2026-08-25T10:00:00.000Z",
-      forwardOutcome: "failure",
-      forwardDestination: "forward@example.net",
-    });
-    expect(inboundMessage).toMatchObject({
-      envelopeFrom: "",
-      envelopeTo: "inbox@umail.example.test",
-      parsedDate: "2026-08-25T10:00:00.000Z",
-      forwardOutcome: "failure",
-      forwardDestination: "forward@example.net",
-    });
+      const inboundClient = capturingClient((_request, url) => {
+        if (url.pathname === "/messages") {
+          return jsonResponse({ items: [receivedMessage], nextCursor: null });
+        }
+        return jsonResponse(receivedMessage);
+      });
+      const inboundPage = yield* dispatchEffect(
+        ["messages", "list", "--direction", "inbound"],
+        testEnv,
+        inboundClient.httpClient,
+      );
+      const inboundMessage = yield* dispatchEffect(
+        ["messages", "get", "--id", "received-1"],
+        testEnv,
+        inboundClient.httpClient,
+      );
+      expect(inboundPage).toMatchObject({
+        items: [
+          {
+            envelopeFrom: "",
+            envelopeTo: "inbox@umail.example.test",
+            parsedDate: "2026-08-25T10:00:00.000Z",
+            forwardOutcome: "failure",
+            forwardDestination: "forward@example.net",
+          },
+        ],
+      });
+      expect(inboundMessage).toMatchObject({
+        envelopeFrom: "",
+        envelopeTo: "inbox@umail.example.test",
+        parsedDate: "2026-08-25T10:00:00.000Z",
+        forwardOutcome: "failure",
+        forwardDestination: "forward@example.net",
+      });
 
-    const sinceHoursClient = capturingClient();
-    await runDispatch(
-      ["messages", "list", "--since-hours", "24"],
-      testEnv,
-      sinceHoursClient.httpClient,
-    );
-    const since = sinceHoursClient.captured[0]?.url.searchParams.get("since");
-    expect(since).toEqual(expect.any(String));
-    expect(Math.abs(Date.parse(since ?? "") - (Date.now() - 24 * 60 * 60 * 1000))).toBeLessThan(
-      5000,
-    );
-    expect(sinceHoursClient.captured[0]?.url.searchParams.has("until")).toBe(false);
-  });
+      const sinceHoursClient = capturingClient();
+      yield* dispatchEffect(
+        ["messages", "list", "--since-hours", "24"],
+        testEnv,
+        sinceHoursClient.httpClient,
+      );
+      // The TestClock starts at the epoch, so 24 hours earlier is exact.
+      expect(sinceHoursClient.captured[0]?.url.searchParams.get("since")).toBe(
+        "1969-12-31T00:00:00.000Z",
+      );
+      expect(sinceHoursClient.captured[0]?.url.searchParams.has("until")).toBe(false);
+    }),
+  );
 });
 
-describe("public approval capability commands", () => {
+layer(NodeServices.layer)("public approval capability commands", (it) => {
   it.effect("uses the masked-input and token-file sources without bearer configuration", () =>
     Effect.gen(function* () {
       const reads: Array<string | undefined> = [];
@@ -1083,63 +1095,50 @@ describe("public approval capability commands", () => {
 
   it.effect(
     "reads a token file with one conventional line ending and rejects unsafe input exactly",
-    () => {
-      const directory = mkdtempSync(join(tmpdir(), "umail-approval-token-"));
-      const tokenPath = join(directory, "approval-token");
-      const invalidPath = join(directory, "invalid-token");
-      const invalidToken = "not-a-valid-secret-token";
-      writeFileSync(tokenPath, `${approvalTokenText}\r\n`, { mode: 0o600 });
-      writeFileSync(invalidPath, `${invalidToken}\n\n`, { mode: 0o600 });
-      const layer = ApprovalTokenSource.layer.pipe(Layer.provide(NodeServices.layer));
-      const readToken = (path: string) =>
-        Effect.gen(function* () {
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "umail-approval-token-" });
+        const tokenPath = path.join(directory, "approval-token");
+        const invalidPath = path.join(directory, "invalid-token");
+        const invalidToken = "not-a-valid-secret-token";
+        yield* fs.writeFileString(tokenPath, `${approvalTokenText}\r\n`, { mode: 0o600 });
+        yield* fs.writeFileString(invalidPath, `${invalidToken}\n\n`, { mode: 0o600 });
+        const readToken = Effect.fn("readToken")(function* (file: string) {
           const source = yield* ApprovalTokenSource;
-          return yield* source.readToken(path);
-        }).pipe(Effect.result, Effect.provide(layer));
+          return yield* source.readToken(file);
+        }, Effect.provide(ApprovalTokenSource.layer));
 
-      return Effect.gen(function* () {
-        const token = yield* readToken(tokenPath);
-        if (Result.isFailure(token)) {
-          throw token.failure;
-        }
-        expect(token.success).toBe(approvalTokenText);
+        expect(yield* readToken(tokenPath)).toBe(approvalTokenText);
 
-        const invalid = yield* readToken(invalidPath);
-        if (Result.isSuccess(invalid)) {
-          throw new Error("Expected invalid token file to fail");
-        }
-        expect(invalid.failure).toEqual(new ApprovalTokenInputError({ reason: "invalid" }));
+        const invalid = yield* Effect.flip(readToken(invalidPath));
+        expect(invalid).toEqual(new ApprovalTokenInputError({ reason: "invalid" }));
         for (const rendered of [
-          invalid.failure.message,
-          invalid.failure.stack ?? "",
-          String(invalid.failure),
-          inspect(invalid.failure),
-          formatCliError(invalid.failure),
+          invalid.message,
+          invalid.stack ?? "",
+          String(invalid),
+          inspect(invalid),
+          formatCliError(invalid),
         ]) {
           expect(rendered).not.toContain(invalidToken);
           expect(rendered).not.toContain(invalidPath);
         }
 
-        const missingPath = join(directory, "missing-token");
-        const unreadable = yield* readToken(missingPath);
-        if (Result.isSuccess(unreadable)) {
-          throw new Error("Expected missing token file to fail");
-        }
-        expect(unreadable.failure).toEqual(new ApprovalTokenInputError({ reason: "unreadable" }));
+        const missingPath = path.join(directory, "missing-token");
+        const unreadable = yield* Effect.flip(readToken(missingPath));
+        expect(unreadable).toEqual(new ApprovalTokenInputError({ reason: "unreadable" }));
         for (const rendered of [
-          unreadable.failure.message,
-          unreadable.failure.stack ?? "",
-          String(unreadable.failure),
-          inspect(unreadable.failure),
-          serializeApprovalTokenInputError(unreadable.failure),
-          formatCliError(unreadable.failure),
+          unreadable.message,
+          unreadable.stack ?? "",
+          String(unreadable),
+          inspect(unreadable),
+          serializeApprovalTokenInputError(unreadable),
+          formatCliError(unreadable),
         ]) {
           expect(rendered).not.toContain(missingPath);
         }
-      }).pipe(
-        Effect.ensuring(Effect.sync(() => rmSync(directory, { force: true, recursive: true }))),
-      );
-    },
+      }),
   );
 
   it.effect("collapses every public client failure without retaining its URL or token", () =>
@@ -1256,71 +1255,73 @@ describe("public approval capability commands", () => {
 });
 
 describe("removed CLI surface and safe errors", () => {
-  it("rejects removed commands before configuration or network access", async () => {
-    for (const argv of [
-      ["bootstrap"],
-      ["users", "list"],
-      ["api-keys", "list"],
-      ["keys", "list"],
-      ["approvals", "list"],
-      ["clients", "list"],
-    ] as const) {
-      const captured = await Effect.runPromise(runProgram(argv, testEnv, unusedHttpClient()));
-      expect(Exit.isFailure(captured.outcome)).toBe(true);
-      expect(captured.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
-    }
-  });
+  it.effect("rejects removed commands before configuration or network access", () =>
+    Effect.gen(function* () {
+      for (const argv of [
+        ["bootstrap"],
+        ["users", "list"],
+        ["api-keys", "list"],
+        ["keys", "list"],
+        ["approvals", "list"],
+        ["clients", "list"],
+      ] as const) {
+        const captured = yield* runProgram(argv, testEnv, unusedHttpClient());
+        expect(Exit.isFailure(captured.outcome)).toBe(true);
+        expect(captured.stderr.join("\n").toLowerCase()).toContain("unknown subcommand");
+      }
+    }),
+  );
 
-  it("rejects every removed credential flag without exposing its value", async () => {
-    for (const flag of [
-      "--api-key",
-      "--access-client-id",
-      "--access-client-secret",
-      "--secret",
-    ] as const) {
-      const captured = await Effect.runPromise(
-        runProgram(["addresses", "list", flag, "must-not-render"], testEnv, unusedHttpClient()),
+  it.effect("rejects every removed credential flag without exposing its value", () =>
+    Effect.gen(function* () {
+      for (const flag of [
+        "--api-key",
+        "--access-client-id",
+        "--access-client-secret",
+        "--secret",
+      ] as const) {
+        const captured = yield* runProgram(
+          ["addresses", "list", flag, "must-not-render"],
+          testEnv,
+          unusedHttpClient(),
+        );
+        expect(Exit.isFailure(captured.outcome)).toBe(true);
+        expect(captured.stderr.join("\n")).toContain(flag);
+        expect(`${captured.stdout.join("")}${captured.stderr.join("")}`).not.toContain(
+          "must-not-render",
+        );
+      }
+      const equals = yield* runProgram(
+        ["addresses", "list", "--api-key=must-not-render"],
+        testEnv,
+        unusedHttpClient(),
       );
-      expect(Exit.isFailure(captured.outcome)).toBe(true);
-      expect(captured.stderr.join("\n")).toContain(flag);
-      expect(`${captured.stdout.join("")}${captured.stderr.join("")}`).not.toContain(
-        "must-not-render",
-      );
-    }
-    const equals = await Effect.runPromise(
-      runProgram(["addresses", "list", "--api-key=must-not-render"], testEnv, unusedHttpClient()),
-    );
-    expect(Exit.isFailure(equals.outcome)).toBe(true);
-    expect(equals.stderr.join("\n")).toContain("--api-key");
-    expect(`${equals.stdout.join("")}${equals.stderr.join("")}`).not.toContain("must-not-render");
-    const approvalKey = await Effect.runPromise(
-      runProgram(
+      expect(Exit.isFailure(equals.outcome)).toBe(true);
+      expect(equals.stderr.join("\n")).toContain("--api-key");
+      expect(`${equals.stdout.join("")}${equals.stderr.join("")}`).not.toContain("must-not-render");
+      const approvalKey = yield* runProgram(
         ["approvals", "approve", "--api-key", "must-not-render"],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(approvalKey.outcome)).toBe(true);
-    expect(approvalKey.stderr.join("\n")).toContain("--api-key");
-    const tokenFlag = await Effect.runPromise(
-      runProgram(
+      );
+      expect(Exit.isFailure(approvalKey.outcome)).toBe(true);
+      expect(approvalKey.stderr.join("\n")).toContain("--api-key");
+      const tokenFlag = yield* runProgram(
         ["approvals", "approve", "--token", "must-not-render"],
         { UMAIL_URL: testEnv.UMAIL_URL },
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(tokenFlag.outcome)).toBe(true);
-    expect(tokenFlag.stderr.join("\n")).toContain("--token");
-    const missingTokenFile = await Effect.runPromise(
-      runProgram(
+      );
+      expect(Exit.isFailure(tokenFlag.outcome)).toBe(true);
+      expect(tokenFlag.stderr.join("\n")).toContain("--token");
+      const missingTokenFile = yield* runProgram(
         ["approvals", "approve", "--token-file"],
         { UMAIL_URL: testEnv.UMAIL_URL },
         unusedHttpClient(),
-      ),
-    );
-    expect(Exit.isFailure(missingTokenFile.outcome)).toBe(true);
-    expect(missingTokenFile.stderr.join("\n")).toContain("--token-file");
-  });
+      );
+      expect(Exit.isFailure(missingTokenFile.outcome)).toBe(true);
+      expect(missingTokenFile.stderr.join("\n")).toContain("--token-file");
+    }),
+  );
 
   it.effect("lists only retained commands and options in help", () =>
     Effect.gen(function* () {
@@ -1399,16 +1400,14 @@ describe("removed CLI surface and safe errors", () => {
     }),
   );
 
-  it("prints each failure once and stays silent on interruption", async () => {
-    const unconfigured = await Effect.runPromise(
-      runProgram(["threads", "list"], {}, unusedHttpClient()),
-    );
-    expect(Exit.isFailure(unconfigured.outcome)).toBe(true);
-    expect(unconfigured.stdout).toEqual([]);
-    expect(unconfigured.stderr).toEqual(["UMAIL_URL is required"]);
+  it.effect("prints each failure once and stays silent on interruption", () =>
+    Effect.gen(function* () {
+      const unconfigured = yield* runProgram(["threads", "list"], {}, unusedHttpClient());
+      expect(Exit.isFailure(unconfigured.outcome)).toBe(true);
+      expect(unconfigured.stdout).toEqual([]);
+      expect(unconfigured.stderr).toEqual(["UMAIL_URL is required"]);
 
-    const usage = await Effect.runPromise(
-      runProgram(
+      const usage = yield* runProgram(
         [
           "messages",
           "compose",
@@ -1423,20 +1422,18 @@ describe("removed CLI surface and safe errors", () => {
         ],
         testEnv,
         unusedHttpClient(),
-      ),
-    );
-    expect(usage.stderr.join("\n").match(/valid mailbox address/gu)).toHaveLength(1);
+      );
+      expect(usage.stderr.join("\n").match(/valid mailbox address/gu)).toHaveLength(1);
 
-    const interrupted = await Effect.runPromise(
-      runProgram(
+      const interrupted = yield* runProgram(
         ["threads", "list"],
         testEnv,
         HttpClient.make(() => Effect.interrupt),
-      ),
-    );
-    expect(Exit.hasInterrupts(interrupted.outcome)).toBe(true);
-    expect(interrupted.stderr).toEqual([]);
-  });
+      );
+      expect(Exit.hasInterrupts(interrupted.outcome)).toBe(true);
+      expect(interrupted.stderr).toEqual([]);
+    }),
+  );
 
   it("formats HTTP and API errors without request credentials", () => {
     const keyValue = "root-key-that-must-not-render";

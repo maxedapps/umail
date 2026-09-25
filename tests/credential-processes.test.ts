@@ -1,32 +1,28 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, layer } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
-import { afterEach, describe, expect, it } from "vitest";
+import * as Stream from "effect/Stream";
+import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { makeCredentialStore, OAuthCredentials } from "../apps/cli/src/credential-store.ts";
 
-import { makeCredentialStore, type OAuthCredentials } from "../apps/cli/src/credential-store.ts";
-
-const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const CLI_BIN = join(REPO_ROOT, "apps/cli/src/bin.ts");
+const REPO_ROOT = new URL("..", import.meta.url);
 const CREDENTIAL_STORE_HREF = new URL("../apps/cli/src/credential-store.ts", import.meta.url).href;
 const LockWorkerOutput = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true) }),
@@ -49,17 +45,9 @@ const SECRETS = [
 ] as const;
 
 interface CliProcessResult {
-  readonly status: number | null;
-  readonly signal: NodeJS.Signals | null;
+  readonly status: number;
   readonly stdout: string;
   readonly stderr: string;
-}
-
-interface TrackedCliProcess {
-  readonly child: ChildProcess;
-  readonly stdout: () => string;
-  readonly stderr: () => string;
-  readonly finished: Promise<CliProcessResult>;
 }
 
 interface FakeOAuthControl {
@@ -72,207 +60,239 @@ interface FakeOAuthControl {
   revokeRequests: number;
 }
 
-interface FakeOAuthServer {
-  readonly baseUrl: string;
-  readonly control: FakeOAuthControl;
-  readonly close: () => Promise<void>;
-}
+type ProcessEnvironment = Record<string, string>;
 
-const openChildren: Array<ChildProcess> = [];
-const openServers: Array<FakeOAuthServer> = [];
-const temporaryDirectories: Array<string> = [];
-
-afterEach(async () => {
-  const children = openChildren.splice(0);
-  const servers = openServers.splice(0);
-  const directories = temporaryDirectories.splice(0);
-  await Promise.all(children.map(stopChild));
-  await Promise.all(servers.map((server) => server.close()));
-  for (const directory of directories) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-describe("credential transitions across processes", () => {
-  it("does not restore credentials when a delayed refresh finishes after logout", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() - 1_000);
-    server.control.tokenDelayMs = 800;
-    const list = spawnCli(["addresses", "list"], env);
-    await waitFor(() => server.control.refreshTokenRequests > 0, 5_000, "refresh request");
-    const logout = spawnCli(["logout"], env);
-    const logoutResult = await logout.finished;
-    expect(logoutResult.status).toBe(0);
-    expectNoSecrets(logoutResult);
-    const listed = await list.finished;
-    expectNoSecrets(listed);
-    expect(await readState(stateHome)).toBeNull();
-  }, 15_000);
-
-  it("serializes overlapping refresh so only one token request is made", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() - 1_000);
-    server.control.tokenDelayMs = 400;
-    const first = spawnCli(["addresses", "list"], env);
-    const second = spawnCli(["addresses", "list"], env);
-    const results = await Promise.all([first.finished, second.finished]);
-    for (const result of results) {
-      expect(result.status).toBe(0);
-      expectNoSecrets(result);
-    }
-    expect(server.control.refreshTokenRequests).toBe(1);
-    const state = await readState(stateHome);
-    expect(state).toMatchObject({
-      accessToken: ROTATED_ACCESS_TOKEN,
-      refreshToken: ROTATED_REFRESH_TOKEN,
-    });
-  }, 15_000);
-
-  it("cancels device login on SIGINT without persisting tokens or leaving locks", async () => {
-    const { stateHome, env } = await startHarness();
-    const login = spawnCli(["login"], env);
-    await waitFor(
-      () => login.stdout().includes("Waiting for approval"),
-      5_000,
-      "device login prompt",
+// Real clock and processes; every server, child and directory is released with the test's scope.
+layer(NodeServices.layer, { excludeTestServices: true })(
+  "credential transitions across processes",
+  (it) => {
+    it.effect(
+      "does not restore credentials when a delayed refresh finishes after logout",
+      () =>
+        Effect.gen(function* () {
+          const { server, stateHome, env } = yield* startHarness();
+          yield* writeAuthorizedState(stateHome, server.baseUrl, -1_000);
+          server.control.tokenDelayMs = 800;
+          const list = yield* spawnCli(["addresses", "list"], env);
+          yield* waitFor(() => server.control.refreshTokenRequests > 0, "refresh request");
+          const logout = yield* spawnCli(["logout"], env);
+          const logoutResult = yield* logout.finished;
+          expect(logoutResult.status).toBe(0);
+          expectNoSecrets(logoutResult);
+          const listed = yield* list.finished;
+          expectNoSecrets(listed);
+          expect(yield* readState(stateHome)).toBeNull();
+        }),
+      15_000,
     );
-    login.child.kill("SIGINT");
-    const result = await login.finished;
-    expect(result.status).toBe(130);
-    expectNoSecrets(result);
-    expect(await readState(stateHome)).toBeNull();
-    expectLockFilesGone(stateHome);
-  }, 15_000);
 
-  it("keeps the local credentials and exits non-zero when remote revocation stalls", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() + 3_600_000);
-    server.control.hangRevoke = true;
-    const started = Date.now();
-    const result = await spawnCli(["logout"], env).finished;
-    expect(Date.now() - started).toBeLessThan(8_000);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("local OAuth credentials were kept");
-    expectNoSecrets(result);
-    expect(await readState(stateHome)).toMatchObject({ refreshToken: REFRESH_TOKEN });
-  }, 15_000);
+    it.effect(
+      "serializes overlapping refresh so only one token request is made",
+      () =>
+        Effect.gen(function* () {
+          const { server, stateHome, env } = yield* startHarness();
+          yield* writeAuthorizedState(stateHome, server.baseUrl, -1_000);
+          server.control.tokenDelayMs = 400;
+          const first = yield* spawnCli(["addresses", "list"], env);
+          const second = yield* spawnCli(["addresses", "list"], env);
+          const results = yield* Effect.all([first.finished, second.finished]);
+          for (const result of results) {
+            expect(result.status).toBe(0);
+            expectNoSecrets(result);
+          }
+          expect(server.control.refreshTokenRequests).toBe(1);
+          const state = yield* readState(stateHome);
+          expect(state).toMatchObject({
+            accessToken: ROTATED_ACCESS_TOKEN,
+            refreshToken: ROTATED_REFRESH_TOKEN,
+          });
+        }),
+      15_000,
+    );
 
-  it("terminates a stalled refresh instead of hanging", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() - 1_000);
-    server.control.hangToken = true;
-    const started = Date.now();
-    const result = await spawnCli(["addresses", "list"], env).finished;
-    expect(Date.now() - started).toBeLessThan(10_000);
-    expect(result.status).not.toBe(0);
-    expectNoSecrets(result);
-    expectLockFilesGone(stateHome);
-  }, 15_000);
+    it.effect(
+      "cancels device login on SIGINT without persisting tokens or leaving locks",
+      () =>
+        Effect.gen(function* () {
+          const { stateHome, env } = yield* startHarness();
+          const login = yield* spawnCli(["login"], env);
+          yield* waitFor(
+            () => login.stdout().includes("Waiting for approval"),
+            "device login prompt",
+          );
+          yield* login.handle.kill({ killSignal: "SIGINT" });
+          const result = yield* login.finished;
+          expect(result.status).toBe(130);
+          expectNoSecrets(result);
+          expect(yield* readState(stateHome)).toBeNull();
+          yield* expectLockFilesGone(stateHome);
+        }),
+      15_000,
+    );
 
-  it("releases the credential lock when a stalled refresh is interrupted", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() - 1_000);
-    server.control.hangToken = true;
-    const list = spawnCli(["addresses", "list"], env);
-    await waitFor(() => server.control.refreshTokenRequests > 0, 5_000, "hung refresh");
-    list.child.kill("SIGINT");
-    const result = await list.finished;
-    expect(result.status).toBe(130);
-    expectNoSecrets(result);
-    expectLockFilesGone(stateHome);
-  }, 15_000);
+    it.effect(
+      "keeps the local credentials and exits non-zero when remote revocation stalls",
+      () =>
+        Effect.gen(function* () {
+          const { server, stateHome, env } = yield* startHarness();
+          yield* writeAuthorizedState(stateHome, server.baseUrl, 3_600_000);
+          server.control.hangRevoke = true;
+          const [elapsed, result] = yield* Effect.timed(
+            Effect.flatMap(spawnCli(["logout"], env), (logout) => logout.finished),
+          );
+          expect(Duration.toMillis(elapsed)).toBeLessThan(8_000);
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("local OAuth credentials were kept");
+          expectNoSecrets(result);
+          expect(yield* readState(stateHome)).toMatchObject({ refreshToken: REFRESH_TOKEN });
+        }),
+      15_000,
+    );
 
-  it("does not unlink a live lock because its PID is empty", async () => {
-    const stateHome = mkdtempSync(join(tmpdir(), "umail-cred-proc-"));
-    temporaryDirectories.push(stateHome);
-    const origin = "https://umail.example.test";
-    writeAuthorizedState(stateHome, origin, Date.now() + 3_600_000);
-    const lockPath = `${credentialFileIn(stateHome)}.lock`;
-    writeFileSync(lockPath, "", { mode: 0o600 });
-    chmodSync(lockPath, 0o600);
-    const env = { ...process.env, XDG_STATE_HOME: stateHome };
-    const workers = [spawnLockWorker(env), spawnLockWorker(env)];
-    const results = await Promise.all(workers.map((worker) => worker.finished));
-    for (const result of results) {
-      expect(result.status).toBe(0);
-      expectNoSecrets(result);
-      expect(Schema.decodeSync(Schema.fromJsonString(LockWorkerOutput))(result.stdout)).toEqual({
-        ok: false,
-        tag: "OAuthCredentialLockError",
-      });
-    }
-    expect(await readState(stateHome)).toMatchObject({
-      accessToken: ACCESS_TOKEN,
-      refreshToken: REFRESH_TOKEN,
-    });
-    expect(statSync(lockPath).isFile()).toBe(true);
-    expect(readFileSync(lockPath, "utf8")).toBe("");
-  }, 15_000);
+    it.effect(
+      "terminates a stalled refresh instead of hanging",
+      () =>
+        Effect.gen(function* () {
+          const { server, stateHome, env } = yield* startHarness();
+          yield* writeAuthorizedState(stateHome, server.baseUrl, -1_000);
+          server.control.hangToken = true;
+          const [elapsed, result] = yield* Effect.timed(
+            Effect.flatMap(spawnCli(["addresses", "list"], env), (list) => list.finished),
+          );
+          expect(Duration.toMillis(elapsed)).toBeLessThan(10_000);
+          expect(result.status).not.toBe(0);
+          expectNoSecrets(result);
+          yield* expectLockFilesGone(stateHome);
+        }),
+      15_000,
+    );
 
-  it("rejects a corrupt credential file without leaking secrets", async () => {
-    const { stateHome, env } = await startHarness();
-    const path = credentialFileIn(stateHome);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, "{not-json\n", { mode: 0o600 });
-    const result = await spawnCli(["addresses", "list"], env).finished;
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("missing or insecure");
-    expectNoSecrets(result);
-  });
+    it.effect(
+      "releases the credential lock when a stalled refresh is interrupted",
+      () =>
+        Effect.gen(function* () {
+          const { server, stateHome, env } = yield* startHarness();
+          yield* writeAuthorizedState(stateHome, server.baseUrl, -1_000);
+          server.control.hangToken = true;
+          const list = yield* spawnCli(["addresses", "list"], env);
+          yield* waitFor(() => server.control.refreshTokenRequests > 0, "hung refresh");
+          yield* list.handle.kill({ killSignal: "SIGINT" });
+          const result = yield* list.finished;
+          expect(result.status).toBe(130);
+          expectNoSecrets(result);
+          yield* expectLockFilesGone(stateHome);
+        }),
+      15_000,
+    );
 
-  it("rejects a world-writable credential file without leaking secrets", async () => {
-    const { server, stateHome, env } = await startHarness();
-    writeAuthorizedState(stateHome, server.baseUrl, Date.now() + 3_600_000);
-    chmodSync(credentialFileIn(stateHome), 0o666);
-    const result = await spawnCli(["addresses", "list"], env).finished;
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("missing or insecure");
-    expectNoSecrets(result);
-  });
+    it.effect(
+      "does not unlink a live lock because its PID is empty",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const stateHome = yield* makeStateHome;
+          const origin = "https://umail.example.test";
+          yield* writeAuthorizedState(stateHome, origin, 3_600_000);
+          const lockPath = `${yield* credentialFileIn(stateHome)}.lock`;
+          yield* fs.writeFileString(lockPath, "", { mode: 0o600 });
+          yield* fs.chmod(lockPath, 0o600);
+          const workers = [yield* spawnLockWorker(stateHome), yield* spawnLockWorker(stateHome)];
+          const results = yield* Effect.all(workers.map((worker) => worker.finished));
+          for (const result of results) {
+            expect(result.status).toBe(0);
+            expectNoSecrets(result);
+            expect(
+              yield* Schema.decodeEffect(Schema.fromJsonString(LockWorkerOutput))(result.stdout),
+            ).toEqual({ ok: false, tag: "OAuthCredentialLockError" });
+          }
+          expect(yield* readState(stateHome)).toMatchObject({
+            accessToken: ACCESS_TOKEN,
+            refreshToken: REFRESH_TOKEN,
+          });
+          expect((yield* fs.stat(lockPath)).type).toBe("File");
+          expect(yield* fs.readFileString(lockPath)).toBe("");
+        }),
+      15_000,
+    );
 
-  it("rejects a symlinked credential file without leaking secrets", async () => {
-    const { stateHome, env } = await startHarness();
-    const path = credentialFileIn(stateHome);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    symlinkSync(join(stateHome, "missing"), path);
-    const result = await spawnCli(["addresses", "list"], env).finished;
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("missing or insecure");
-    expectNoSecrets(result);
-  });
+    it.effect("rejects a corrupt credential file without leaking secrets", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { stateHome, env } = yield* startHarness();
+        const file = yield* credentialFileIn(stateHome);
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+        yield* fs.writeFileString(file, "{not-json\n", { mode: 0o600 });
+        const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing or insecure");
+        expectNoSecrets(result);
+      }),
+    );
+
+    it.effect("rejects a world-writable credential file without leaking secrets", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { server, stateHome, env } = yield* startHarness();
+        yield* writeAuthorizedState(stateHome, server.baseUrl, 3_600_000);
+        yield* fs.chmod(yield* credentialFileIn(stateHome), 0o666);
+        const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing or insecure");
+        expectNoSecrets(result);
+      }),
+    );
+
+    it.effect("rejects a symlinked credential file without leaking secrets", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { stateHome, env } = yield* startHarness();
+        const file = yield* credentialFileIn(stateHome);
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+        yield* fs.symlink(path.join(stateHome, "missing"), file);
+        const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing or insecure");
+        expectNoSecrets(result);
+      }),
+    );
+  },
+);
+
+const makeStateHome = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.makeTempDirectoryScoped({ prefix: "umail-cred-proc-" });
 });
 
-async function startHarness() {
-  const stateHome = mkdtempSync(join(tmpdir(), "umail-cred-proc-"));
-  temporaryDirectories.push(stateHome);
-  const server = await startFakeOAuth();
-  openServers.push(server);
-  const env = cliEnvironment(server.baseUrl, stateHome);
+const startHarness = Effect.fn("startHarness")(function* () {
+  const stateHome = yield* makeStateHome;
+  const server = yield* startFakeOAuth();
+  const env = { UMAIL_URL: server.baseUrl, XDG_STATE_HOME: stateHome };
   return { server, stateHome, env };
-}
+});
 
-function cliEnvironment(origin: string, stateHome: string) {
-  return {
-    ...process.env,
-    UMAIL_URL: origin,
-    XDG_STATE_HOME: stateHome,
-  };
-}
-
-function spawnCli(args: ReadonlyArray<string>, env: NodeJS.ProcessEnv): TrackedCliProcess {
-  return trackChild(
-    spawn(process.execPath, [CLI_BIN, ...args], {
-      cwd: REPO_ROOT,
+const spawnCli = Effect.fn("spawnCli")(function* (
+  args: ReadonlyArray<string>,
+  env: ProcessEnvironment,
+) {
+  const path = yield* Path.Path;
+  const root = yield* path.fromFileUrl(REPO_ROOT);
+  return yield* trackChild(
+    ChildProcess.make(process.execPath, [path.join(root, "apps/cli/src/bin.ts"), ...args], {
+      cwd: root,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      extendEnv: true,
+      stdin: "ignore",
+      killSignal: "SIGKILL",
     }),
   );
-}
+});
 
-function spawnLockWorker(env: NodeJS.ProcessEnv): TrackedCliProcess {
-  const script = `
+const LOCK_WORKER_SCRIPT = `
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
 import { credentialFile, makeCredentialStore } from ${JSON.stringify(CREDENTIAL_STORE_HREF)};
 
@@ -288,83 +308,77 @@ if (Result.isFailure(result)) {
   process.stdout.write(JSON.stringify({ ok: true }));
 }
 `;
-  return trackChild(
-    spawn(process.execPath, ["--input-type=module", "--eval", script], {
-      cwd: REPO_ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
+
+const spawnLockWorker = Effect.fn("spawnLockWorker")(function* (stateHome: string) {
+  const path = yield* Path.Path;
+  return yield* trackChild(
+    ChildProcess.make(process.execPath, ["--input-type=module", "--eval", LOCK_WORKER_SCRIPT], {
+      cwd: yield* path.fromFileUrl(REPO_ROOT),
+      env: { XDG_STATE_HOME: stateHome },
+      extendEnv: true,
+      stdin: "ignore",
+      killSignal: "SIGKILL",
     }),
   );
-}
+});
 
-function trackChild(child: ChildProcess): TrackedCliProcess {
-  openChildren.push(child);
+// Collects output while the process runs, so tests can wait on it and both pipes keep draining.
+const trackChild = Effect.fn("trackChild")(function* (command: ChildProcess.Command) {
+  const handle = yield* command;
   const stdoutChunks: Array<string> = [];
   const stderrChunks: Array<string> = [];
-  const stdout = child.stdout;
-  const stderr = child.stderr;
-  if (stdout === null || stderr === null) {
-    throw new Error("Expected piped stdio from CLI process");
-  }
-  stdout.on("data", (chunk: string | Buffer) => stdoutChunks.push(chunk.toString()));
-  stderr.on("data", (chunk: string | Buffer) => stderrChunks.push(chunk.toString()));
-  const finished = Promise.race([
-    once(child, "error").then((caught) => {
-      throw caught[0];
-    }),
-    once(child, "close").then((closeArgs) => {
-      const status = Schema.decodeUnknownSync(Schema.NullOr(Schema.Int))(closeArgs[0]);
-      const signal = Schema.decodeUnknownSync(Schema.NullOr(Schema.String))(closeArgs[1]);
-      return {
-        status,
-        signal: decodeSignal(signal),
-        stdout: stdoutChunks.join(""),
-        stderr: stderrChunks.join(""),
-      } satisfies CliProcessResult;
-    }),
-  ]);
-  return {
-    child,
-    stdout: () => stdoutChunks.join(""),
-    stderr: () => stderrChunks.join(""),
-    finished,
-  };
-}
+  const collect = (stream: typeof handle.stdout, chunks: Array<string>) =>
+    Effect.forkScoped(
+      Stream.runForEach(Stream.decodeText(stream), (text) => Effect.sync(() => chunks.push(text))),
+    );
+  const stdout = yield* collect(handle.stdout, stdoutChunks);
+  const stderr = yield* collect(handle.stderr, stderrChunks);
+  const finished = Effect.gen(function* () {
+    const status = yield* handle.exitCode;
+    yield* Fiber.join(stdout);
+    yield* Fiber.join(stderr);
+    return {
+      status,
+      stdout: stdoutChunks.join(""),
+      stderr: stderrChunks.join(""),
+    } satisfies CliProcessResult;
+  });
+  return { handle, stdout: () => stdoutChunks.join(""), finished };
+});
 
-function decodeSignal(signal: string | null): NodeJS.Signals | null {
-  if (signal === null) return null;
-  return Schema.decodeUnknownSync(Schema.Literals(["SIGINT", "SIGTERM", "SIGKILL"]))(signal);
-}
-
-function writeAuthorizedState(stateHome: string, origin: string, expiresAt: number) {
-  const path = credentialFileIn(stateHome);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const state = {
+const writeAuthorizedState = Effect.fn("writeAuthorizedState")(function* (
+  stateHome: string,
+  origin: string,
+  expiresInMs: number,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = yield* credentialFileIn(stateHome);
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+  const state = yield* Schema.encodeEffect(Schema.fromJsonString(OAuthCredentials))({
     origin,
     scope: "umail:access offline_access",
     accessToken: ACCESS_TOKEN,
     refreshToken: REFRESH_TOKEN,
-    expiresAt,
-  } satisfies OAuthCredentials;
-  writeFileSync(path, `${JSON.stringify(state)}\n`, { mode: 0o600 });
-}
+    expiresAt: (yield* Clock.currentTimeMillis) + expiresInMs,
+  });
+  yield* fs.writeFileString(file, `${state}\n`, { mode: 0o600 });
+});
 
-function credentialFileIn(stateHome: string) {
-  return join(stateHome, "umail", "oauth.json");
-}
+const credentialFileIn = Effect.fn("credentialFileIn")(function* (stateHome: string) {
+  const path = yield* Path.Path;
+  return path.join(stateHome, "umail", "oauth.json");
+});
 
-async function readState(stateHome: string) {
-  return Effect.runPromise(
-    makeCredentialStore(credentialFileIn(stateHome)).pipe(
-      Effect.flatMap((store) => store.read),
-      Effect.provide(NodeServices.layer),
-    ),
-  );
-}
+const readState = Effect.fn("readState")(function* (stateHome: string) {
+  const store = yield* makeCredentialStore(yield* credentialFileIn(stateHome));
+  return yield* store.read;
+});
 
-function expectLockFilesGone(stateHome: string) {
-  expect(existsSync(`${credentialFileIn(stateHome)}.lock`)).toBe(false);
-}
+const expectLockFilesGone = Effect.fn("expectLockFilesGone")(function* (stateHome: string) {
+  const fs = yield* FileSystem.FileSystem;
+  expect(yield* fs.exists(`${yield* credentialFileIn(stateHome)}.lock`)).toBe(false);
+});
 
 function expectNoSecrets(result: CliProcessResult) {
   const output = `${result.stdout}\n${result.stderr}`;
@@ -373,124 +387,92 @@ function expectNoSecrets(result: CliProcessResult) {
   }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
+const waitFor = Effect.fn("waitFor")(function* (predicate: () => boolean, label: string) {
+  yield* Effect.sync(predicate).pipe(
+    Effect.repeat({ until: (ready) => ready, schedule: Schedule.spaced("25 millis") }),
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.die(new Error(`Timed out waiting for ${label}`)),
+    }),
+  );
+});
 
-async function stopChild(child: ChildProcess) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGKILL");
-  await once(child, "exit");
-}
+const startFakeOAuth = Effect.fn("startFakeOAuth")(function* () {
+  const control: FakeOAuthControl = {
+    deviceApproved: false,
+    tokenDelayMs: 0,
+    hangToken: false,
+    hangRevoke: false,
+    refreshTokenRequests: 0,
+    deviceTokenRequests: 0,
+    revokeRequests: 0,
+  };
+  const server = Context.get(yield* Layer.build(NodeHttpServer.layerTest), HttpServer.HttpServer);
+  const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
+    server.address,
+  );
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  // Stalled requests are answered once the test ends: the server only closes after every
+  // request has a response, even when its client already exited.
+  const testEnded = yield* Deferred.make<void>();
+  yield* server.serve(handleOAuthRequest(baseUrl, control, Deferred.await(testEnded)));
+  yield* Effect.addFinalizer(() => Deferred.done(testEnded, Exit.void));
+  return { baseUrl, control };
+});
 
-function startFakeOAuth() {
-  return new Promise<FakeOAuthServer>((resolve, reject) => {
-    const control: FakeOAuthControl = {
-      deviceApproved: false,
-      tokenDelayMs: 0,
-      hangToken: false,
-      hangRevoke: false,
-      refreshTokenRequests: 0,
-      deviceTokenRequests: 0,
-      revokeRequests: 0,
-    };
-    const delayed: Array<ReturnType<typeof setTimeout>> = [];
-    const server = createServer((request, response) => {
-      void handleOAuthRequest(request, response, server, control, delayed).catch(() => {
-        if (!response.headersSent) jsonResponse(response, 500, { error: "server_error" });
-        else response.end();
-      });
-    });
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Int }))(
-        server.address(),
-      );
-      const fake = {
-        baseUrl: `http://127.0.0.1:${address.port}`,
-        control,
-        close: () => closeHttpServer(server, delayed),
-      };
-      resolve(fake);
-    });
-  });
-}
-
-async function handleOAuthRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  server: Server,
+const handleOAuthRequest = (
+  origin: string,
   control: FakeOAuthControl,
-  delayed: Array<ReturnType<typeof setTimeout>>,
-) {
-  const method = Schema.decodeUnknownSync(Schema.String)(request.method);
-  const rawUrl = Schema.decodeUnknownSync(Schema.String)(request.url);
-  const origin = serverOrigin(server);
-  const url = new URL(rawUrl, `${origin}/`);
-  const body = await readBody(request);
-  if (method === "GET" && url.pathname === "/.well-known/oauth-authorization-server/api/auth") {
-    jsonResponse(response, 200, {
-      issuer: `${origin}/api/auth`,
-      device_authorization_endpoint: `${origin}/api/auth/device/code`,
-      token_endpoint: `${origin}/api/auth/oauth2/token`,
-      revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
-    });
-    return;
-  }
-  if (method === "POST" && url.pathname === "/api/auth/device/code") {
-    jsonResponse(response, 200, {
-      device_code: DEVICE_CODE,
-      user_code: "ABCD-EFGH",
-      verification_uri: `${origin}/device`,
-      verification_uri_complete: `${origin}/device?user_code=ABCD-EFGH`,
-      expires_in: 600,
-      interval: 1,
-    });
-    return;
-  }
-  if (method === "POST" && url.pathname === "/api/auth/oauth2/token") {
-    const grantType = new URLSearchParams(body).get("grant_type");
-    if (grantType === "refresh_token") control.refreshTokenRequests += 1;
-    if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
-      control.deviceTokenRequests += 1;
+  stall: Effect.Effect<void>,
+) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = new URL(request.url, `${origin}/`);
+    const body = yield* request.text;
+    if (
+      request.method === "GET" &&
+      url.pathname === "/.well-known/oauth-authorization-server/api/auth"
+    ) {
+      return jsonResponse(200, {
+        issuer: `${origin}/api/auth`,
+        device_authorization_endpoint: `${origin}/api/auth/device/code`,
+        token_endpoint: `${origin}/api/auth/oauth2/token`,
+        revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
+      });
     }
-    if (control.hangToken) return;
-    const send = () => {
-      if (grantType === "refresh_token") {
-        jsonResponse(response, 200, rotatedTokens());
-        return;
-      }
-      if (control.deviceApproved) {
-        jsonResponse(response, 200, rotatedTokens());
-        return;
-      }
-      jsonResponse(response, 400, { error: "authorization_pending" });
-    };
-    if (control.tokenDelayMs <= 0) {
-      send();
-      return;
+    if (request.method === "POST" && url.pathname === "/api/auth/device/code") {
+      return jsonResponse(200, {
+        device_code: DEVICE_CODE,
+        user_code: "ABCD-EFGH",
+        verification_uri: `${origin}/device`,
+        verification_uri_complete: `${origin}/device?user_code=ABCD-EFGH`,
+        expires_in: 600,
+        interval: 1,
+      });
     }
-    delayed.push(setTimeout(send, control.tokenDelayMs));
-    return;
-  }
-  if (method === "POST" && url.pathname === "/api/auth/oauth2/revoke") {
-    control.revokeRequests += 1;
-    if (control.hangRevoke) return;
-    response.writeHead(200);
-    response.end();
-    return;
-  }
-  if (method === "GET" && url.pathname === "/addresses") {
-    jsonResponse(response, 200, []);
-    return;
-  }
-  jsonResponse(response, 404, { error: "not found" });
-}
+    if (request.method === "POST" && url.pathname === "/api/auth/oauth2/token") {
+      const grantType = new URLSearchParams(body).get("grant_type");
+      if (grantType === "refresh_token") control.refreshTokenRequests += 1;
+      if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
+        control.deviceTokenRequests += 1;
+      }
+      if (control.hangToken) yield* stall;
+      yield* Effect.sleep(Duration.millis(control.tokenDelayMs));
+      if (grantType === "refresh_token" || control.deviceApproved) {
+        return jsonResponse(200, rotatedTokens());
+      }
+      return jsonResponse(400, { error: "authorization_pending" });
+    }
+    if (request.method === "POST" && url.pathname === "/api/auth/oauth2/revoke") {
+      control.revokeRequests += 1;
+      if (control.hangRevoke) yield* stall;
+      return HttpServerResponse.empty({ status: 200 });
+    }
+    if (request.method === "GET" && url.pathname === "/addresses") {
+      return jsonResponse(200, []);
+    }
+    return jsonResponse(404, { error: "not found" });
+  });
 
 function rotatedTokens() {
   return {
@@ -502,31 +484,6 @@ function rotatedTokens() {
   };
 }
 
-function serverOrigin(server: Server) {
-  const address = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Int }))(server.address());
-  return `http://127.0.0.1:${address.port}`;
-}
-
-function jsonResponse(response: ServerResponse, status: number, value: Json) {
-  response.writeHead(status, { "content-type": "application/json" });
-  response.end(JSON.stringify(value));
-}
-
-function readBody(request: IncomingMessage) {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Array<Buffer> = [];
-    request.on("data", (chunk: string | Buffer) => {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    });
-    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    request.on("error", reject);
-  });
-}
-
-function closeHttpServer(server: Server, delayed: ReadonlyArray<ReturnType<typeof setTimeout>>) {
-  for (const timer of delayed) clearTimeout(timer);
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error === undefined ? resolve() : reject(error)));
-    server.closeAllConnections();
-  });
+function jsonResponse(status: number, value: Json) {
+  return HttpServerResponse.jsonUnsafe(value, { status });
 }

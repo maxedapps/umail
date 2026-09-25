@@ -1,16 +1,18 @@
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import { defineConfig } from "vitest/config";
 import { evaluateApplication, requireWorker, resolveGraphValue } from "./tests/stack-fixture.ts";
 import { bundleWorker } from "./tests/worker-bundle.ts";
 
-export default defineConfig(async () => {
-  const stack = await evaluateApplication("dev");
+const workerConfig = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const stack = yield* evaluateApplication("dev");
   const app = requireWorker(stack, "App");
-  const bundle = await bundleWorker(fileURLToPath(app.Props.main!), "App", app.Props);
-  const environment = await resolveGraphValue(app.Props.env);
+  const bundle = yield* bundleWorker(yield* path.fromFileUrl(app.Props.main!), "App", app.Props);
+  const environment = yield* resolveGraphValue(app.Props.env);
   const bindings: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(environment ?? {})) {
     const resolved = Redacted.isRedacted(value) ? Redacted.value(value) : value;
@@ -19,14 +21,14 @@ export default defineConfig(async () => {
       typeof resolved !== "number" &&
       typeof resolved !== "boolean"
     ) {
-      throw new Error(`Unexpected runtime binding ${key}`);
+      return yield* Effect.die(new Error(`Unexpected runtime binding ${key}`));
     }
     bindings[key] = resolved;
   }
   return {
     plugins: [
       cloudflareTest({
-        main: resolve(".alchemy/test-runtime/App", bundle.files[0].path),
+        main: path.resolve(".alchemy/test-runtime/App", bundle.files[0].path),
         miniflare: {
           compatibilityDate: "2026-08-21",
           compatibilityFlags: ["nodejs_compat"],
@@ -42,4 +44,6 @@ export default defineConfig(async () => {
     ],
     test: { include: ["tests/**/*.worker.spec.ts"] },
   };
-});
+}).pipe(Effect.provide(NodeServices.layer));
+
+export default defineConfig(() => Effect.runPromise(workerConfig));

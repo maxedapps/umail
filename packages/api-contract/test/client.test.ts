@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -20,6 +21,8 @@ interface CapturedRequest {
   readonly cookie: string | undefined;
   readonly body: string | undefined;
 }
+
+const parseJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
 
 function jsonBody(request: HttpClientRequest.HttpClientRequest) {
   if (request.body._tag === "Uint8Array") {
@@ -98,27 +101,23 @@ function testHttpClient(captured: Array<CapturedRequest>) {
 }
 
 describe("shared AgentMail API client", () => {
-  it("constructs root URLs and adds only the exact bearer and JSON headers", async () => {
-    const captured: Array<CapturedRequest> = [];
-    const config = {
-      baseUrl: "https://umail.example.test",
-      accessToken: Redacted.make("oauth-access-token"),
-    } satisfies UmailClientConfig;
-    const client = await Effect.runPromise(makeUmailClient(config, testHttpClient(captured)));
+  it.effect("constructs root URLs and adds only the exact bearer and JSON headers", () =>
+    Effect.gen(function* () {
+      const captured: Array<CapturedRequest> = [];
+      const config = {
+        baseUrl: "https://umail.example.test",
+        accessToken: Redacted.make("oauth-access-token"),
+      } satisfies UmailClientConfig;
+      const client = yield* makeUmailClient(config, testHttpClient(captured));
 
-    await Effect.runPromise(client.Addresses.listAddresses({}));
-    await Effect.runPromise(
-      client.Addresses.createAddress({
+      yield* client.Addresses.listAddresses({});
+      yield* client.Addresses.createAddress({
         payload: new CreateAddressPayload({ localPart: "inbox" }),
-      }),
-    );
-    const page = await Effect.runPromise(
-      client.Threads.listThreads({
+      });
+      const page = yield* client.Threads.listThreads({
         query: new ListThreadsQuery({ limit: 25, cursor: "cursor with +/=" }),
-      }),
-    );
-    const messages = await Effect.runPromise(
-      client.Messages.listMessages({
+      });
+      const messages = yield* client.Messages.listMessages({
         query: new ListMessagesQuery({
           direction: "inbound",
           addressId: "address-1",
@@ -127,64 +126,62 @@ describe("shared AgentMail API client", () => {
           limit: 10,
           cursor: "cursor with +/=",
         }),
-      }),
-    );
-    const message = await Effect.runPromise(
-      client.Messages.getMessage({ params: { id: "message-1" } }),
-    );
-
-    expect(captured).toHaveLength(5);
-    expect(captured[0]).toMatchObject({
-      method: "GET",
-      url: "https://umail.example.test/addresses",
-    });
-    expect(captured[1]).toMatchObject({
-      method: "POST",
-      url: "https://umail.example.test/addresses",
-    });
-    expect(JSON.parse(captured[1]?.body ?? "")).toEqual({ localPart: "inbox" });
-    const threadsUrl = new URL(captured[2]?.url ?? "");
-    expect(threadsUrl.pathname).toBe("/threads");
-    expect(threadsUrl.searchParams.get("limit")).toBe("25");
-    expect(threadsUrl.searchParams.get("cursor")).toBe("cursor with +/=");
-    expect(page).toEqual({ items: [], nextCursor: "next cursor" });
-    const messagesUrl = new URL(captured[3]?.url ?? "");
-    expect(captured[3]?.method).toBe("GET");
-    expect(messagesUrl.pathname).toBe("/messages");
-    expect(messagesUrl.searchParams.get("direction")).toBe("inbound");
-    expect(messagesUrl.searchParams.get("addressId")).toBe("address-1");
-    expect(messagesUrl.searchParams.get("since")).toBe("2026-08-25T00:00:00.000Z");
-    expect(messagesUrl.searchParams.get("unread")).toBe("true");
-    expect(messagesUrl.searchParams.get("limit")).toBe("10");
-    expect(messagesUrl.searchParams.get("cursor")).toBe("cursor with +/=");
-    expect(messagesUrl.searchParams.has("until")).toBe(false);
-    expect(messages).toEqual({ items: [], nextCursor: "next message cursor" });
-    expect(captured[4]).toMatchObject({
-      method: "GET",
-      url: "https://umail.example.test/messages/message-1",
-    });
-    expect(message.id).toBe("message-1");
-    expect(message.textBody).toBe("Hi");
-    expect(message.direction).toBe("inbound");
-    if (message.direction === "inbound") {
-      expect(message).toMatchObject({
-        envelopeFrom: "sender@example.com",
-        envelopeTo: "inbox@umail.example.test",
-        parsedDate: "2026-08-25T10:00:00.000Z",
-        forwardOutcome: "none",
-        forwardDestination: null,
       });
-    }
+      const message = yield* client.Messages.getMessage({ params: { id: "message-1" } });
 
-    for (const request of captured) {
-      expect(request.authorization).toBe("Bearer oauth-access-token");
-      expect(request.contentType).toBe("application/json");
-      expect(request.accessClientId).toBeUndefined();
-      expect(request.accessClientSecret).toBeUndefined();
-      expect(request.origin).toBeUndefined();
-      expect(request.cookie).toBeUndefined();
-    }
-  });
+      expect(captured).toHaveLength(5);
+      expect(captured[0]).toMatchObject({
+        method: "GET",
+        url: "https://umail.example.test/addresses",
+      });
+      expect(captured[1]).toMatchObject({
+        method: "POST",
+        url: "https://umail.example.test/addresses",
+      });
+      expect(parseJson(captured[1]?.body ?? "")).toEqual({ localPart: "inbox" });
+      const threadsUrl = new URL(captured[2]?.url ?? "");
+      expect(threadsUrl.pathname).toBe("/threads");
+      expect(threadsUrl.searchParams.get("limit")).toBe("25");
+      expect(threadsUrl.searchParams.get("cursor")).toBe("cursor with +/=");
+      expect(page).toEqual({ items: [], nextCursor: "next cursor" });
+      const messagesUrl = new URL(captured[3]?.url ?? "");
+      expect(captured[3]?.method).toBe("GET");
+      expect(messagesUrl.pathname).toBe("/messages");
+      expect(messagesUrl.searchParams.get("direction")).toBe("inbound");
+      expect(messagesUrl.searchParams.get("addressId")).toBe("address-1");
+      expect(messagesUrl.searchParams.get("since")).toBe("2026-08-25T00:00:00.000Z");
+      expect(messagesUrl.searchParams.get("unread")).toBe("true");
+      expect(messagesUrl.searchParams.get("limit")).toBe("10");
+      expect(messagesUrl.searchParams.get("cursor")).toBe("cursor with +/=");
+      expect(messagesUrl.searchParams.has("until")).toBe(false);
+      expect(messages).toEqual({ items: [], nextCursor: "next message cursor" });
+      expect(captured[4]).toMatchObject({
+        method: "GET",
+        url: "https://umail.example.test/messages/message-1",
+      });
+      expect(message.id).toBe("message-1");
+      expect(message.textBody).toBe("Hi");
+      expect(message.direction).toBe("inbound");
+      if (message.direction === "inbound") {
+        expect(message).toMatchObject({
+          envelopeFrom: "sender@example.com",
+          envelopeTo: "inbox@umail.example.test",
+          parsedDate: "2026-08-25T10:00:00.000Z",
+          forwardOutcome: "none",
+          forwardDestination: null,
+        });
+      }
+
+      for (const request of captured) {
+        expect(request.authorization).toBe("Bearer oauth-access-token");
+        expect(request.contentType).toBe("application/json");
+        expect(request.accessClientId).toBeUndefined();
+        expect(request.accessClientSecret).toBeUndefined();
+        expect(request.origin).toBeUndefined();
+        expect(request.cookie).toBeUndefined();
+      }
+    }),
+  );
 
   it("keeps the OAuth access token redacted outside the request header boundary", () => {
     const tokenValue = "access-token-that-must-not-render";
@@ -200,44 +197,51 @@ describe("shared AgentMail API client", () => {
 });
 
 describe("shared client configuration", () => {
-  it.each([
+  it.effect.each([
     "http://umail.example.test",
     "http://192.168.1.2:8787",
     "http://localhost.example.test",
     "http://[2001:db8::1]",
-  ])("rejects plaintext non-loopback origin %s", async (origin) => {
-    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: origin }))).rejects.toThrow(
-      "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
-    );
-  });
+  ])("rejects plaintext non-loopback origin %s", (origin) =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(baseUrlFrom({ UMAIL_URL: origin }));
+      expect(error.message).toBe(
+        "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
+      );
+    }),
+  );
 
-  it.each([
+  it.effect.each([
     "http://localhost:8787",
     "http://127.0.0.1:8787",
     "http://[::1]:8787",
     "https://umail.example.test",
     "https://192.168.1.2:8787",
-  ])("accepts secure or loopback origin %s", async (origin) => {
-    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: origin }))).resolves.toBe(origin);
-  });
+  ])("accepts secure or loopback origin %s", (origin) =>
+    Effect.gen(function* () {
+      expect(yield* baseUrlFrom({ UMAIL_URL: origin })).toBe(origin);
+    }),
+  );
 
-  it("accepts only a valid configured origin", async () => {
-    const configured = await Effect.runPromise(
-      baseUrlFrom({ UMAIL_URL: "https://umail.example.test/" }),
-    );
+  it.effect("accepts only a valid configured origin", () =>
+    Effect.gen(function* () {
+      const configured = yield* baseUrlFrom({ UMAIL_URL: "https://umail.example.test/" });
 
-    expect(configured).toBe("https://umail.example.test");
-  });
+      expect(configured).toBe("https://umail.example.test");
+    }),
+  );
 
-  it("reports safe errors for missing or invalid environment values", async () => {
-    await expect(Effect.runPromise(baseUrlFrom({}))).rejects.toThrow("UMAIL_URL is required");
-    await expect(Effect.runPromise(baseUrlFrom({ UMAIL_URL: "not a URL" }))).rejects.toThrow(
-      "UMAIL_URL must be a valid HTTP(S) origin",
-    );
-    await expect(
-      Effect.runPromise(baseUrlFrom({ UMAIL_URL: "https://umail.example.test/api" })),
-    ).rejects.toThrow("UMAIL_URL must be a valid HTTP(S) origin");
-  });
+  it.effect("reports safe errors for missing or invalid environment values", () =>
+    Effect.gen(function* () {
+      expect((yield* Effect.flip(baseUrlFrom({}))).message).toBe("UMAIL_URL is required");
+      expect((yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "not a URL" }))).message).toBe(
+        "UMAIL_URL must be a valid HTTP(S) origin",
+      );
+      expect(
+        (yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "https://umail.example.test/api" }))).message,
+      ).toBe("UMAIL_URL must be a valid HTTP(S) origin");
+    }),
+  );
 });
 
 // Reads UMAIL_URL from the given environment instead of the process's.

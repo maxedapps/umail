@@ -2,15 +2,17 @@
 
 import { parseMailboxAddress } from "@umail/api-contract";
 import { env, reset } from "cloudflare:test";
+import { beforeEach, expect, layer } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import { beforeEach, describe, expect, it } from "vitest";
+import * as Exit from "effect/Exit";
 
 import { inboundMessageId } from "../../src/mail/archive.ts";
 import { receiveInbound, type InboundDeps } from "../../src/mail/inbound.ts";
 import type { IndexReceiptWork } from "../../src/mail/process-index.ts";
-import { sha256Hex } from "../../src/crypto.ts";
+import { sha256Hex, WebCrypto } from "../../src/crypto.ts";
 import { DEFAULT_MAX_RAW_BYTES, rawObjectKey } from "../../src/mail/policy.ts";
-import { effectAccount, effectBucket, FakeEmail, runWithCrypto } from "./fakes.ts";
+import { effectAccount, effectBucket, FakeEmail } from "./fakes.ts";
 import type { AccountStoreTestHost } from "../account/worker-host.ts";
 
 type TestEnv = {
@@ -28,227 +30,266 @@ const FORWARD_DEST = "owner@example.com";
 const TEST_NOW_ISO = "2026-01-01T00:00:00.000Z";
 const LATER_NOW_ISO = "2026-01-02T00:00:00.000Z";
 
-describe("inbound receipts", () => {
-  beforeEach(async () => {
-    await reset();
-  });
+layer(WebCrypto)("inbound receipts", (it) => {
+  beforeEach(() => reset());
 
-  it("archives the raw bytes by digest, registers a ready receipt, forwards and publishes", async () => {
-    const world = createWorld("receipts-archive");
-    await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>Hi</p>");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+  it.effect(
+    "archives the raw bytes by digest, registers a ready receipt, forwards and publishes",
+    () =>
+      Effect.gen(function* () {
+        const world = createWorld("receipts-archive");
+        yield* seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
+        const raw = plainHtmlEml(INBOX, "<p>Hi</p>");
+        const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
 
-    await world.receive(email);
+        yield* world.receive(email);
 
-    const receiptId = await identityFor(raw, INBOX);
-    expect(email.rejectReason).toBeNull();
-    expect(email.forwards).toEqual([FORWARD_DEST]);
-    expect(world.published).toEqual([{ version: 1, receiptId }]);
-    const rawKey = rawObjectKey(await runWithCrypto(sha256Hex(raw)));
-    expect(await listArchiveKeys()).toEqual([rawKey]);
-    const stored = await testEnv.ARCHIVE.get(rawKey);
-    expect(new Uint8Array((await stored?.arrayBuffer()) ?? new ArrayBuffer(0))).toEqual(raw);
-    expect(await world.stub.getInboundReceipt(receiptId)).toEqual({
-      receiptId,
-      envelopeFrom: SENDER,
-      envelopeTo: INBOX,
-      rawKey,
-      receivedAt: TEST_NOW_ISO,
-      forwardOutcome: "success",
-      forwardDestination: FORWARD_DEST,
-      workState: "ready",
-      policyError: null,
-      retryAfter: "2026-01-01T00:05:00.000Z",
-    });
-  });
+        const receiptId = yield* identityFor(raw, INBOX);
+        expect(email.rejectReason).toBeNull();
+        expect(email.forwards).toEqual([FORWARD_DEST]);
+        expect(world.published).toEqual([{ version: 1, receiptId }]);
+        const rawKey = rawObjectKey(yield* sha256Hex(raw));
+        expect(yield* listArchiveKeys).toEqual([rawKey]);
+        const stored = yield* effectBucket(testEnv.ARCHIVE).get(rawKey);
+        expect(
+          new Uint8Array(stored === null ? new ArrayBuffer(0) : yield* stored.arrayBuffer()),
+        ).toEqual(raw);
+        expect(yield* receiptOf(world.stub, receiptId)).toEqual({
+          receiptId,
+          envelopeFrom: SENDER,
+          envelopeTo: INBOX,
+          rawKey,
+          receivedAt: TEST_NOW_ISO,
+          forwardOutcome: "success",
+          forwardDestination: FORWARD_DEST,
+          workState: "ready",
+          policyError: null,
+          retryAfter: "2026-01-01T00:05:00.000Z",
+        });
+      }),
+  );
 
-  it("rejects when the bytes read exceed the limit even if the advertised size is small", async () => {
-    const world = createWorld("receipts-actual-size");
-    await seedMailbox(world.stub, INBOX);
-    const raw = new Uint8Array(DEFAULT_MAX_RAW_BYTES + 1);
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw, rawSize: 16 });
+  it.effect(
+    "rejects when the bytes read exceed the limit even if the advertised size is small",
+    () =>
+      Effect.gen(function* () {
+        const world = createWorld("receipts-actual-size");
+        yield* seedMailbox(world.stub, INBOX);
+        const raw = new Uint8Array(DEFAULT_MAX_RAW_BYTES + 1);
+        const email = new FakeEmail({ to: INBOX, from: SENDER, raw, rawSize: 16 });
 
-    await world.receive(email);
+        yield* world.receive(email);
 
-    expect(email.rejectReason).toBe("message too large");
-    expect(await listArchiveKeys()).toEqual([]);
-    expect(world.published).toEqual([]);
-  });
+        expect(email.rejectReason).toBe("message too large");
+        expect(yield* listArchiveKeys).toEqual([]);
+        expect(world.published).toEqual([]);
+      }),
+  );
 
-  it("rejects advertised oversize without archiving or publishing", async () => {
-    const world = createWorld("receipts-advertised-oversize");
-    await seedMailbox(world.stub, INBOX);
-    const email = new FakeEmail({
-      to: INBOX,
-      from: SENDER,
-      raw: plainHtmlEml(INBOX, "<p>Hi</p>"),
-      rawSize: DEFAULT_MAX_RAW_BYTES + 1,
-    });
+  it.effect("rejects advertised oversize without archiving or publishing", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-advertised-oversize");
+      yield* seedMailbox(world.stub, INBOX);
+      const email = new FakeEmail({
+        to: INBOX,
+        from: SENDER,
+        raw: plainHtmlEml(INBOX, "<p>Hi</p>"),
+        rawSize: DEFAULT_MAX_RAW_BYTES + 1,
+      });
 
-    await world.receive(email);
+      yield* world.receive(email);
 
-    expect(email.rejectReason).toBe("message too large");
-    expect(await listArchiveKeys()).toEqual([]);
-    expect(world.published).toEqual([]);
-  });
+      expect(email.rejectReason).toBe("message too large");
+      expect(yield* listArchiveKeys).toEqual([]);
+      expect(world.published).toEqual([]);
+    }),
+  );
 
-  it("fails the handler when the raw object write fails", async () => {
-    const world = createWorld("receipts-raw-fail", { fail: "archive" });
-    await seedMailbox(world.stub, INBOX);
-    const raw = plainHtmlEml(INBOX, "<p>raw</p>");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+  it.effect("fails the handler when the raw object write fails", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-raw-fail", { fail: "archive" });
+      yield* seedMailbox(world.stub, INBOX);
+      const raw = plainHtmlEml(INBOX, "<p>raw</p>");
+      const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
 
-    await expect(world.receive(email)).rejects.toThrow("archive put failed");
-    expect(email.rejectReason).toBeNull();
-    expect(world.published).toEqual([]);
-    expect(await world.stub.getInboundReceipt(await identityFor(raw, INBOX))).toBeNull();
-  });
+      yield* expectDefect(world.receive(email), "archive put failed");
+      expect(email.rejectReason).toBeNull();
+      expect(world.published).toEqual([]);
+      expect(yield* receiptOf(world.stub, yield* identityFor(raw, INBOX))).toBeNull();
+    }),
+  );
 
-  it("fails the handler when registration fails after a durable archive", async () => {
-    const world = createWorld("receipts-register-fail", { fail: "register" });
-    await seedMailbox(world.stub, INBOX);
-    const raw = plainHtmlEml(INBOX, "<p>register</p>");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+  it.effect("fails the handler when registration fails after a durable archive", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-register-fail", { fail: "register" });
+      yield* seedMailbox(world.stub, INBOX);
+      const raw = plainHtmlEml(INBOX, "<p>register</p>");
+      const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
 
-    await expect(world.receive(email)).rejects.toThrow("register failed");
-    expect(email.rejectReason).toBeNull();
-    expect(world.published).toEqual([]);
-    expect(await listArchiveKeys()).toEqual([rawObjectKey(await runWithCrypto(sha256Hex(raw)))]);
-    expect(await world.stub.getInboundReceipt(await identityFor(raw, INBOX))).toBeNull();
-  });
+      yield* expectDefect(world.receive(email), "register failed");
+      expect(email.rejectReason).toBeNull();
+      expect(world.published).toEqual([]);
+      expect(yield* listArchiveKeys).toEqual([rawObjectKey(yield* sha256Hex(raw))]);
+      expect(yield* receiptOf(world.stub, yield* identityFor(raw, INBOX))).toBeNull();
+    }),
+  );
 
-  it("fails the handler when publication fails after a durable receipt", async () => {
-    const world = createWorld("receipts-publish-fail", { fail: "publish" });
-    await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>publish</p>");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+  it.effect("fails the handler when publication fails after a durable receipt", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-publish-fail", { fail: "publish" });
+      yield* seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
+      const raw = plainHtmlEml(INBOX, "<p>publish</p>");
+      const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
 
-    await expect(world.receive(email)).rejects.toThrow("index send failed");
-    expect(email.rejectReason).toBeNull();
-    expect(world.published).toEqual([]);
-    const receipt = await world.stub.getInboundReceipt(await identityFor(raw, INBOX));
-    expect(receipt?.workState).toBe("ready");
-    expect(receipt).toMatchObject({ forwardOutcome: "success", forwardDestination: FORWARD_DEST });
-  });
+      yield* expectDefect(world.receive(email), "index send failed");
+      expect(email.rejectReason).toBeNull();
+      expect(world.published).toEqual([]);
+      const receipt = yield* receiptOf(world.stub, yield* identityFor(raw, INBOX));
+      expect(receipt?.workState).toBe("ready");
+      expect(receipt).toMatchObject({
+        forwardOutcome: "success",
+        forwardDestination: FORWARD_DEST,
+      });
+    }),
+  );
 
-  it("keeps distinct receipts for distinct recipients of the same raw bytes", async () => {
-    const world = createWorld("receipts-distinct");
-    await seedMailbox(world.stub, INBOX);
-    await seedMailbox(world.stub, OTHER_INBOX);
-    const raw = plainHtmlEml(INBOX, "<p>shared</p>");
+  it.effect("keeps distinct receipts for distinct recipients of the same raw bytes", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-distinct");
+      yield* seedMailbox(world.stub, INBOX);
+      yield* seedMailbox(world.stub, OTHER_INBOX);
+      const raw = plainHtmlEml(INBOX, "<p>shared</p>");
 
-    await world.receive(new FakeEmail({ to: INBOX, from: SENDER, raw }));
-    await world.receive(new FakeEmail({ to: OTHER_INBOX, from: SENDER, raw }));
+      yield* world.receive(new FakeEmail({ to: INBOX, from: SENDER, raw }));
+      yield* world.receive(new FakeEmail({ to: OTHER_INBOX, from: SENDER, raw }));
 
-    const first = await world.stub.getInboundReceipt(await identityFor(raw, INBOX));
-    const second = await world.stub.getInboundReceipt(await identityFor(raw, OTHER_INBOX));
-    expect(world.published.map((work) => work.receiptId)).toEqual([
-      first?.receiptId,
-      second?.receiptId,
-    ]);
-    expect(first?.receiptId).not.toBe(second?.receiptId);
-    expect(first?.envelopeTo).toBe(INBOX);
-    expect(second?.envelopeTo).toBe(OTHER_INBOX);
-    expect(first?.rawKey).toBe(second?.rawKey);
-    expect(await listArchiveKeys()).toEqual([first?.rawKey]);
-  });
+      const first = yield* receiptOf(world.stub, yield* identityFor(raw, INBOX));
+      const second = yield* receiptOf(world.stub, yield* identityFor(raw, OTHER_INBOX));
+      expect(world.published.map((work) => work.receiptId)).toEqual([
+        first?.receiptId,
+        second?.receiptId,
+      ]);
+      expect(first?.receiptId).not.toBe(second?.receiptId);
+      expect(first?.envelopeTo).toBe(INBOX);
+      expect(second?.envelopeTo).toBe(OTHER_INBOX);
+      expect(first?.rawKey).toBe(second?.rawKey);
+      expect(yield* listArchiveKeys).toEqual([first?.rawKey]);
+    }),
+  );
 
-  it("rejects mail for an inactive mailbox without forwarding it", async () => {
-    const inactive = createWorld("receipts-inactive");
-    await seedMailbox(inactive.stub, INBOX, { destination: FORWARD_DEST, active: false });
-    const inactiveEmail = new FakeEmail({
-      to: INBOX,
-      from: SENDER,
-      raw: plainHtmlEml(INBOX, "<p>inactive</p>"),
-    });
-    await inactive.receive(inactiveEmail);
-    expect(inactiveEmail.rejectReason).toBe("unknown recipient");
-    expect(inactiveEmail.forwards).toEqual([]);
-    expect(await listArchiveKeys()).toEqual([]);
-  });
+  it.effect("rejects mail for an inactive mailbox without forwarding it", () =>
+    Effect.gen(function* () {
+      const inactive = createWorld("receipts-inactive");
+      yield* seedMailbox(inactive.stub, INBOX, { destination: FORWARD_DEST, active: false });
+      const inactiveEmail = new FakeEmail({
+        to: INBOX,
+        from: SENDER,
+        raw: plainHtmlEml(INBOX, "<p>inactive</p>"),
+      });
+      yield* inactive.receive(inactiveEmail);
+      expect(inactiveEmail.rejectReason).toBe("unknown recipient");
+      expect(inactiveEmail.forwards).toEqual([]);
+      expect(yield* listArchiveKeys).toEqual([]);
+    }),
+  );
 
   // Cloudflare refuses a destination that has not been verified yet, among other reasons.
-  it("records a refused forward and still accepts the message", async () => {
-    const world = createWorld("receipts-forward-fail");
-    await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>forward</p>");
-    const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    email.failNextForward();
+  it.effect("records a refused forward and still accepts the message", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-forward-fail");
+      yield* seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
+      const raw = plainHtmlEml(INBOX, "<p>forward</p>");
+      const email = new FakeEmail({ to: INBOX, from: SENDER, raw });
+      email.failNextForward();
 
-    await world.receive(email);
+      yield* world.receive(email);
 
-    const receiptId = await identityFor(raw, INBOX);
-    expect(email.rejectReason).toBeNull();
-    expect(world.published).toEqual([{ version: 1, receiptId }]);
-    expect(await world.stub.getInboundReceipt(receiptId)).toMatchObject({
-      forwardOutcome: "failure",
-      forwardDestination: FORWARD_DEST,
-    });
-  });
+      const receiptId = yield* identityFor(raw, INBOX);
+      expect(email.rejectReason).toBeNull();
+      expect(world.published).toEqual([{ version: 1, receiptId }]);
+      expect(yield* receiptOf(world.stub, receiptId)).toMatchObject({
+        forwardOutcome: "failure",
+        forwardDestination: FORWARD_DEST,
+      });
+    }),
+  );
 
-  it("does not native-forward again on duplicate envelope replay", async () => {
-    const world = createWorld("receipts-replay");
-    await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>replay</p>");
-    const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    await world.receive(first);
-    const replay = createWorld("receipts-replay", { nowIso: LATER_NOW_ISO });
-    const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    await replay.receive(second);
+  it.effect("does not native-forward again on duplicate envelope replay", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-replay");
+      yield* seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
+      const raw = plainHtmlEml(INBOX, "<p>replay</p>");
+      const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
+      yield* world.receive(first);
+      const replay = createWorld("receipts-replay", { nowIso: LATER_NOW_ISO });
+      const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
+      yield* replay.receive(second);
 
-    const receiptId = await identityFor(raw, INBOX);
-    expect(first.forwards).toEqual([FORWARD_DEST]);
-    expect(second.forwards).toEqual([]);
-    expect(world.published).toEqual([{ version: 1, receiptId }]);
-    expect(replay.published).toEqual([{ version: 1, receiptId }]);
-    const receipt = await world.stub.getInboundReceipt(receiptId);
-    expect(receipt?.receivedAt).toBe(TEST_NOW_ISO);
-    expect(receipt).toMatchObject({ forwardOutcome: "success", forwardDestination: FORWARD_DEST });
-  });
+      const receiptId = yield* identityFor(raw, INBOX);
+      expect(first.forwards).toEqual([FORWARD_DEST]);
+      expect(second.forwards).toEqual([]);
+      expect(world.published).toEqual([{ version: 1, receiptId }]);
+      expect(replay.published).toEqual([{ version: 1, receiptId }]);
+      const receipt = yield* receiptOf(world.stub, receiptId);
+      expect(receipt?.receivedAt).toBe(TEST_NOW_ISO);
+      expect(receipt).toMatchObject({
+        forwardOutcome: "success",
+        forwardDestination: FORWARD_DEST,
+      });
+    }),
+  );
 
-  it("records unknown forwarding after interruption and does not overwrite it on replay", async () => {
-    const interrupted = createWorld("receipts-unknown", { fail: "observe-success" });
-    await seedMailbox(interrupted.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>unknown</p>");
-    const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    await expect(interrupted.receive(first)).rejects.toThrow("observe failed");
-    expect(first.forwards).toEqual([FORWARD_DEST]);
-    const receiptId = await identityFor(raw, INBOX);
-    expect(await interrupted.stub.getInboundReceipt(receiptId)).toMatchObject({
-      receivedAt: TEST_NOW_ISO,
-      forwardOutcome: "unknown",
-      forwardDestination: FORWARD_DEST,
-    });
+  it.effect(
+    "records unknown forwarding after interruption and does not overwrite it on replay",
+    () =>
+      Effect.gen(function* () {
+        const interrupted = createWorld("receipts-unknown", { fail: "observe-success" });
+        yield* seedMailbox(interrupted.stub, INBOX, { destination: FORWARD_DEST });
+        const raw = plainHtmlEml(INBOX, "<p>unknown</p>");
+        const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
+        yield* expectDefect(interrupted.receive(first), "observe failed");
+        expect(first.forwards).toEqual([FORWARD_DEST]);
+        const receiptId = yield* identityFor(raw, INBOX);
+        expect(yield* receiptOf(interrupted.stub, receiptId)).toMatchObject({
+          receivedAt: TEST_NOW_ISO,
+          forwardOutcome: "unknown",
+          forwardDestination: FORWARD_DEST,
+        });
 
-    const replay = createWorld("receipts-unknown", { nowIso: LATER_NOW_ISO });
-    const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    second.failNextForward();
-    await replay.receive(second);
-    expect(second.forwards).toEqual([]);
-    expect(replay.published).toEqual([{ version: 1, receiptId }]);
-    expect(await replay.stub.getInboundReceipt(receiptId)).toMatchObject({
-      receivedAt: TEST_NOW_ISO,
-      forwardOutcome: "unknown",
-      forwardDestination: FORWARD_DEST,
-    });
-  });
+        const replay = createWorld("receipts-unknown", { nowIso: LATER_NOW_ISO });
+        const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
+        second.failNextForward();
+        yield* replay.receive(second);
+        expect(second.forwards).toEqual([]);
+        expect(replay.published).toEqual([{ version: 1, receiptId }]);
+        expect(yield* receiptOf(replay.stub, receiptId)).toMatchObject({
+          receivedAt: TEST_NOW_ISO,
+          forwardOutcome: "unknown",
+          forwardDestination: FORWARD_DEST,
+        });
+      }),
+  );
 
-  it("does not overwrite a settled forwarding observation on a duplicate envelope", async () => {
-    const world = createWorld("receipts-settled");
-    await seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
-    const raw = plainHtmlEml(INBOX, "<p>settled</p>");
-    const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    await world.receive(first);
-    const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
-    second.failNextForward();
-    await world.receive(second);
+  it.effect("does not overwrite a settled forwarding observation on a duplicate envelope", () =>
+    Effect.gen(function* () {
+      const world = createWorld("receipts-settled");
+      yield* seedMailbox(world.stub, INBOX, { destination: FORWARD_DEST });
+      const raw = plainHtmlEml(INBOX, "<p>settled</p>");
+      const first = new FakeEmail({ to: INBOX, from: SENDER, raw });
+      yield* world.receive(first);
+      const second = new FakeEmail({ to: INBOX, from: SENDER, raw });
+      second.failNextForward();
+      yield* world.receive(second);
 
-    const receipt = await world.stub.getInboundReceipt(await identityFor(raw, INBOX));
-    expect(first.forwards).toEqual([FORWARD_DEST]);
-    expect(second.forwards).toEqual([]);
-    expect(receipt).toMatchObject({ forwardOutcome: "success", forwardDestination: FORWARD_DEST });
-  });
+      const receipt = yield* receiptOf(world.stub, yield* identityFor(raw, INBOX));
+      expect(first.forwards).toEqual([FORWARD_DEST]);
+      expect(second.forwards).toEqual([]);
+      expect(receipt).toMatchObject({
+        forwardOutcome: "success",
+        forwardDestination: FORWARD_DEST,
+      });
+    }),
+  );
 });
 
 type WorldOptions = {
@@ -272,9 +313,9 @@ function createWorld(accountName: string, options: WorldOptions = {}) {
       send: (body) =>
         options.fail === "publish"
           ? Effect.die(new Error("index send failed"))
-          : Effect.promise(async () => {
+          : Effect.promise(() => {
               published.push(body);
-              await testEnv.INDEX.send(body);
+              return testEnv.INDEX.send(body);
             }),
     },
     account: {
@@ -293,48 +334,59 @@ function createWorld(accountName: string, options: WorldOptions = {}) {
   return {
     stub,
     published,
-    receive: (email: FakeEmail) => runWithCrypto(receiveInbound(email, deps)),
+    receive: (email: FakeEmail) => receiveInbound(email, deps),
   };
 }
 
-async function seedMailbox(
+const seedMailbox = Effect.fn("seedMailbox")(function* (
   stub: DurableObjectStub<AccountStoreTestHost>,
   address: string,
   options: {
     readonly destination?: string;
     readonly active?: boolean;
   } = {},
-): Promise<void> {
+) {
   const normalized = parseOk(address);
-  const created = await stub.createAddress(
-    normalized.localPart,
-    normalized.domain,
-    "Inbox",
-    TEST_NOW_ISO,
+  const created = yield* Effect.promise(() =>
+    stub.createAddress(normalized.localPart, normalized.domain, "Inbox", TEST_NOW_ISO),
   );
   if (created === null) {
-    throw new Error("expected seeded mailbox");
+    return yield* Effect.die(new Error("expected seeded mailbox"));
   }
-  if (options.destination !== undefined) {
-    await stub.setAddressForwarding(created.id, options.destination, TEST_NOW_ISO);
+  const destination = options.destination;
+  if (destination !== undefined) {
+    yield* Effect.promise(() => stub.setAddressForwarding(created.id, destination, TEST_NOW_ISO));
   }
   if (options.active === false) {
-    const patched = await stub.patchAddress(created.id, { active: false }, TEST_NOW_ISO);
+    const patched = yield* Effect.promise(() =>
+      stub.patchAddress(created.id, { active: false }, TEST_NOW_ISO),
+    );
     if (patched === null) {
-      throw new Error("expected mailbox patch");
+      return yield* Effect.die(new Error("expected mailbox patch"));
     }
   }
+});
+
+function receiptOf(stub: DurableObjectStub<AccountStoreTestHost>, receiptId: string) {
+  return Effect.promise(() => stub.getInboundReceipt(receiptId));
 }
 
-async function listArchiveKeys(): Promise<string[]> {
-  const listed = await testEnv.ARCHIVE.list();
-  return listed.objects.map((object) => object.key).sort();
-}
+const listArchiveKeys = Effect.promise(() => testEnv.ARCHIVE.list()).pipe(
+  Effect.map((listed) => listed.objects.map((object) => object.key).sort()),
+);
 
-async function identityFor(raw: Uint8Array, to: string): Promise<string> {
-  const digest = await runWithCrypto(sha256Hex(raw));
-  return runWithCrypto(inboundMessageId(digest, { from: SENDER, to: parseOk(to).address }));
-}
+const identityFor = Effect.fn("identityFor")(function* (raw: Uint8Array, to: string) {
+  const digest = yield* sha256Hex(raw);
+  return yield* inboundMessageId(digest, { from: SENDER, to: parseOk(to).address });
+});
+
+const expectDefect = Effect.fn("expectDefect")(function* <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  message: string,
+) {
+  const exit = yield* Effect.exit(effect);
+  expect(Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : "succeeded").toContain(message);
+});
 
 function parseOk(address: string) {
   const parsed = parseMailboxAddress(address);

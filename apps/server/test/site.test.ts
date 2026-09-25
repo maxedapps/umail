@@ -1,9 +1,9 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
 
 import { MailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
 import {
@@ -17,7 +17,7 @@ import {
 const ROOT = Schema.decodeSync(MailDomain)("umail.example.com");
 
 const readRoot = (env: Record<string, string>) =>
-  Effect.runSyncExit(rootDomain.parse(ConfigProvider.fromEnv({ env })));
+  Effect.exit(rootDomain.parse(ConfigProvider.fromEnv({ env })));
 
 describe("stageHostnameLabel", () => {
   it("keeps canonical DNS-safe names unchanged", () => {
@@ -83,24 +83,32 @@ describe("layoutForStage", () => {
 });
 
 describe("rootDomain", () => {
-  it("parses UMAIL_DOMAIN into a mail domain", () => {
-    const exit = readRoot({ UMAIL_DOMAIN: " Umail.Example.com " });
-    expect(exit).toStrictEqual(Exit.succeed("umail.example.com"));
-  });
+  it.effect("parses UMAIL_DOMAIN into a mail domain", () =>
+    Effect.gen(function* () {
+      const exit = yield* readRoot({ UMAIL_DOMAIN: " Umail.Example.com " });
+      expect(exit).toStrictEqual(Exit.succeed("umail.example.com"));
+    }),
+  );
 
-  it("rejects a missing UMAIL_DOMAIN", () => {
-    expect(Exit.isFailure(readRoot({}))).toBe(true);
-  });
+  it.effect("rejects a missing UMAIL_DOMAIN", () =>
+    Effect.gen(function* () {
+      expect(Exit.isFailure(yield* readRoot({}))).toBe(true);
+    }),
+  );
 
-  it("rejects an invalid UMAIL_DOMAIN", () => {
-    expect(Exit.isFailure(readRoot({ UMAIL_DOMAIN: "" }))).toBe(true);
-    expect(Exit.isFailure(readRoot({ UMAIL_DOMAIN: "inbox@umail.example.com" }))).toBe(true);
-  });
+  it.effect("rejects an invalid UMAIL_DOMAIN", () =>
+    Effect.gen(function* () {
+      expect(Exit.isFailure(yield* readRoot({ UMAIL_DOMAIN: "" }))).toBe(true);
+      expect(Exit.isFailure(yield* readRoot({ UMAIL_DOMAIN: "inbox@umail.example.com" }))).toBe(
+        true,
+      );
+    }),
+  );
 });
 
 describe("operatorEmail", () => {
   const read = (value: string) =>
-    Effect.runSyncExit(
+    Effect.exit(
       operatorEmail.parse(
         ConfigProvider.fromEnv({
           env: { UMAIL_DOMAIN: "umail.example.com", UMAIL_OPERATOR_EMAIL: value },
@@ -110,17 +118,24 @@ describe("operatorEmail", () => {
   const failureMessage = (exit: Exit.Exit<unknown, unknown>) =>
     Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : "";
 
-  it("parses an inbox outside UMAIL_DOMAIN and rejects an invalid address", () => {
-    expect(read(" Operator@Example.NET ")).toStrictEqual(Exit.succeed("Operator@example.net"));
-    expect(failureMessage(read("not-an-address"))).toContain("ConfigError");
-  });
+  it.effect("parses an inbox outside UMAIL_DOMAIN and rejects an invalid address", () =>
+    Effect.gen(function* () {
+      expect(yield* read(" Operator@Example.NET ")).toStrictEqual(
+        Exit.succeed("Operator@example.net"),
+      );
+      expect(failureMessage(yield* read("not-an-address"))).toContain("ConfigError");
+    }),
+  );
 
   // An inbox umail hosts would let a client that reads it approve its own sends.
-  it.each(["operator@umail.example.com", "operator@Dev-Mail.Umail.Example.com"])(
+  it.effect.each(["operator@umail.example.com", "operator@Dev-Mail.Umail.Example.com"])(
     "rejects %s because umail hosts it",
-    (address) => {
-      expect(failureMessage(read(address))).toContain("must be an inbox outside UMAIL_DOMAIN");
-    },
+    (address) =>
+      Effect.gen(function* () {
+        expect(failureMessage(yield* read(address))).toContain(
+          "must be an inbox outside UMAIL_DOMAIN",
+        );
+      }),
   );
 });
 

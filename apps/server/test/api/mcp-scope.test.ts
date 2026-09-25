@@ -1,95 +1,98 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { operatorOAuthPrincipal } from "@umail/api-contract";
-import { RuntimeContext } from "alchemy/RuntimeContext";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { describe, expect, it } from "vitest";
 
 import type { ApiDeps } from "../../src/api/app.ts";
 import { registerTools } from "../../src/api/mcp/tools.ts";
-import { webCrypto } from "../../src/crypto.ts";
-import { createWorld } from "./world.ts";
+import { MCP_PROTOCOL_VERSION } from "./mcp-drivers.ts";
+import { WorkerServices, createWorld } from "./world.ts";
 
-const MCP_PROTOCOL_VERSION = "2026-07-28";
-// The tools under test read nothing from alchemy's runtime context.
-const TEST_RUNTIME_CONTEXT = {
-  Type: "test",
-  id: "mcp-scope",
-  env: {},
-  get: () => Effect.succeed(undefined),
-  set: (id: string) => Effect.succeed(id),
-};
+const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("MCP tool request services", () => {
-  it("runs umail_list_sending_identities with the request Scope passed to registerTools", async () => {
-    const deps = await scopeOracleDeps();
-    const scope = await Effect.runPromise(Scope.make());
-    try {
-      const result = await callListSendingIdentities(
-        deps,
-        Context.make(Scope.Scope, scope).pipe(
-          Context.add(Crypto.Crypto, webCrypto),
-          Context.add(RuntimeContext, TEST_RUNTIME_CONTEXT),
-        ),
-      );
-      expect(result.isError).not.toBe(true);
-      expect(result.structuredContent).toEqual({ sendingIdentities: [] });
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-  });
+  it.effect(
+    "runs umail_list_sending_identities with the request Scope passed to registerTools",
+    () =>
+      Effect.gen(function* () {
+        const deps = yield* scopeOracleDeps();
+        const services = yield* Layer.build(WorkerServices);
+        const result = yield* callListSendingIdentities(
+          deps,
+          Context.add(services, Scope.Scope, yield* Effect.scope),
+        );
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toEqual({ sendingIdentities: [] });
+      }),
+  );
 
-  it("answers a generic failure and logs the defect when the request Scope is missing", async () => {
-    const deps = await scopeOracleDeps();
-    const messages: Array<unknown> = [];
-    const capture = Logger.make(({ message }) => {
-      messages.push(message);
-    });
-    const result = await callListSendingIdentities(
-      deps,
-      Context.make(Logger.CurrentLoggers, new Set([capture])).pipe(
-        Context.add(Crypto.Crypto, webCrypto),
-        Context.add(RuntimeContext, TEST_RUNTIME_CONTEXT),
-      ),
-    );
-    expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain("The AgentMail API request failed.");
-    expect(JSON.stringify(result)).not.toContain("Service not found");
-    expect(messages).toEqual([["MCP tool failed"]]);
-  });
+  it.effect("answers a generic failure and logs the defect when the request Scope is missing", () =>
+    Effect.gen(function* () {
+      const deps = yield* scopeOracleDeps();
+      const messages: Array<unknown> = [];
+      const capture = Logger.make(({ message }) => {
+        messages.push(message);
+      });
+      const services = yield* Layer.build(WorkerServices);
+      const result = yield* callListSendingIdentities(
+        deps,
+        Context.add(services, Logger.CurrentLoggers, new Set([capture])),
+      );
+      expect(result.isError).toBe(true);
+      expect(toJson(result.content)).toContain("The AgentMail API request failed.");
+      expect(toJson(result)).not.toContain("Service not found");
+      expect(messages).toEqual([["MCP tool failed"]]);
+    }),
+  );
 });
 
-function eraseServices<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E> {
-  return effect as Effect.Effect<A, E>;
-}
-
-async function scopeOracleDeps(): Promise<ApiDeps> {
-  const world = await createWorld({
-    account: { listSendingIdentities: () => eraseServices(Effect.map(Effect.scope, () => [])) },
+// The store answers only when the tool runs with a request Scope among its services, and dies
+// the way a missing service would otherwise.
+const scopeOracleDeps = Effect.fn("scopeOracleDeps")(function* () {
+  const world = yield* createWorld({
+    account: {
+      listSendingIdentities: () =>
+        Effect.flatMap(
+          Effect.serviceOption(Scope.Scope),
+          Option.match({
+            onNone: () => Effect.die("Service not found: Scope"),
+            onSome: () => Effect.succeed([]),
+          }),
+        ),
+    },
   });
   return world.deps;
-}
+});
 
-async function callListSendingIdentities(
+const callListSendingIdentities = Effect.fn("callListSendingIdentities")(function* (
   deps: ApiDeps,
   services: Context.Context<Crypto.Crypto | RuntimeContext>,
 ) {
-  const handler = createMcpHandler(
-    () => {
-      const server = new McpServer(
-        { name: "umail", version: "0.0.0" },
-        { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
-      );
-      registerTools(server, deps, operatorOAuthPrincipal("operator", "scope-oracle"), services);
-      return server;
-    },
-    { legacy: "reject" },
+  const handler = yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      createMcpHandler(
+        () => {
+          const server = new McpServer(
+            { name: "umail", version: "0.0.0" },
+            { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
+          );
+          registerTools(server, deps, operatorOAuthPrincipal("operator", "scope-oracle"), services);
+          return server;
+        },
+        { legacy: "reject" },
+      ),
+    ),
+    (handler) => Effect.promise(() => handler.close()),
   );
   const mcp = new Client(
     { name: "umail-scope-oracle", version: "0.0.0" },
@@ -101,11 +104,11 @@ async function callListSendingIdentities(
   const transport = new StreamableHTTPClientTransport(new URL("http://umail.test/mcp"), {
     fetch: (url, init) => handler.fetch(new Request(String(url), init)),
   });
-  await mcp.connect(transport);
-  try {
-    return await mcp.callTool({ name: "umail_list_sending_identities", arguments: {} });
-  } finally {
-    await mcp.close();
-    await handler.close();
-  }
-}
+  yield* Effect.acquireRelease(
+    Effect.promise(() => mcp.connect(transport)),
+    () => Effect.promise(() => mcp.close()),
+  );
+  return yield* Effect.promise(() =>
+    mcp.callTool({ name: "umail_list_sending_identities", arguments: {} }),
+  );
+}, Effect.scoped);
