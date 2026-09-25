@@ -20,5 +20,8 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.worker.spec.ts"],
+    // Some specs make hundreds of sequential Durable Object calls: well under 5 s alone, but not on
+    // a busy machine.
+    testTimeout: 30_000,
   },
 });
