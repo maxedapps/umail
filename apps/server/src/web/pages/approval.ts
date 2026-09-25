@@ -3,7 +3,15 @@ import * as DateTime from "effect/DateTime";
 
 import type { OutboundJob, StoredApproval } from "../../account/domain.ts";
 import type { PageView } from "../document.ts";
-import { bidiText, contactHtml, contactName, html, timeHtml, type Html } from "../html.ts";
+import {
+  bidiText,
+  contactHtml,
+  contactListHtml,
+  contactName,
+  html,
+  timeHtml,
+  type Html,
+} from "../html.ts";
 import { noticePage } from "./notice.ts";
 
 type StatePresentation = {
@@ -163,12 +171,12 @@ function metadataHtml(request: StoredApproval, message: OutboundThreadMessage): 
           : null
       }
       <dt>To</dt>
-      <dd>${contactList(message.to)}</dd>
+      <dd>${contactListHtml(message.to)}</dd>
       ${
         message.cc.length === 0
           ? null
           : html`<dt>Cc</dt>
-              <dd>${contactList(message.cc)}</dd>`
+              <dd>${contactListHtml(message.cc)}</dd>`
       }
       <dt>Subject</dt>
       <dd>${bidiText(subjectOf(message))}</dd>
@@ -236,12 +244,6 @@ function actionsHtml(token: ApprovalToken, request: StoredApproval): Html | null
       <button type="submit" class="secondary" formaction="${base}/deny">Deny request</button>
     </form>
   </section>`;
-}
-
-function contactList(contacts: ReadonlyArray<MailContact>): Html {
-  return html`<ul>
-    ${contacts.map((contact) => html`<li>${contactHtml(contact)}</li>`)}
-  </ul>`;
 }
 
 function sameContact(left: MailContact, right: MailContact): boolean {

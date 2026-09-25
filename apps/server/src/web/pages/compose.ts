@@ -21,7 +21,7 @@ import {
 } from "../../api/operations.ts";
 import { randomId } from "../../crypto.ts";
 import { htmlResponse, redirect, type PageView } from "../document.ts";
-import { contactHtml, displayText, html, type Html } from "../html.ts";
+import { contactListHtml, displayText, html, type Html } from "../html.ts";
 import { mailboxNav } from "./mail.ts";
 
 type ReplyMode = "reply" | "reply-all";
@@ -56,14 +56,6 @@ function fieldError(errors: ComposeErrors, field: ComposeField): Html | null {
 
 function invalid(errors: ComposeErrors, field: ComposeField): Html | null {
   return errors[field] === undefined ? null : html`aria-invalid="true"`;
-}
-
-function contactsHtml(contacts: ReadonlyArray<MailContact>): Html {
-  return contacts.length === 0
-    ? html`<span class="muted">Nobody</span>`
-    : html`<ul>
-        ${contacts.map((contact) => html`<li>${contactHtml(contact)}</li>`)}
-      </ul>`;
 }
 
 export function composePage(
@@ -114,9 +106,9 @@ export function composePage(
             <dt>From</dt>
             <dd class="mono">${reply.from}</dd>
             <dt>To</dt>
-            <dd>${contactsHtml(reply.to)}</dd>
+            <dd>${contactListHtml(reply.to)}</dd>
             <dt>Cc</dt>
-            <dd>${contactsHtml(reply.cc)}</dd>
+            <dd>${contactListHtml(reply.cc)}</dd>
           </dl>`;
   return {
     kind: "console",

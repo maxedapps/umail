@@ -122,10 +122,27 @@ export function contactHtml(contact: MailContact): Html {
   >`;
 }
 
+export function contactListHtml(contacts: ReadonlyArray<MailContact>): Html {
+  return contacts.length === 0
+    ? html`<span class="muted">Nobody</span>`
+    : html`<ul>
+        ${contacts.map((contact) => html`<li>${contactHtml(contact)}</li>`)}
+      </ul>`;
+}
+
 export function contactName(contact: MailContact): string {
   return contact.displayName === null || contact.displayName.length === 0
     ? contact.address
     : contact.displayName;
+}
+
+// An avatar's letters: the first letter or digit of up to two words, "?" when there are none.
+export function initials(name: string): string {
+  const letters = displayText(name)
+    .split(" ")
+    .flatMap((word) => /[\p{L}\p{N}]/u.exec(word)?.[0] ?? [])
+    .slice(0, 2);
+  return letters.length === 0 ? "?" : letters.join("").toUpperCase();
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -142,4 +159,9 @@ export function utcDateTime(iso: string): string {
 
 export function timeHtml(iso: string): Html {
   return html`<time datetime="${iso}">${utcDateTime(iso)}</time>`;
+}
+
+// A list time: the console script shortens it to the time today, the day this year, else the date.
+export function shortTimeHtml(iso: string): Html {
+  return html`<time datetime="${iso}" data-short>${utcDateTime(iso)}</time>`;
 }

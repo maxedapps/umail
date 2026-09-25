@@ -6,6 +6,8 @@ import {
   displayText,
   html,
   htmlText,
+  initials,
+  shortTimeHtml,
   utcDateTime,
 } from "../../src/web/html.ts";
 
@@ -56,5 +58,26 @@ describe("mail metadata display", () => {
 
   it("prints instants as fixed UTC text", () => {
     expect(utcDateTime("2026-09-24T08:05:00.000Z")).toBe("24 Sep 2026, 08:05 UTC");
+  });
+
+  it("marks list times for the short format and keeps the UTC fallback", () => {
+    expect(htmlText(shortTimeHtml("2026-09-24T08:05:00.000Z"))).toBe(
+      '<time datetime="2026-09-24T08:05:00.000Z" data-short>24 Sep 2026, 08:05 UTC</time>',
+    );
+  });
+});
+
+describe("avatar initials", () => {
+  it.each([
+    ["Anna Berg", "AB"],
+    ["anna@example.com", "A"],
+    ["Anna Maria Berg", "AM"],
+    ["\u202e\u2066 -- ... \u2069", "?"],
+  ])("gives %j the letters %j", (name, letters) => {
+    expect(initials(name)).toBe(letters);
+  });
+
+  it("renders escaped when a name carries markup", () => {
+    expect(htmlText(bidiText(initials("<b>Anna</b> Berg")))).toBe('<bdi dir="auto">BB</bdi>');
   });
 });

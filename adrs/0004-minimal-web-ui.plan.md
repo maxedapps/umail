@@ -1,6 +1,6 @@
 # Plan for 0004: A minimal visual design for every browser page
 
-- **Status:** Ready
+- **Status:** In progress
 - **ADR:** `adrs/0004-minimal-web-ui.md`
 - **Visual spec:** the approved mockup, version 2: https://claude.ai/artifact/XMd6W4PyEwaqC3VJBUXSH8. A local copy is at `adrs/0004-minimal-web-ui.mockup.html`, and task 8 deletes it.
 
@@ -235,7 +235,7 @@ Type selectors also get styles: `[popover]` and `::backdrop`, `fieldset`, `detai
 
 Then run the full `pnpm test`.
 
-**Done:** no.
+**Done:** yes. `icons.ts` holds the 17 icons and the logo (the logo's parts are styled through `.logo circle|rect|path`, so it needs no extra classes). The three contact lists are now `contactListHtml`.
 
 ### 2. Stylesheet and the two layouts
 

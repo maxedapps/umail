@@ -49,14 +49,25 @@ const KIND_POLICIES = {
 const PERMISSIONS_POLICY =
   "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
-// Shows every `<time>` in the viewer's zone; the server's UTC text stays as the fallback.
+// Shows every `<time>` in the viewer's zone; the server's UTC text stays as the title. A
+// `data-short` time shows only the time today, the day this year, and the date before that.
 const TIME_SCRIPT = `
-const format = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const clock = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+const day = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const now = new Date();
 for (const time of document.querySelectorAll("time[datetime]")) {
-  const date = new Date(time.dateTime);
-  if (Number.isNaN(date.getTime())) continue;
+  const at = new Date(time.dateTime);
+  if (Number.isNaN(at.getTime())) continue;
   time.title = time.textContent;
-  time.textContent = format.format(date);
+  time.textContent = !time.hasAttribute("data-short")
+    ? full.format(at)
+    : at.toDateString() === now.toDateString()
+      ? clock.format(at)
+      : at.getFullYear() === now.getFullYear()
+        ? day.format(at)
+        : date.format(at);
 }
 `;
 

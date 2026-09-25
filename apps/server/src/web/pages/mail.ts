@@ -34,7 +34,7 @@ import {
 } from "../document.ts";
 import {
   bidiText,
-  contactHtml,
+  contactListHtml,
   contactName,
   displayText,
   html,
@@ -110,12 +110,6 @@ export function mailListPage(
   };
 }
 
-function contactList(contacts: ThreadMessage["to"]): Html {
-  return html`<ul>
-    ${contacts.map((contact) => html`<li>${contactHtml(contact)}</li>`)}
-  </ul>`;
-}
-
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -133,14 +127,14 @@ function openMessageHtml(message: ThreadMessage, addresses: ReadonlyArray<Addres
   return html`<article class="panel" id="open-message" aria-label="Message">
     <dl class="meta">
       <dt>From</dt>
-      <dd>${contactList(message.from)}</dd>
+      <dd>${contactListHtml(message.from)}</dd>
       <dt>To</dt>
-      <dd>${contactList(message.to)}</dd>
+      <dd>${contactListHtml(message.to)}</dd>
       ${
         message.cc.length === 0
           ? null
           : html`<dt>Cc</dt>
-              <dd>${contactList(message.cc)}</dd>`
+              <dd>${contactListHtml(message.cc)}</dd>`
       }
       <dt>Date</dt>
       <dd>${timeHtml(message.occurredAt)}</dd>
