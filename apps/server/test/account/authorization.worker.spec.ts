@@ -10,7 +10,7 @@ const NOW = "2026-01-01T00:00:00.000Z";
 const DOMAIN = requireMailDomain("umail.example.com");
 
 describe("account-store scoped visibility and mutations", () => {
-  it("shows mixed-mailbox conversation summaries while scoping bodies and mutations", async () => {
+  it("shows a scoped reader only its mailboxes' part of a mixed-mailbox conversation", async () => {
     const store = accountStore("auth-mixed-mailbox");
     const inbox = await requireAddress(store, "inbox");
     const probe = await requireAddress(store, "probe");
@@ -21,15 +21,21 @@ describe("account-store scoped visibility and mutations", () => {
       mailboxScope: [inbox.id],
     });
     expect(threads.items).toHaveLength(1);
-    expect(threads.items[0]?.messageCount).toBe(2);
-    expect(
-      threads.items[0]?.involvedMailboxIdentities.map((identity) => identity.id).sort(),
-    ).toEqual([inbox.id, probe.id].sort());
+    expect(threads.items[0]?.subject).toBe("parent");
+    expect(threads.items[0]?.messageCount).toBe(1);
+    expect(threads.items[0]?.unreadCount).toBe(1);
+    expect(threads.items[0]?.involvedMailboxIdentities.map((identity) => identity.id)).toEqual([
+      inbox.id,
+    ]);
 
-    const messages = await store.listThreadMessageSummaries(parent.threadId, {
-      mailboxScope: [inbox.id],
-    });
-    expect(messages.items.map((item) => item.id)).toEqual(["parent", "child"]);
+    for (const handle of [parent.threadId, "child"]) {
+      const messages = await store.listThreadMessageSummaries(handle, {
+        mailboxScope: [inbox.id],
+      });
+      expect(messages.items.map((item) => item.id)).toEqual(["parent"]);
+    }
+    const everything = await store.listThreadSummaries({ mailboxScope: "all" });
+    expect(everything.items[0]?.messageCount).toBe(2);
 
     expect(await store.getMessageBody("parent", [inbox.id])).toMatchObject({
       id: "parent",
@@ -44,7 +50,7 @@ describe("account-store scoped visibility and mutations", () => {
 
     await store.markThreadRead(parent.threadId, true, [inbox.id], "2026-01-01T00:00:02.000Z");
     const afterRead = await store.listThreadMessageSummaries(parent.threadId, {
-      mailboxScope: [inbox.id],
+      mailboxScope: "all",
     });
     expect(afterRead.items.find((item) => item.id === "parent")?.isRead).toBe(true);
     expect(afterRead.items.find((item) => item.id === "child")?.isRead).toBe(false);

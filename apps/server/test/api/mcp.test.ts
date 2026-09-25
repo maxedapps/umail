@@ -746,6 +746,58 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     }
   });
 
+  it("keeps other mailboxes' messages out of a scoped client's thread tools", async () => {
+    const world = await createWorld();
+    const inbox = await seedMailbox(world, "inbox");
+    const probe = await seedMailbox(world, "probe");
+    await seedInboundMessage(world, inbox.id, {
+      id: "shared-root",
+      subject: "Visible root",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    await seedInboundMessage(world, probe.id, {
+      id: "shared-hidden",
+      subject: "Hidden reply",
+      from: "hidden-sender@example.com",
+      inReplyToHeader: "<shared-root@example.com>",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    });
+    const registered = await registerMcpClient(world, { label: "Inbox reader" });
+    const token = await issueMcpAccessToken(world, registered);
+    const client = await connectedMcp(world, token.access_token);
+    await updatePolicy(world, registered.clientId, {
+      mailboxes: inbox.id,
+      sendMode: "deny",
+      recipients: "any",
+    });
+    try {
+      const results = [
+        await client.callTool({ name: "umail_list_threads", arguments: {} }),
+        await client.callTool({ name: "umail_get_thread", arguments: { threadId: "shared-root" } }),
+        await client.callTool({
+          name: "umail_get_thread",
+          arguments: { threadId: "shared-hidden" },
+        }),
+        await client.callTool({
+          name: "umail_set_thread_read_state",
+          arguments: { threadId: "shared-root", isRead: true },
+        }),
+      ];
+      for (const result of results) {
+        expect(result.isError).not.toBe(true);
+        const text = JSON.stringify(result.structuredContent);
+        expect(text).toContain("Visible root");
+        expect(text).not.toContain("Hidden reply");
+        expect(text).not.toContain("hidden-sender@example.com");
+        expect(text).not.toContain(probe.address);
+      }
+      const thread = Schema.decodeUnknownSync(GetThreadToolOutput)(results[1]?.structuredContent);
+      expect(thread.thread.messages.map((message) => message.id)).toEqual(["shared-root"]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("refuses umail_get_message_headers without read permission before any archive read", async () => {
     const world = await createWorld();
     const mailbox = await seedMailbox(world);

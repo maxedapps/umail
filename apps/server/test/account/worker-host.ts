@@ -329,7 +329,7 @@ export class AccountStoreTestHost extends DurableObject {
     this.#ensureReady();
     return Schema.decodeUnknownSync(Schema.Array(QueryPlanRow))(
       this.ctx.storage.sql
-        .exec(`EXPLAIN QUERY PLAN ${threadMessagesSql(false)}`, "thread-id", 50)
+        .exec(`EXPLAIN QUERY PLAN ${threadMessagesSql(false, "all")}`, "thread-id", 50)
         .toArray(),
     ).map((row) => row.detail);
   }

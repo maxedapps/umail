@@ -66,14 +66,14 @@ const MESSAGE_SUMMARY_SELECT = `msg.id AS id,
 const MESSAGE_SUMMARY_FROM = `FROM messages msg
 LEFT JOIN inbound_receipts receipt ON receipt.id = msg.id AND msg.direction = 'inbound'`;
 
-/** Thread open: one page of a thread's live messages, oldest first, off `messages_thread_idx`. */
-export function threadMessagesSql(withCursor: boolean): string {
+/** Thread open: one page of a thread's live, in-scope messages, oldest first, off `messages_thread_idx`. */
+export function threadMessagesSql(withCursor: boolean, scope: MailboxScope): string {
   const cursor = withCursor
     ? " AND (msg.occurred_at > ? OR (msg.occurred_at = ? AND msg.id > ?))"
     : "";
   return `SELECT ${MESSAGE_SUMMARY_SELECT}
 ${MESSAGE_SUMMARY_FROM}
-WHERE msg.thread_id = ? AND msg.deleted_at IS NULL${cursor}
+WHERE msg.thread_id = ? AND msg.deleted_at IS NULL${inScope(scope, "msg.mailbox_id")}${cursor}
 ORDER BY msg.occurred_at ASC, msg.id ASC
 LIMIT ?`;
 }
@@ -114,7 +114,7 @@ export function listThreadSummaries(
     const heads = lookahead.slice(0, limit);
     const last = heads[heads.length - 1];
     return {
-      items: enrichThreadSummaries(storage, heads),
+      items: enrichThreadSummaries(storage, heads, scope),
       nextCursor:
         lookahead.length > limit && last !== undefined
           ? { at: last.last_activity_at, id: last.latest_message_id }
@@ -130,14 +130,17 @@ export function listThreadMessageSummaries(
 ): ThreadMessageSummaryPage {
   const limit = pageLimit(query.limit);
   return storage.transactionSync(() => {
-    const threadId = resolveThread(storage, handle, query.mailboxScope);
+    const scope = query.mailboxScope;
+    const threadId = resolveThread(storage, handle, scope);
     const cursor = query.cursor;
-    const binds =
-      cursor === undefined
-        ? [threadId, limit + 1]
-        : [threadId, cursor.at, cursor.at, cursor.id, limit + 1];
+    const binds = [
+      threadId,
+      ...scopeBinds(scope),
+      ...(cursor === undefined ? [] : [cursor.at, cursor.at, cursor.id]),
+      limit + 1,
+    ];
     const lookahead = Schema.decodeUnknownSync(Schema.Array(MessageSummaryRow))(
-      storage.sql.exec(threadMessagesSql(cursor !== undefined), ...binds).toArray(),
+      storage.sql.exec(threadMessagesSql(cursor !== undefined, scope), ...binds).toArray(),
     );
     const pageRows = lookahead.slice(0, limit);
     return {
@@ -375,8 +378,8 @@ function selectMessageSummaryRows(
   );
 }
 
-// Newest-first walk over live messages that keeps each thread's newest live message (its head).
-// A scoped reader sees a thread when any live message of it is in scope.
+// Newest-first walk over live, in-scope messages that keeps each thread's newest one (its head).
+// A scoped reader sees a thread through its in-scope messages only.
 function selectThreadHeads(
   storage: AccountSqliteStorage,
   query: ListThreadSummariesQuery,
@@ -384,24 +387,17 @@ function selectThreadHeads(
   limit: number,
 ): ReadonlyArray<ThreadHeadRow> {
   const clauses = [
-    "m.deleted_at IS NULL",
+    `m.deleted_at IS NULL${inScope(scope, "m.mailbox_id")}`,
     `NOT EXISTS (
        SELECT 1 FROM messages n
-       WHERE n.thread_id = m.thread_id AND n.deleted_at IS NULL
+       WHERE n.thread_id = m.thread_id AND n.deleted_at IS NULL${inScope(scope, "n.mailbox_id")}
          AND (n.occurred_at > m.occurred_at OR (n.occurred_at = m.occurred_at AND n.id > m.id))
      )`,
   ];
-  const binds: Array<string | number> = [];
+  const binds: Array<string | number> = [...scopeBinds(scope), ...scopeBinds(scope)];
   if (query.cursor !== undefined) {
     clauses.push("(m.occurred_at < ? OR (m.occurred_at = ? AND m.id < ?))");
     binds.push(query.cursor.at, query.cursor.at, query.cursor.id);
-  }
-  if (scope !== "all") {
-    clauses.push(`EXISTS (
-       SELECT 1 FROM messages s
-       WHERE s.thread_id = m.thread_id AND s.deleted_at IS NULL${inScope(scope, "s.mailbox_id")}
-     )`);
-    binds.push(...scopeBinds(scope));
   }
   return Schema.decodeUnknownSync(Schema.Array(ThreadHeadRow))(
     storage.sql
@@ -424,6 +420,7 @@ function selectThreadHeads(
 function enrichThreadSummaries(
   storage: AccountSqliteStorage,
   heads: ReadonlyArray<ThreadHeadRow>,
+  scope: MailboxScope,
 ): ReadonlyArray<ThreadSummary> {
   if (heads.length === 0) {
     return [];
@@ -431,6 +428,7 @@ function enrichThreadSummaries(
   const statsById = loadThreadStats(
     storage,
     heads.map((head) => head.thread_id),
+    scope,
   );
   const participantsById = loadParticipantsByMessageIds(
     storage,
@@ -458,10 +456,11 @@ function enrichThreadSummaries(
   });
 }
 
-// Page stats: computed for the page's threads only.
+// Page stats: computed for the page's threads and the reader's scope only.
 function loadThreadStats(
   storage: AccountSqliteStorage,
   threadIds: ReadonlyArray<string>,
+  scope: MailboxScope,
 ): ReadonlyMap<string, ThreadStatsRow> {
   const rows = Schema.decodeUnknownSync(Schema.Array(ThreadStatsRow))(
     storage.sql
@@ -471,9 +470,10 @@ function loadThreadStats(
                 SUM(CASE WHEN direction = 'inbound' AND is_read = 0 THEN 1 ELSE 0 END) AS unread_count,
                 GROUP_CONCAT(DISTINCT mailbox_id) AS involved_mailbox_ids
          FROM messages
-         WHERE thread_id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL
+         WHERE thread_id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL${inScope(scope)}
          GROUP BY thread_id`,
         bindJsonStringArray(threadIds),
+        ...scopeBinds(scope),
       )
       .toArray(),
   );
