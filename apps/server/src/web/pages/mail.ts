@@ -146,10 +146,12 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
           }</span
         >
         <small
-          >to
-          ${namesHtml(message.to)}${
-            message.cc.length === 0 ? null : html`, cc ${namesHtml(message.cc)}`
-          }</small
+          >${[
+            message.to.length === 0 ? null : html`to ${namesHtml(message.to)}`,
+            message.cc.length === 0 ? null : html`cc ${namesHtml(message.cc)}`,
+          ]
+            .filter((part) => part !== null)
+            .map((part, index) => html`${index === 0 ? null : ", "}${part}`)}</small
         >
       </div>
       ${timeHtml(message.occurredAt)}
