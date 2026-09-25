@@ -1,4 +1,8 @@
-import type { ApprovalPreviewHeaders, ApprovalTrustedPageHeaders } from "@umail/api-contract";
+import type {
+  Address,
+  ApprovalPreviewHeaders,
+  ApprovalTrustedPageHeaders,
+} from "@umail/api-contract";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -6,10 +10,11 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import { PRODUCT_NAME, productPageTitle } from "../api/brand/identity.ts";
 import { html, htmlText, trustedHtml, type Html } from "./html.ts";
+import { icon, logo } from "./icons.ts";
 import { styles } from "./styles.ts";
 
-// What a page may do, which sets its CSP and its layout: console pages get the console chrome,
-// every other kind the narrow focus column.
+// What a page may do, which sets its CSP and its layout: console pages get the sidebar, approval
+// pages a single column, and every other kind a centred card.
 export type PageKind = "auth" | "console" | "form" | "approval" | "static";
 
 export type ConsoleSection = "mail" | "mailboxes" | "clients";
@@ -26,7 +31,16 @@ export type PageView = {
   // Auth pages only: their own script. Console pages always get the time script.
   readonly script?: string | undefined;
   readonly section?: ConsoleSection | undefined;
-  readonly aside?: Html | undefined;
+  // Console only: a back link or breadcrumbs, then actions, in a sticky bar above the content.
+  readonly toolbar?: Html | undefined;
+  // Mail pages only: the mailboxes nested under Mail in the sidebar.
+  readonly mailboxes?: MailboxNav | undefined;
+};
+
+// The mailboxes nested under Mail, and the list being read: "all", a mailbox id, or null.
+export type MailboxNav = {
+  readonly addresses: ReadonlyArray<Address>;
+  readonly current: string | null;
 };
 
 type PageStatus = 200 | 400 | 403 | 404 | 409 | 410 | 500;
@@ -71,12 +85,6 @@ for (const time of document.querySelectorAll("time[datetime]")) {
 }
 `;
 
-const CONSOLE_NAV: ReadonlyArray<readonly [ConsoleSection, string, string]> = [
-  ["mail", "Mail", "/mail"],
-  ["mailboxes", "Mailboxes", "/mailboxes"],
-  ["clients", "Clients", "/clients"],
-];
-
 export const pageNonce = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   return Encoding.encodeHex(yield* crypto.randomBytes(16));
@@ -86,43 +94,41 @@ export function renderDocument(view: PageView, nonce: string): string {
   const policy = KIND_POLICIES[view.kind];
   const script = view.kind === "console" ? TIME_SCRIPT : view.script;
   const scriptHtml = policy.script && script !== undefined ? scriptElement(nonce, script) : null;
-  const head = html`<div class="page-head">
-      <h1>${view.heading}</h1>
-      ${view.lede === undefined ? null : html`<p class="lede">${view.lede}</p>`}
-    </div>
-    ${view.flash === undefined ? null : flashHtml(view.flash)} ${view.main}`;
+  const lede = view.lede === undefined ? null : html`<p class="lede">${view.lede}</p>`;
+  const flash = view.flash?.tone === "error" ? flashHtml(view.flash.message) : null;
+  const pageHead = html`<div class="page-head">
+    <h1>${view.heading}</h1>
+    ${lede}
+  </div>`;
   const body =
     view.kind === "console"
       ? html`<body class="console">
-          <header>
-            <a class="wordmark" href="/mail">${PRODUCT_NAME}</a>
-            <nav aria-label="Console">
-              ${CONSOLE_NAV.map(
-                ([section, label, href]) =>
-                  html`<a
-                    href="${href}"
-                    aria-current="${section === view.section ? "page" : "false"}"
-                    >${label}</a
-                  >`,
-              )}
-            </nav>
-            <form method="post" action="/logout">
-              <button class="secondary" type="submit">Sign out</button>
-            </form>
-          </header>
-          <div class="console-body">
-            <div class="console-grid">
-              ${view.aside === undefined ? null : html`<aside>${view.aside}</aside>`}
-              <main>${head}</main>
-            </div>
-          </div>
+          ${sidebarHtml(view)}
+          <main>
+            ${view.toolbar === undefined ? null : html`<div class="toolbar">${view.toolbar}</div>`}
+            <div class="content">${pageHead} ${flash} ${view.main}</div>
+            ${view.flash?.tone === "success" ? toastHtml(view.flash.message) : null}
+          </main>
           ${scriptHtml}
         </body>`
-      : html`<body class="focus">
-          <header><span class="wordmark">${PRODUCT_NAME}</span></header>
-          <main>${head}</main>
-          ${scriptHtml}
-        </body>`;
+      : view.kind === "approval"
+        ? html`<body class="focus">
+            <header class="focus-bar">${logo}${PRODUCT_NAME} <small>Send approval</small></header>
+            <main class="column">${pageHead} ${flash} ${view.main}</main>
+          </body>`
+        : html`<body class="focus">
+            <main>
+              <div class="card">
+                <header>
+                  ${logo}
+                  <h1>${view.heading}</h1>
+                  ${lede}
+                </header>
+                ${flash} ${view.main}
+              </div>
+            </main>
+            ${scriptHtml}
+          </body>`;
   return htmlText(html`<!doctype html>
     <html lang="en">
       <head>
@@ -138,16 +144,57 @@ export function renderDocument(view: PageView, nonce: string): string {
     </html>`);
 }
 
+// On mail pages Mail is the section (stronger text) and the mailbox being read is the page (a fill).
+function sidebarHtml(view: PageView): Html {
+  const current = (section: ConsoleSection) => (section === view.section ? "page" : "false");
+  return html`<aside class="sidebar">
+    <a class="brand" href="/mail">${logo}${PRODUCT_NAME}</a>
+    <a class="compose" href="/mail/compose">${icon("pen")}Write</a>
+    <nav class="nav" aria-label="Console">
+      <a href="/mail" aria-current="${view.section === "mail" ? "true" : "false"}"
+        >${icon("inbox")}Mail</a
+      >
+      ${view.mailboxes === undefined ? null : subnavHtml(view.mailboxes)}
+      <a href="/mailboxes" aria-current="${current("mailboxes")}">${icon("at")}Mailboxes</a>
+      <a href="/clients" aria-current="${current("clients")}">${icon("key")}Clients</a>
+    </nav>
+    <form class="sidebar-foot" method="post" action="/logout">
+      <span>Operator</span>
+      <button class="button quiet icon-only" type="submit">
+        ${icon("logout")}<span class="sr-only">Sign out</span>
+      </button>
+    </form>
+  </aside>`;
+}
+
+function subnavHtml(nav: MailboxNav): Html {
+  const link = (href: string, label: Html | string, selected: boolean) =>
+    html`<li><a href="${href}" aria-current="${selected ? "page" : "false"}">${label}</a></li>`;
+  return html`<ul class="subnav">
+    ${link("/mail", "All mailboxes", nav.current === "all")}
+    ${nav.addresses.map((address) =>
+      link(
+        `/mail?mailbox=${encodeURIComponent(address.id)}`,
+        html`<span class="mono">${address.address}</span>`,
+        nav.current === address.id,
+      ),
+    )}
+  </ul>`;
+}
+
 // A plain template: Oxc rewrites a tagged template that contains a closing script tag into a helper
 // call, which alchemy's Node loader cannot resolve when it evaluates the stack.
 function scriptElement(nonce: string, script: string): Html {
   return trustedHtml(`<script nonce="${nonce}">${script}</script>`);
 }
 
-function flashHtml(flash: Flash): Html {
-  return html`<p class="flash ${flash.tone}" role="${flash.tone === "error" ? "alert" : "status"}">
-    ${flash.message}
-  </p>`;
+// Errors stay in the page; a success is a toast that fades out on its own.
+function flashHtml(message: string): Html {
+  return html`<p class="flash" role="alert">${icon("alert")}${message}</p>`;
+}
+
+function toastHtml(message: string): Html {
+  return html`<p class="toast" role="status">${icon("check")}${message}</p>`;
 }
 
 export function pageHeaders(kind: PageKind, nonce: string): typeof ApprovalTrustedPageHeaders.Type {

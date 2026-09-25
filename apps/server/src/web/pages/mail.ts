@@ -48,25 +48,6 @@ function subjectText(subject: string | null): string {
   return subject === null || subject.trim().length === 0 ? "(no subject)" : displayText(subject);
 }
 
-// The sidebar: every mailbox, with the list being read ("all" or a mailbox id) marked.
-export function mailboxNav(addresses: ReadonlyArray<Address>, current: string | null): Html {
-  const link = (href: string, label: Html | string, selected: boolean) =>
-    html`<li><a href="${href}" aria-current="${selected ? "page" : "false"}">${label}</a></li>`;
-  return html`<nav class="stack" aria-label="Mailboxes">
-    <a class="button" href="/mail/compose">Write</a>
-    <ul class="nav-list">
-      ${link("/mail", "All mailboxes", current === "all")}
-      ${addresses.map((address) =>
-        link(
-          `/mail?mailbox=${encodeURIComponent(address.id)}`,
-          html`<span class="mono">${address.address}</span>`,
-          current === address.id,
-        ),
-      )}
-    </ul>
-  </nav>`;
-}
-
 function threadRow(thread: MailThreadSummary, showMailboxes: boolean): Html {
   const details = [
     contactName(thread.latestSender.contact),
@@ -98,7 +79,7 @@ export function mailListPage(
     title: "Mail",
     heading: mailbox === undefined ? "All mailboxes" : mailbox.address,
     flash,
-    aside: mailboxNav(addresses, mailbox?.id ?? "all"),
+    mailboxes: { addresses, current: mailbox?.id ?? "all" },
     main: html`${
       threads.length === 0
         ? html`<p class="empty">No conversations here yet.</p>`
@@ -222,7 +203,7 @@ export function threadPage(
     title: subjectText(open.subject),
     heading: subjectText(open.subject),
     lede: messages.length === 1 ? "1 message" : `${messages.length} messages`,
-    aside: mailboxNav(addresses, null),
+    mailboxes: { addresses, current: null },
     main: html`<div class="actions">
         <a class="button" href="${reply}&mode=reply">Reply</a>
         <a class="button secondary" href="${reply}&mode=reply-all">Reply all</a>

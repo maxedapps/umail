@@ -114,7 +114,7 @@ export function bidiAddress(value: string): Html {
 export function contactHtml(contact: MailContact): Html {
   const address = bidiAddress(contact.address);
   if (contact.displayName === null || contact.displayName.length === 0) return address;
-  return html`<span class="contact"
+  return html`<span
     >${bidiText(contact.displayName)} <span aria-hidden="true">&lt;</span>${address}<span
       aria-hidden="true"
       >&gt;</span

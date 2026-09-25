@@ -271,7 +271,13 @@ Then run the full `pnpm test`.
 - Full `pnpm test`: the browser suite's 44px, focus, 320px and dark checks still pass with the old page markup inside the new layouts.
 - Stack evaluation (memory): `node --import ./node_modules/alchemy/bin/register-oxc.js -e 'import("./alchemy.run.ts")'`.
 
-**Done:** no.
+**Done:** yes. Notes:
+
+- Console content is capped at a `--content` width (60rem) in place of the mockup's `.narrow`; the toolbar pads its end with `100cqi` so its actions line up with the content's right edge.
+- The reveal rule sits in `components`, after `.field`, since a `display` in a later layer would otherwise override it.
+- `contactHtml` lost its `contact` class, which the vocabulary doesn't have.
+- The compose route's helper is `sidebarMailboxes`, so the task 8 search for `mailboxNav` stays empty.
+- Under machine load, two or three account worker specs (`queries`, `receipts`) hit their 5s timeout in the full run; they pass when rerun alone, and this change doesn't touch them.
 
 ### 3. Mail list and conversation
 

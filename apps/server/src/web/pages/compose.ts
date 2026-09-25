@@ -20,9 +20,8 @@ import {
   submitMessage,
 } from "../../api/operations.ts";
 import { randomId } from "../../crypto.ts";
-import { htmlResponse, redirect, type PageView } from "../document.ts";
+import { htmlResponse, redirect, type MailboxNav, type PageView } from "../document.ts";
 import { contactListHtml, displayText, html, type Html } from "../html.ts";
-import { mailboxNav } from "./mail.ts";
 
 type ReplyMode = "reply" | "reply-all";
 
@@ -60,7 +59,7 @@ function invalid(errors: ComposeErrors, field: ComposeField): Html | null {
 
 export function composePage(
   identities: ReadonlyArray<SendingIdentity>,
-  aside: Html,
+  mailboxes: MailboxNav,
   state: ComposeState,
   reply: ReplyContext | null,
   errors: ComposeErrors,
@@ -115,7 +114,7 @@ export function composePage(
     section: "mail",
     title: reply === null ? "New message" : "Reply",
     heading: reply === null ? "New message" : reply.mode === "reply" ? "Reply" : "Reply all",
-    aside,
+    mailboxes,
     flash:
       Object.keys(errors).length === 0
         ? undefined
@@ -167,7 +166,7 @@ function jobExplanation(job: OutboundJobStatus): string {
   }
 }
 
-export function sentPage(job: OutboundJobStatus, aside: Html): PageView {
+export function sentPage(job: OutboundJobStatus, mailboxes: MailboxNav): PageView {
   const [label, tone] = JOB_STATES[job.state];
   return {
     kind: "console",
@@ -175,7 +174,7 @@ export function sentPage(job: OutboundJobStatus, aside: Html): PageView {
     title: "Send status",
     heading: "Send status",
     lede: html`<span class="badge ${tone}">${label}</span>`,
-    aside,
+    mailboxes,
     main: html`<p>${jobExplanation(job)}</p>
       <div class="actions">
         <a class="button" href="/mail/threads/${encodeURIComponent(job.threadId)}"
@@ -230,8 +229,9 @@ const replyContext = Effect.fn("replyContext")(function* (
   return { context, parent: preview.parent };
 });
 
-const composeAside = Effect.fn("composeAside")(function* (deps: ApiDeps) {
-  return mailboxNav(yield* listAddresses(deps), null);
+const sidebarMailboxes = Effect.fn("sidebarMailboxes")(function* (deps: ApiDeps) {
+  const nav: MailboxNav = { addresses: yield* listAddresses(deps), current: null };
+  return nav;
 });
 
 export const composeRoute = Effect.fn("composeRoute")(function* (
@@ -252,7 +252,7 @@ export const composeRoute = Effect.fn("composeRoute")(function* (
     };
     return yield* htmlResponse(
       200,
-      composePage(identities, yield* composeAside(deps), state, null, {}),
+      composePage(identities, yield* sidebarMailboxes(deps), state, null, {}),
     );
   }
   const reply = yield* replyContext(deps, principal, query.reply, replyMode(query.mode));
@@ -266,7 +266,7 @@ export const composeRoute = Effect.fn("composeRoute")(function* (
   };
   return yield* htmlResponse(
     200,
-    composePage(identities, yield* composeAside(deps), state, reply.context, {}),
+    composePage(identities, yield* sidebarMailboxes(deps), state, reply.context, {}),
   );
 });
 
@@ -305,7 +305,7 @@ export const sendRoute = Effect.fn("sendRoute")(function* (deps: ApiDeps, princi
     const identities = yield* listSendingIdentities(deps, principal);
     return yield* htmlResponse(
       400,
-      composePage(identities, yield* composeAside(deps), state, reply?.context ?? null, errors),
+      composePage(identities, yield* sidebarMailboxes(deps), state, reply?.context ?? null, errors),
     );
   }
   const payload = yield* Schema.decodeUnknownEffect(SubmitMessagePayload)(
@@ -334,9 +334,9 @@ export const sendRoute = Effect.fn("sendRoute")(function* (deps: ApiDeps, princi
     Effect.map((job) => redirect(`/mail/sent/${encodeURIComponent(job.jobId)}`)),
     Effect.catchTag("ApiProblem", (problem) =>
       Effect.flatMap(listSendingIdentities(deps, principal), (identities) =>
-        Effect.flatMap(composeAside(deps), (aside) =>
+        Effect.flatMap(sidebarMailboxes(deps), (mailboxes) =>
           htmlResponse(400, {
-            ...composePage(identities, aside, state, reply?.context ?? null, {}),
+            ...composePage(identities, mailboxes, state, reply?.context ?? null, {}),
             flash: { tone: "error", message: `Nothing was sent. ${problem.message}` },
           }),
         ),
@@ -350,5 +350,5 @@ const JobParams = Schema.Struct({ jobId: Schema.String });
 export const sentRoute = Effect.fn("sentRoute")(function* (deps: ApiDeps, principal: Principal) {
   const { jobId } = yield* HttpRouter.schemaPathParams(JobParams);
   const job = yield* getJob(deps, principal, jobId);
-  return yield* htmlResponse(200, sentPage(job, yield* composeAside(deps)));
+  return yield* htmlResponse(200, sentPage(job, yield* sidebarMailboxes(deps)));
 });

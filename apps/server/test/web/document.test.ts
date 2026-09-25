@@ -1,9 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Address } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import { WebCrypto } from "../../src/crypto.ts";
-import { htmlResponse, type PageKind } from "../../src/web/document.ts";
+import {
+  htmlResponse,
+  renderDocument,
+  type PageKind,
+  type PageView,
+} from "../../src/web/document.ts";
 import { html } from "../../src/web/html.ts";
 import { loginPage } from "../../src/web/pages/login.ts";
 import { readText } from "../api/world.ts";
@@ -99,4 +105,81 @@ describe("document renderer", () => {
       expect(body).toContain('<label for="secret">Password</label>');
     }).pipe(Effect.provide(WebCrypto)),
   );
+
+  it("marks the console section and nests the mailboxes under Mail only on mail pages", () => {
+    const addresses = [
+      ["box-1", "support"],
+      ["box-2", "hello"],
+    ].map(
+      ([id = "", localPart = ""]) =>
+        new Address({
+          id,
+          localPart,
+          address: `${localPart}@example.com`,
+          displayName: null,
+          active: true,
+          forwardTo: null,
+          createdAt: "2026-09-25T00:00:00.000Z",
+          updatedAt: "2026-09-25T00:00:00.000Z",
+        }),
+    );
+    const mail = consolePage({ section: "mail", mailboxes: { addresses, current: "box-2" } });
+    const clients = consolePage({ section: "clients" });
+
+    expect(mail).toMatch(/<a href="\/mail" aria-current="true"/u);
+    expect(mail).toContain('class="subnav"');
+    expect(mail).toMatch(/aria-current="page">\s*<span class="mono">hello@example\.com/u);
+    expect(mail).toMatch(/aria-current="false">\s*<span class="mono">support@example\.com/u);
+    expect(clients).not.toContain('class="subnav"');
+    expect(clients).toMatch(/<a href="\/clients" aria-current="page"/u);
+    expect(clients).toMatch(/<a href="\/mail" aria-current="false"/u);
+  });
+
+  it("shows a success as a toast and keeps an error inline", () => {
+    const success = consolePage({ flash: { tone: "success", message: "Saved." } });
+    const error = consolePage({ flash: { tone: "error", message: "Nothing was saved." } });
+
+    expect(success).toMatch(/<p class="toast" role="status">.*Saved\.<\/p>/su);
+    expect(success).not.toContain('role="alert"');
+    expect(error).toMatch(/<p class="flash" role="alert">.*Nothing was saved\.<\/p>/su);
+    expect(error).not.toContain('class="toast"');
+  });
+
+  it.each([
+    ["approval", 'class="focus-bar"', 'class="column"'],
+    ["auth", 'class="card"', "<header><svg"],
+    ["static", 'class="card"', "<header><svg"],
+  ] as const)("renders %s pages in their focus layout", (kind, first, second) => {
+    const body = renderDocument({ ...PAGE, kind }, "0".repeat(32));
+
+    expect(body).toContain('<body class="focus">');
+    expect(body).toContain(first);
+    expect(body.replace(/\s+/gu, "")).toContain(second.replace(/\s+/gu, ""));
+  });
+
+  it.each(["console", "approval", "auth"] as const)(
+    "hides every %s icon from assistive technology and writes no inline style",
+    (kind) => {
+      const body = renderDocument(
+        { ...PAGE, kind, flash: { tone: "error", message: "Failed." } },
+        "0".repeat(32),
+      );
+      const svgs = body.match(/<svg[^>]*>/gu) ?? [];
+
+      expect(svgs.length).toBeGreaterThan(0);
+      for (const svg of svgs) expect(svg).toContain('aria-hidden="true"');
+      expect(body).not.toMatch(/style="/u);
+    },
+  );
 });
+
+const PAGE: PageView = {
+  kind: "console",
+  title: "Page",
+  heading: "Heading",
+  main: html`<p>Body</p>`,
+};
+
+function consolePage(view: Partial<PageView>): string {
+  return renderDocument({ ...PAGE, section: "mail", ...view }, "0".repeat(32));
+}
