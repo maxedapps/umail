@@ -1,6 +1,6 @@
 # Plan for 0005: Errors that say what happened and what to do
 
-- **Status:** In progress
+- **Status:** Implemented (PR #4)
 - **ADR:** `adrs/0005-error-reporting.md`
 
 ## Goal
@@ -427,9 +427,33 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 
 **Verify:** `pnpm fmt` on the touched packages, `pnpm lint`, `pnpm typecheck`, the full `pnpm test`, and the live checks above.
 
-**Done:** in progress.
+**Done:** yes, except the approval-link page and an MCP defect, which could not be produced live (below).
 
 - Docs and sweep: done. The `rg` returns nothing.
+- **Live checks on `pr-4`:**
+  - **Browser (light and dark, 1440 and 320 px, screenshots kept):**
+    - Four fast wrong sign-ins showed "Wrong email or password." three times, then "Too many sign-in attempts. Wait 9 seconds and try again.".
+    - `postmaster` showed the reserved-name message under the field.
+    - `/mail/threads/t-missing` showed the "Not found" page with the message and "Back to Mail".
+    - The conversation showed "Not sent" on a reply Cloudflare rejected and "Forwarding to … failed." on an inbound message whose destination was unverified. This check found the note breaking at 320 px, now fixed.
+    - The sent page gave the provider's full detail.
+    - The device page, reused after approval, said the code is invalid or expired.
+  - **CLI:**
+    - A wrong port printed "Could not reach … during discovery (no answer in 5s)" on login. Commands with stored credentials first say those are for another origin.
+    - `threads get --id nope` printed the NotFound message.
+    - A reused upper-case `--request-id` with changed content printed the `request_id_reused` message.
+  - **MCP (raw JSON-RPC):**
+    - A disallowed recipient returned "Recipients not allowed for this client: probe@…", naming only the rejected one.
+    - An unknown thread gave its NotFound text.
+    - An upper-case `requestId` was stored lower-cased.
+    - After revoking, the client got 401 `Bearer error="invalid_token", resource_metadata=…, scope="umail:access"`.
+  - **Workers Logs (telemetry query API):**
+    - Each failed send is one entry from the AccountStore alarm: `level: ERROR`, message `["Send attempt failed", {outcome, detail}]`, `annotations: {jobId}`.
+    - An MCP defect could not be triggered on a healthy deployment. Its logging uses the same logger with `tool`/`clientId` annotations, which `mcp.test.ts` asserts.
+  - **Not live:** the expired approval page needs a token from an approval email, and previews cannot send mail. The approval-flow test and the browser spec cover it.
+- **Review round** (one subagent reviewer): no blocking defects; two findings fixed.
+  - Structured logs went through `console.log`. They now use `Logger.withLeveledConsole(Logger.formatStructured)`. Workers Logs had already read the level from the JSON, so entries were tagged ERROR even before the fix.
+  - An undeclared 4xx read as a server failure, and on submit as "may have been accepted". Now only a 5xx or a 429 is `ServerFailed`; other statuses are `UnexpectedResponse` ("… answered HTTP 404 … check UMAIL_URL").
 - **Deviation:** the per-class code unions stay private to `errors.ts` (only `NotFoundCode` is exported, for `operations.ts`'s helper). The planned `ApiErrorCode` union had no reader, so it was dropped: each class's constructor already accepts only its own codes.
 
 ## Owner's manual QA after deploy
