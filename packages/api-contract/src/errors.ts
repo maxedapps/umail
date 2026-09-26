@@ -6,7 +6,7 @@ import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 // wire so a client decodes codes it does not know; the constructors take only the codes below.
 const fields = { code: Schema.String, message: Schema.String };
 
-export type InvalidRequestCode =
+type InvalidRequestCode =
   | "invalid_request"
   | "invalid_cursor"
   | "address_invalid"
@@ -18,8 +18,8 @@ export type InvalidRequestCode =
   | "html_unsafe"
   | "no_external_recipients"
   | "forwarding_rejected";
-export type UnauthenticatedCode = "token_invalid";
-export type NotPermittedCode =
+type UnauthenticatedCode = "token_invalid";
+type NotPermittedCode =
   | "read_denied"
   | "send_denied"
   | "mailbox_forbidden"
@@ -34,19 +34,11 @@ export type NotFoundCode =
   | "mailbox_not_found"
   | "source_not_found"
   | "client_not_found";
-export type ConflictCode = "address_exists" | "request_id_reused" | "no_archived_source";
-export type UnavailableCode =
+type ConflictCode = "address_exists" | "request_id_reused" | "no_archived_source";
+type UnavailableCode =
   | "archive_unavailable"
   | "cloudflare_unavailable"
   | "cloudflare_misconfigured";
-
-export type ApiErrorCode =
-  | InvalidRequestCode
-  | UnauthenticatedCode
-  | NotPermittedCode
-  | NotFoundCode
-  | ConflictCode
-  | UnavailableCode;
 
 type Props<Code> = { readonly code: Code; readonly message: string };
 

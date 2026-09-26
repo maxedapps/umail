@@ -82,7 +82,11 @@ pnpm umail messages compose \
 pnpm umail jobs get --id <job-id>
 ```
 
-The operator CLI sends without approval. Sending is asynchronous and usually starts within seconds. `accepted` means provider acceptance, not recipient delivery; `rejected` means the provider refused or failed the message; investigate `unknown` before resending. To retry a submit whose response was lost, pass your own `--request-id <uuid>` and reuse it with the identical payload; this cannot send twice. Any new send, including one after `rejected` or an investigated `unknown`, needs a new ID; omit the flag to generate one.
+The operator CLI sends without approval. Sending is asynchronous and usually starts within seconds. `accepted` means provider acceptance, not recipient delivery; `rejected` means the provider refused or failed the message; investigate `unknown` before resending.
+
+Every submission carries a `requestId` (a UUID, any case). The CLI generates one unless you pass `--request-id <uuid>`; REST and MCP callers must send their own. Resubmitting the same ID with the same content returns the existing job and never sends twice, so it is the safe retry after a lost response. When the CLI cannot tell whether a submission arrived, it prints the ID to retry with. Any new send, including one after `rejected` or an investigated `unknown`, needs a new ID.
+
+Errors say what happened and what to do, on one line prefixed `umail:`: the server's own message for a refused request (for example a recipient the client may not send to, or an id that was not found), or which step failed and why for a connection, sign-in or credential-file problem (for example `Could not reach https://mail.example.com during discovery (ECONNREFUSED)` or `… is open to other users (mode 644). Run: chmod 600 …`). REST errors are JSON `{"_tag", "code", "message"}` with a stable `code`.
 
 To forward a mailbox's inbound mail, run `pnpm umail forwarding set --address-id <mailbox-id> --email <inbox>`. Cloudflare emails that inbox a verification link, and forwards only once it is confirmed; the command reports `verified`, so run it again to check. `pnpm umail forwarding remove --address-id <mailbox-id>` stops forwarding.
 

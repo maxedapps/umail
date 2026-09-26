@@ -74,7 +74,7 @@ export class ApprovalTokenSource extends Context.Service<
 }
 
 // The server's answer about the token. The messages never repeat the token or the request URL.
-export class ApprovalRefused extends Data.TaggedError("ApprovalRefused")<{
+class ApprovalRefused extends Data.TaggedError("ApprovalRefused")<{
   readonly reason: "unknown" | "gone";
 }> {
   override readonly message =

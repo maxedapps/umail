@@ -427,7 +427,10 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 
 **Verify:** `pnpm fmt` on the touched packages, `pnpm lint`, `pnpm typecheck`, the full `pnpm test`, and the live checks above.
 
-**Done:** no.
+**Done:** in progress.
+
+- Docs and sweep: done. The `rg` returns nothing.
+- **Deviation:** the per-class code unions stay private to `errors.ts` (only `NotFoundCode` is exported, for `operations.ts`'s helper). The planned `ApiErrorCode` union had no reader, so it was dropped: each class's constructor already accepts only its own codes.
 
 ## Owner's manual QA after deploy
 

@@ -38,7 +38,7 @@ export class UnexpectedResponse extends Data.TaggedError("UnexpectedResponse")<{
 export type ServerError = ServerUnreachable | ServerFailed | UnexpectedResponse;
 
 // "GET /threads": the request, without its query or credentials.
-export function requestStep(request: HttpClientRequest.HttpClientRequest): string {
+function requestStep(request: HttpClientRequest.HttpClientRequest): string {
   return `${request.method} ${URL.parse(request.url)?.pathname ?? request.url}`;
 }
 

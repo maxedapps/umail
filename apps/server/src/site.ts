@@ -27,7 +27,7 @@ export type StageSite =
     };
 
 // A deploy configuration problem. alchemy prints a UserFacingError as one line instead of a trace.
-export class DeployConfigError extends Data.TaggedError("DeployConfigError")<{
+class DeployConfigError extends Data.TaggedError("DeployConfigError")<{
   readonly message: string;
 }> {
   readonly [UserFacingError] = true;
