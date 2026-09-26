@@ -43,7 +43,7 @@ export type MailboxNav = {
   readonly current: string | null;
 };
 
-type PageStatus = 200 | 400 | 403 | 404 | 409 | 410 | 500;
+type PageStatus = 200 | 400 | 401 | 403 | 404 | 409 | 410 | 500 | 502;
 
 type KindPolicy = {
   readonly script: boolean;

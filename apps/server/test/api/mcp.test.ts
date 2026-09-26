@@ -174,8 +174,14 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
           }
         }
         const inputOf = (name: string) => tools.find((tool) => tool.name === name)?.inputSchema;
-        expect(inputOf("umail_send_message")?.required).toEqual(["fromAddressId", "subject", "to"]);
+        expect(inputOf("umail_send_message")?.required).toEqual([
+          "requestId",
+          "fromAddressId",
+          "subject",
+          "to",
+        ]);
         expect(inputOf("umail_reply_to_message")?.required).toEqual([
+          "requestId",
           "fromAddressId",
           "subject",
           "replyToMessageId",
@@ -312,10 +318,12 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         sendMode: "allow",
         recipients: "any",
       });
+      const requestId = "aaaaaaaa-1111-4111-8111-11111111111f";
       const send = (args: Record<string, unknown>) =>
         callTool(client, {
           name: "umail_send_message",
           arguments: {
+            requestId,
             fromAddressId: mailbox.id,
             to: [{ address: "recipient@example.com" }],
             subject: "Compose job",
@@ -323,28 +331,34 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
             ...args,
           },
         });
-      const result = yield* send({});
+      // An agent may write the UUID upper-case; it is stored lower-case and replays the same job.
+      const result = yield* send({ requestId: requestId.toUpperCase() });
       expect(result.isError).not.toBe(true);
-      const output = yield* Schema.decodeUnknownEffect(JobToolOutput)(result.structuredContent);
-      expect(output.job.state).toBe("ready");
-      expect(output.job.state).not.toBe("accepted");
-      expect(output.job.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+      const first = yield* Schema.decodeUnknownEffect(JobToolOutput)(result.structuredContent);
+      expect(first.job.state).toBe("ready");
+      expect(first.job.state).not.toBe("accepted");
+      expect(first.job.requestId).toBe(requestId);
 
-      const requestId = "11111111-1111-4111-8111-111111111111";
-      const first = yield* Schema.decodeUnknownEffect(JobToolOutput)(
-        (yield* send({ requestId })).structuredContent,
-      );
       const replay = yield* Schema.decodeUnknownEffect(JobToolOutput)(
-        (yield* send({ requestId })).structuredContent,
+        (yield* send({})).structuredContent,
       );
       expect(replay.job.jobId).toBe(first.job.jobId);
-      const conflict = yield* send({ requestId, subject: "Changed" });
+      const conflict = yield* send({ subject: "Changed" });
       expect(conflict.isError).toBe(true);
-      expect(
-        yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(conflict)),
-      ).toEqual({
-        error: "requestId reused with different content.",
+      expect(yield* toolErrorText(conflict)).toBe(
+        `requestId ${requestId} was already used for different content.`,
+      );
+
+      const missing = yield* callTool(client, {
+        name: "umail_send_message",
+        arguments: {
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com" }],
+          subject: "No id",
+          text: "body",
+        },
       });
+      expect(missing.isError).toBe(true);
     }),
   );
 
@@ -374,11 +388,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         },
       });
       expect(result.isError).toBe(true);
-      expect(
-        yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result)),
-      ).toEqual({
-        error: "The request is not permitted.",
-      });
+      expect(yield* toolErrorText(result)).toBe("This client may not send this message.");
       const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
       expect(jobs.items).toEqual([]);
     }),
@@ -402,6 +412,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       const result = yield* callTool(client, {
         name: "umail_send_message",
         arguments: {
+          requestId: "11111111-1111-4111-8111-111111111111",
           fromAddressId: "no-such-address",
           to: [{ address: "recipient@example.com" }],
           subject: "Unknown sender",
@@ -409,11 +420,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         },
       });
       expect(result.isError).toBe(true);
-      expect(
-        yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result)),
-      ).toEqual({
-        error: "The from address is unknown or inactive.",
-      });
+      expect(yield* toolErrorText(result)).toBe(
+        "Sending identity no-such-address is unknown or inactive.",
+      );
       const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
       expect(jobs.items).toEqual([]);
     }),
@@ -745,19 +754,15 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
 
         const hidden = yield* getHeaders({ messageId: outOfScope.messageId });
         expect(hidden.isError).toBe(true);
-        expect(
-          yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(hidden)),
-        ).toEqual({
-          error: "The requested resource was not found.",
-        });
+        expect(yield* toolErrorText(hidden)).toBe(
+          `Message ${outOfScope.messageId} was not found, or it is outside this client's access.`,
+        );
 
         const noSource = yield* getHeaders({ messageId: outbound.messageId });
         expect(noSource.isError).toBe(true);
-        expect(
-          yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(noSource)),
-        ).toEqual({
-          error: "The message has no archived source; only inbound messages are archived.",
-        });
+        expect(yield* toolErrorText(noSource)).toBe(
+          `Message ${outbound.messageId} was sent by AgentMail and has no archived source; only inbound messages are archived.`,
+        );
 
         const excess = yield* getHeaders({ messageId: inbound.messageId, extra: true });
         expect(excess.isError).toBe(true);
@@ -841,11 +846,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
           arguments: { messageId: inbound.messageId },
         });
         expect(result.isError).toBe(true);
-        expect(
-          yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result)),
-        ).toEqual({
-          error: "The request is not permitted.",
-        });
+        expect(yield* toolErrorText(result)).toBe("This client has no read access.");
         expect(world.archive.getCalls).toEqual([]);
       }),
   );
@@ -891,6 +892,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       const result = yield* callTool(client, {
         name: "umail_reply_to_message",
         arguments: {
+          requestId: "11111111-1111-4111-8111-111111111111",
           fromAddressId: mailbox.id,
           replyToMessageId: parent.messageId,
           replyMode: "reply",
@@ -990,11 +992,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         arguments: { threadId: "missing" },
       });
       expect(result.isError).toBe(true);
-      expect(
-        yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result)),
-      ).toEqual({
-        error: "The requested resource was not found.",
-      });
+      expect(yield* toolErrorText(result)).toBe(
+        "Thread missing was not found, or it is outside this client's access.",
+      );
     }),
   );
 
@@ -1021,11 +1021,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         arguments: {},
       });
       expect(result.isError).toBe(true);
-      expect(
-        yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result)),
-      ).toEqual({
-        error: "The AgentMail API request failed.",
-      });
+      expect(yield* toolErrorText(result)).toBe("The AgentMail API request failed.");
       expect(toJson(result)).not.toContain("DO reset");
       expect(logs).toHaveLength(1);
       expect(logs[0]?.message).toEqual(["MCP tool failed"]);
@@ -1115,6 +1111,13 @@ function listTools(client: Client) {
 function callTool(client: Client, params: Parameters<Client["callTool"]>[0]) {
   return Effect.promise(() => client.callTool(params));
 }
+
+const toolErrorText = Effect.fn("toolErrorText")(function* (
+  result: Effect.Success<ReturnType<typeof callTool>>,
+) {
+  const body = yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result));
+  return body.error;
+});
 
 const parseTextResult = Effect.fn("parseTextResult")(function* (
   result: Effect.Success<ReturnType<typeof callTool>>,

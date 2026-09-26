@@ -1,4 +1,4 @@
-import { operatorPrincipal, type Principal } from "@umail/api-contract";
+import { isApiError, operatorPrincipal, type Principal } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -42,17 +42,20 @@ export function withOperator<E extends { readonly _tag: string }, R>(
   });
 }
 
-function failureResponse(error: { readonly _tag: string; readonly message?: unknown }) {
+const API_ERROR_STATUS = {
+  InvalidRequest: 400,
+  Unauthenticated: 401,
+  NotPermitted: 403,
+  NotFound: 404,
+  Conflict: 409,
+  Unavailable: 502,
+} as const;
+
+function failureResponse(error: { readonly _tag: string }) {
+  if (isApiError(error)) {
+    return failurePage(API_ERROR_STATUS[error._tag], error.message);
+  }
   switch (error._tag) {
-    case "NotFound":
-      return failurePage(404, "That page or item does not exist.");
-    case "Forbidden":
-      return failurePage(403, "That is not allowed.");
-    case "Conflict":
-      return failurePage(409, "That conflicts with the current state. Reload and try again.");
-    case "ApiProblem":
-      return failurePage(400, typeof error.message === "string" ? error.message : "That failed.");
-    case "BadRequest":
     case "SchemaError":
     case "HttpServerError":
       return failurePage(400, "The request could not be read.");
@@ -61,7 +64,7 @@ function failureResponse(error: { readonly _tag: string; readonly message?: unkn
   }
 }
 
-export function failurePage(status: 400 | 403 | 404 | 409 | 500, message: string) {
+export function failurePage(status: 400 | 401 | 403 | 404 | 409 | 500 | 502, message: string) {
   return htmlResponse(
     status,
     noticePage({

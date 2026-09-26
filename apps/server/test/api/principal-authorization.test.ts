@@ -55,7 +55,8 @@ describe("principal authorization", () => {
       expect(mailboxScopeOf(MCP_PRINCIPAL)).toEqual(["mailbox-1"]);
       expect(yield* requireSend(MCP_PRINCIPAL)).toBeUndefined();
       expect(yield* Effect.flip(requireRead(MCP_PRINCIPAL))).toMatchObject({
-        _tag: "Forbidden",
+        _tag: "NotPermitted",
+        code: "read_denied",
       });
     }),
   );

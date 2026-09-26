@@ -1,9 +1,8 @@
-import type { Address, PrincipalPolicy } from "@umail/api-contract";
+import { NotFound, type Address, type PrincipalPolicy } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import type { ApiDeps } from "../../api/app.ts";
 import { listAddresses } from "../../api/operations.ts";
@@ -356,7 +355,13 @@ function submittedState(form: typeof PolicyForm.Type): PolicyFormState {
 
 const findGrant = Effect.fn("findGrant")(function* (deps: ApiDeps, clientId: string) {
   const grant = (yield* deps.access.list()).find((candidate) => candidate.clientId === clientId);
-  return grant ?? (yield* new HttpApiError.NotFound());
+  return (
+    grant ??
+    (yield* new NotFound({
+      code: "client_not_found",
+      message: `Client ${clientId} was not found. It may have been revoked.`,
+    }))
+  );
 });
 
 export const clientsRoute = Effect.fn("clientsRoute")(function* (deps: ApiDeps) {
@@ -386,7 +391,12 @@ export const clientRoute = Effect.fn("clientRoute")(function* (deps: ApiDeps) {
 export const saveClientRoute = Effect.fn("saveClientRoute")(function* (deps: ApiDeps) {
   const { clientId } = yield* HttpRouter.schemaPathParams(ClientParams);
   const grant = yield* findGrant(deps, clientId);
-  if (grant.consentId === null) return yield* new HttpApiError.NotFound();
+  if (grant.consentId === null) {
+    return yield* new NotFound({
+      code: "client_not_found",
+      message: `Client ${clientId} has no consent to configure.`,
+    });
+  }
   const state = submittedState(yield* HttpServerRequest.schemaBodyUrlParams(PolicyForm));
   const result = policyFromForm({
     mailboxes: state.mailboxScope === "all" ? "all" : state.mailboxIds.join(","),

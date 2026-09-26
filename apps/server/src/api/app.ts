@@ -4,10 +4,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import {
@@ -15,7 +17,9 @@ import {
   ApprovalPageNotFound,
   ApprovalToken,
   CurrentPrincipal,
+  InvalidRequest,
   PublicApprovalApi,
+  RequestErrors,
   UmailApi,
   type MailDomain,
   type Principal,
@@ -123,15 +127,42 @@ export function makeApiHttpEffect(deps: ApiDeps) {
   );
   return HttpRouter.toHttpEffect(appLayer.pipe(Layer.provide(apiLayers(deps)))).pipe(
     Effect.provide(
-      makePrincipalAuthorizationLive({
-        auth: deps.auth,
-        issuer: `${deps.applicationUrl.origin}/api/auth`,
-        resource: deps.applicationUrl.origin,
-      }),
+      Layer.merge(
+        makePrincipalAuthorizationLive({
+          auth: deps.auth,
+          issuer: `${deps.applicationUrl.origin}/api/auth`,
+          resource: deps.applicationUrl.origin,
+        }),
+        RequestErrorsLive,
+      ),
     ),
     Effect.map((handler) => handler.pipe(Effect.provide(WebCrypto))),
   );
 }
+
+const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1();
+
+// A request that does not decode answers 400 with its first issue, e.g. "Invalid payload:
+// to.0.address: Expected a bare address like name@example.com". A response that does not encode is
+// our bug, not the caller's: it dies with the bare schema error (a 500), because the wrapping
+// HttpApiSchemaError would still render as an empty 400.
+export const RequestErrorsLive = HttpApiMiddleware.layerSchemaErrorTransform(
+  RequestErrors,
+  (error) => {
+    if (error.kind === "Body" || error.kind === "ResponseHeaders") {
+      return Effect.die(error.cause);
+    }
+    const [issue] = formatIssue(error.cause.issue).issues;
+    const path = issue?.path?.map(String).join(".") ?? "";
+    const detail = path.length === 0 ? issue?.message : `${path}: ${issue?.message}`;
+    return Effect.fail(
+      new InvalidRequest({
+        code: "invalid_request",
+        message: `Invalid ${error.kind.toLowerCase()}: ${detail}`,
+      }),
+    );
+  },
+);
 
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>

@@ -1,6 +1,7 @@
 import {
   CurrentPrincipal,
   PrincipalAuthorization,
+  Unauthenticated,
   operatorPrincipal,
   UMAIL_OAUTH_SCOPE,
 } from "@umail/api-contract";
@@ -8,7 +9,6 @@ import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import { type UmailAuthInstance } from "./options.ts";
 import { verifyOAuthBearerToken } from "./oauth-resource.ts";
@@ -27,7 +27,15 @@ const authenticateOperatorBearer = Effect.fn("authenticateOperatorBearer")(funct
     issuer: deps.issuer,
     audience: deps.resource,
     scopes: [UMAIL_OAUTH_SCOPE],
-  }).pipe(Effect.mapError(() => new HttpApiError.Unauthorized()));
+  }).pipe(
+    Effect.mapError(
+      () =>
+        new Unauthenticated({
+          code: "token_invalid",
+          message: "The access token is invalid or expired. Run: umail login",
+        }),
+    ),
+  );
   return operatorPrincipal(access.subject, access.clientId, "AgentMail CLI");
 });
 

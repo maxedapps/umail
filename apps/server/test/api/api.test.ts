@@ -3,7 +3,13 @@ import { RpcCallError } from "alchemy/Rpc";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Layer from "effect/Layer";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
 import {
   AddressForwarding,
@@ -15,6 +21,7 @@ import {
   MailThreadPage,
   OutboundJobStatus,
   OutboundThreadMessage,
+  RequestErrors,
   SubmissionRequestId,
   ThreadMessage,
   UmailApi,
@@ -22,6 +29,7 @@ import {
 import type { ListMessageSummariesQuery } from "../../src/account/domain.ts";
 import type { AccountStoreError } from "../../src/account/errors.ts";
 import { attachmentHeaders, attachmentResponseHeaders } from "../../src/api/attachments.ts";
+import { RequestErrorsLive } from "../../src/api/app.ts";
 import { readMessageSource } from "../../src/api/operations.ts";
 import { REMOTE_HTML_SOURCE, REMOTE_HTML_STORED } from "./fakes.ts";
 import {
@@ -421,34 +429,76 @@ describe("root mailbox API", () => {
     }),
   );
 
-  it.effect("generates a request id for a submission without one and returns a durable job", () =>
+  it.effect("answers a submission that does not decode with 400 and the offending field", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();
       const mailbox = yield* seedMailbox(world);
-      const response = yield* world.request("http://umail.test/submissions", {
-        method: "POST",
-        headers: jsonHeaders(authorized(world).headers),
-        body: yield* jsonText({
-          intent: "compose",
-          fromAddressId: mailbox.id,
-          to: [{ address: "recipient@example.com", displayName: null }],
-          subject: "Compose job",
-          text: "body",
-        }),
+      const submit = (body: string) =>
+        Effect.flatMap(
+          world.request("http://umail.test/submissions", {
+            method: "POST",
+            headers: jsonHeaders(authorized(world).headers),
+            body,
+          }),
+          (response) =>
+            Effect.map(readJson(response), (json) => ({ status: response.status, json })),
+        );
+      const valid = {
+        intent: "compose",
+        requestId: REQUEST_ID,
+        fromAddressId: mailbox.id,
+        to: [{ address: "recipient@example.com", displayName: null }],
+        subject: "Compose job",
+        text: "body",
+      };
+      const invalid = (message: string) => ({
+        status: 400,
+        json: { _tag: "InvalidRequest", code: "invalid_request", message },
       });
 
-      expect(response.status, yield* readText(response.clone())).toBe(200);
-      const job = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(yield* readJson(response));
-      expect(job.state).toBe("ready");
-      expect(job.state).not.toBe("accepted");
-      expect(job.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
-      const stored = yield* Schema.decodeUnknownEffect(OutboundThreadMessage)(
-        yield* readJson(
-          yield* world.request(`http://umail.test/messages/${job.messageId}`, authorized(world)),
+      expect(yield* submit("")).toEqual(
+        invalid(
+          'Invalid payload: Expected a compose or reply submission (intent: "compose" | "reply")',
         ),
       );
-      expect(stored.sendState).toBe("ready");
-      expect(stored.direction).toBe("outbound");
+      expect(yield* submit("{not json")).toEqual(
+        invalid("Invalid payload: Expected a valid JSON body"),
+      );
+      expect(
+        yield* submit(yield* jsonText({ ...valid, to: [{ address: "Ada <ada@example.com>" }] })),
+      ).toEqual(
+        invalid(
+          "Invalid payload: to.0.address: Expected a bare address like name@example.com, with a lowercase domain and no display name",
+        ),
+      );
+      const { requestId: _, ...withoutRequestId } = valid;
+      expect(yield* submit(yield* jsonText(withoutRequestId))).toEqual(
+        invalid("Invalid payload: requestId: Expected a requestId (a UUID you generate)"),
+      );
+      const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
+      expect(jobs.items).toEqual([]);
+    }),
+  );
+
+  it.effect("answers 500, not 400, when a handler returns a body its schema cannot encode", () =>
+    Effect.gen(function* () {
+      class Probe extends HttpApiGroup.make("Probe").add(
+        HttpApiEndpoint.get("probe", "/probe", { success: Schema.Struct({ n: Schema.Int }) }),
+      ) {}
+      class ProbeApi extends HttpApi.make("ProbeApi").add(Probe).middleware(RequestErrors) {}
+      const handlers = HttpApiBuilder.group(ProbeApi, "Probe", (h) =>
+        h.handle("probe", () => Effect.succeed({ n: 1.5 })),
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(
+        HttpApiBuilder.layer(ProbeApi).pipe(
+          Layer.provide(handlers),
+          Layer.provide([RequestErrorsLive, HttpServer.layerServices]),
+        ),
+        { disableLogger: true },
+      );
+      const response = yield* Effect.promise(() => handler(new Request("http://umail.test/probe")));
+      yield* Effect.promise(dispose);
+      expect(response.status).toBe(500);
     }),
   );
 
@@ -872,7 +922,10 @@ describe("root mailbox API", () => {
         authorized(world),
       );
       expect(outbound.status).toBe(409);
-      expect(yield* readJson(outbound)).toEqual({ _tag: "OutboundMessageHasNoSource" });
+      expect(yield* readJson(outbound)).toMatchObject({
+        _tag: "Conflict",
+        code: "no_archived_source",
+      });
 
       const unknown = yield* world.request(
         "http://umail.test/messages/unknown/source",
@@ -922,7 +975,7 @@ describe("root mailbox API", () => {
       });
       expect(
         yield* Effect.flip(world.run(readMessageSource(world.deps, cannotRead, inbound.messageId))),
-      ).toMatchObject({ _tag: "Forbidden" });
+      ).toMatchObject({ _tag: "NotPermitted", code: "read_denied" });
 
       expect(world.archive.getCalls).toEqual([]);
     }),
@@ -1090,6 +1143,7 @@ describe("root mailbox API", () => {
           headers: jsonHeaders(authorized(world).headers),
           body: yield* jsonText({
             intent: "compose",
+            requestId: REQUEST_ID,
             fromAddressId: mailbox.id,
             to: recipients.slice(0, 40),
             cc: recipients.slice(40),
@@ -1100,7 +1154,8 @@ describe("root mailbox API", () => {
 
         expect(response.status).toBe(400);
         expect(yield* readJson(response)).toEqual({
-          _tag: "ApiProblem",
+          _tag: "InvalidRequest",
+          code: "too_many_recipients",
           message: "A message may have at most 50 To and CC recipients.",
         });
         const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });

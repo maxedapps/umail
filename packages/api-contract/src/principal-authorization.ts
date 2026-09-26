@@ -1,9 +1,9 @@
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 
+import { NotPermitted, Unauthenticated } from "./errors.ts";
 import { ExternalMailAddress, parseExternalMailAddress } from "./mail-contact.ts";
 
 const PrincipalMailboxIds = Schema.Union([
@@ -161,5 +161,5 @@ export class PrincipalAuthorization extends HttpApiMiddleware.Service<
   }
 >()("umail/PrincipalAuthorization", {
   security: { bearer: HttpApiSecurity.bearer },
-  error: [HttpApiError.Unauthorized, HttpApiError.Forbidden],
+  error: [Unauthenticated, NotPermitted],
 }) {}

@@ -5,5 +5,6 @@ export * from "./message-source.ts";
 export * from "./query-instant.ts";
 export * from "./approval-domain.ts";
 export * from "./submission-domain.ts";
+export * from "./errors.ts";
 export * from "./principal-authorization.ts";
 export * from "./api-spec.ts";

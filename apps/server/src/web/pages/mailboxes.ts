@@ -237,7 +237,7 @@ export const createMailboxRoute = Effect.fn("createMailboxRoute")(function* (dep
   const input = displayName.length === 0 ? { localPart } : { localPart, displayName };
   return yield* createAddress(deps, input).pipe(
     Effect.map((address) => redirect(`/mailboxes/${encodeURIComponent(address.id)}?saved`)),
-    Effect.catchTag(["BadRequest", "Conflict"], () =>
+    Effect.catchTag(["InvalidRequest", "Conflict"], (problem) =>
       Effect.flatMap(listAddresses(deps), (addresses) =>
         htmlResponse(
           400,
@@ -245,10 +245,7 @@ export const createMailboxRoute = Effect.fn("createMailboxRoute")(function* (dep
             addresses,
             deps.mailDomain,
             { localPart, displayName },
-            {
-              field: "localPart",
-              message: "That address is not valid or already exists.",
-            },
+            { field: "localPart", message: problem.message },
           ),
         ),
       ),
@@ -312,6 +309,6 @@ export const forwardingRoute = Effect.fn("forwardingRoute")(function* (deps: Api
     Effect.map((forwarding) =>
       redirect(`${path}?forwarding=${forwarding.verified ? "verified" : "pending"}`),
     ),
-    Effect.catchTag("ApiProblem", (problem) => rejected(problem.message)),
+    Effect.catchTag("InvalidRequest", (problem) => rejected(problem.message)),
   );
 });

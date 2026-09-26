@@ -113,7 +113,9 @@ describe("compose pages", () => {
       const body = yield* readText(response);
 
       expect(response.status).toBe(400);
-      expect(body).toContain("Nothing was sent. The from address is unknown or inactive.");
+      expect(body).toContain(
+        `Nothing was sent. Sending identity ${inbox.id} is unknown or inactive.`,
+      );
       expect(body).toContain(">Typed reply</textarea>");
     }),
   );

@@ -1,34 +1,56 @@
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import { OutboundJobStatus, SubmitMessagePayload, UmailApi } from "../src/api-spec.ts";
-import { OutboundJobState, SubmissionRequestId } from "../src/submission-domain.ts";
+import { OutboundJobState } from "../src/submission-domain.ts";
 
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 const contact = { address: "user@example.com", displayName: null };
 
 describe("submission and job contracts", () => {
-  it("accepts a submission with or without a request id and rejects a malformed one", () => {
-    const payload = {
-      intent: "compose",
-      fromAddressId: "addr-1",
-      to: [contact],
-      subject: "Hello",
-      text: "body",
-    } as const;
-    expect(
-      Result.isSuccess(
-        Schema.decodeResult(SubmitMessagePayload)({ ...payload, requestId: REQUEST_ID }),
-      ),
-    ).toBe(true);
-    expect(Result.isSuccess(Schema.decodeResult(SubmitMessagePayload)(payload))).toBe(true);
-    expect(
-      Result.isFailure(
-        Schema.decodeResult(SubmitMessagePayload)({ ...payload, requestId: "not-a-uuid" }),
-      ),
-    ).toBe(true);
-    expect(() => Schema.decodeSync(SubmissionRequestId)("not-a-uuid")).toThrow();
+  const payload = {
+    intent: "compose",
+    requestId: REQUEST_ID,
+    fromAddressId: "addr-1",
+    to: [contact],
+    subject: "Hello",
+    text: "body",
+  } as const;
+
+  // What a caller reads in the 400 when the submission does not decode.
+  function firstIssue(input: unknown) {
+    const result = Schema.toStandardSchemaV1(SubmitMessagePayload)["~standard"].validate(input);
+    if (result instanceof Promise || result.issues === undefined) return null;
+    const [issue] = result.issues;
+    return { path: issue?.path?.map(String).join("."), message: issue?.message };
+  }
+
+  it("requires a request id, accepts any case and stores it lower-cased", () => {
+    const upper = "AAAAAAAA-1111-4111-8111-11111111111F";
+    const decoded = Schema.decodeSync(SubmitMessagePayload)({ ...payload, requestId: upper });
+    expect(decoded.requestId).toBe(upper.toLowerCase());
+    const { requestId: _, ...withoutId } = payload;
+    expect(firstIssue(withoutId)).toEqual({
+      path: "requestId",
+      message: "Expected a requestId (a UUID you generate)",
+    });
+    expect(firstIssue({ ...payload, requestId: "not-a-uuid" })?.path).toBe("requestId");
+  });
+
+  it("names the offending field in plain words", () => {
+    expect(firstIssue({ ...payload, to: [{ address: "Ada <ada@example.com>" }] })).toEqual({
+      path: "to.0.address",
+      message:
+        "Expected a bare address like name@example.com, with a lowercase domain and no display name",
+    });
+    expect(firstIssue({ ...payload, to: [] })).toEqual({
+      path: "to.0",
+      message: "Expected at least one recipient",
+    });
+    expect(firstIssue({ ...payload, intent: "forward" })).toEqual({
+      path: "",
+      message: 'Expected a compose or reply submission (intent: "compose" | "reply")',
+    });
   });
 
   it("exposes job status without approval token fields", () => {

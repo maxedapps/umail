@@ -12,8 +12,8 @@ import { isExpectedStoreFailure, type AccountStoreError } from "../account/error
 import {
   Address,
   AddressForwarding,
-  ApiProblem,
-  ArchiveTransportProblem,
+  Conflict,
+  InvalidRequest,
   MailContact,
   MailMessagePage,
   MailThreadDetail,
@@ -23,12 +23,15 @@ import {
   buildOutboundReferences,
   headerBlock,
   joinRfcMessageIds,
-  OutboundMessageHasNoSource,
+  NotFound,
+  NotPermitted,
   parseUtcInstant,
-  SubmissionRequestId,
+  Unavailable,
+  type SubmissionRequestId,
   type ListJobsQuery,
   type ListMessagesQuery,
   type ListThreadMessagesQuery,
+  type NotFoundCode,
   type PatchAddressPayload,
   type Principal,
   type SubmitMessagePayload,
@@ -39,10 +42,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Result from "effect/Result";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import type { ApiDeps } from "./app.ts";
-import { randomId } from "../crypto.ts";
 import { newApprovalCapability } from "../mail/notifications.ts";
 import {
   projectJobStatus,
@@ -53,13 +54,7 @@ import {
 import { mailboxAllowed, mailboxScopeOf, requireRead, requireSend } from "./principal.ts";
 import { deriveReplyRecipients, type ReplyMode } from "./reply-plan.ts";
 
-const HTML_BODY_VALIDATION_PROBLEM = "The HTML body could not be processed safely." as const;
-
-type StoreHttpError =
-  | HttpApiError.NotFound
-  | HttpApiError.Forbidden
-  | HttpApiError.Conflict
-  | HttpApiError.BadRequest;
+type StoreHttpError = NotFound | NotPermitted | Conflict;
 
 // Expected store errors cross the DO RPC boundary as plain `{ _tag, ... }` objects, so they are
 // classified by tag only. Anything else (a DO defect or transport failure arrives as alchemy's
@@ -73,12 +68,25 @@ export const storeCall = <A, R>(
     }
     switch (error._tag) {
       case "ThreadNotFoundError":
-        return Effect.fail(new HttpApiError.NotFound());
+        return Effect.fail(notFound("thread_not_found", `Thread ${error.threadId}`));
       case "JobAuthorizationError":
-        return Effect.fail(new HttpApiError.Forbidden());
+        return Effect.fail(
+          new NotPermitted({
+            code: error.reason,
+            message: "This client may not send this message.",
+          }),
+        );
       case "AccountConflictError":
+        return Effect.fail(
+          new Conflict({ code: "address_exists", message: "That address already exists." }),
+        );
       case "SubmissionConflictError":
-        return Effect.fail(new HttpApiError.Conflict());
+        return Effect.fail(
+          new Conflict({
+            code: "request_id_reused",
+            message: `requestId ${error.requestId} was already used for different content.`,
+          }),
+        );
       case "MessageConflictError":
         return Effect.die(error);
     }
@@ -95,7 +103,10 @@ export const createAddress = Effect.fn("createAddress")(function* (
     .createAddress(input.localPart, deps.mailDomain, input.displayName, now)
     .pipe(storeCall);
   if (address === null) {
-    return yield* new HttpApiError.BadRequest();
+    return yield* new InvalidRequest({
+      code: "address_invalid",
+      message: `"${input.localPart}" is not a valid mailbox name.`,
+    });
   }
   return new Address(address);
 });
@@ -108,7 +119,7 @@ export const listAddresses = Effect.fn("listAddresses")(function* (deps: ApiDeps
 export const getAddress = Effect.fn("getAddress")(function* (deps: ApiDeps, id: string) {
   const address = yield* deps.account.getAddress(id).pipe(storeCall);
   if (address === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
   return new Address(address);
 });
@@ -121,7 +132,7 @@ export const patchAddress = Effect.fn("patchAddress")(function* (
   const now = yield* currentIso;
   const address = yield* deps.account.patchAddress(id, patch, now).pipe(storeCall);
   if (address === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
   return new Address(address);
 });
@@ -135,13 +146,17 @@ export const setAddressForwarding = Effect.fn("setAddressForwarding")(function* 
   const address = yield* getAddress(deps, id);
   const destination = yield* deps.destinations
     .ensure(email)
-    .pipe(Effect.mapError((error) => new ApiProblem({ message: error.message })));
+    .pipe(
+      Effect.mapError(
+        (error) => new InvalidRequest({ code: "forwarding_rejected", message: error.message }),
+      ),
+    );
   const now = yield* currentIso;
   const updated = yield* deps.account
     .setAddressForwarding(address.id, destination.email, now)
     .pipe(storeCall);
   if (updated === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
   return new AddressForwarding({ address: new Address(updated), verified: destination.verified });
 });
@@ -153,7 +168,7 @@ export const removeAddressForwarding = Effect.fn("removeAddressForwarding")(func
   const now = yield* currentIso;
   const address = yield* deps.account.setAddressForwarding(id, null, now).pipe(storeCall);
   if (address === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
   return new Address(address);
 });
@@ -269,7 +284,7 @@ export const getMessage = Effect.fn("getMessage")(function* (
   const summary = yield* deps.account.getMessageSummary(id, scope).pipe(storeCall);
   const body = yield* deps.account.getMessageBody(id, scope).pipe(storeCall);
   if (summary === null || body === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("message_not_found", `Message ${id}`);
   }
   return projectThreadMessage(summary, body);
 });
@@ -284,21 +299,17 @@ export const readMessageSource = Effect.fn("readMessageSource")(function* (
     .getMessageSource(messageId, mailboxScopeOf(principal))
     .pipe(storeCall);
   if (source === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("message_not_found", `Message ${messageId}`);
   }
   if (source.direction === "outbound") {
-    return yield* new OutboundMessageHasNoSource();
+    return yield* new Conflict({
+      code: "no_archived_source",
+      message: `Message ${messageId} was sent by AgentMail and has no archived source; only inbound messages are archived.`,
+    });
   }
-  const bytes = yield* deps.archive.get(source.rawKey).pipe(
-    Effect.mapError(
-      () =>
-        new ArchiveTransportProblem({
-          message: "The message archive is temporarily unavailable.",
-        }),
-    ),
-  );
+  const bytes = yield* deps.archive.get(source.rawKey).pipe(Effect.mapError(archiveUnavailable));
   if (bytes === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("source_not_found", `The archived source of message ${messageId}`);
   }
   return bytes;
 });
@@ -318,18 +329,11 @@ export const readAttachment = Effect.fn("readAttachment")(function* (
     .getStoredAttachment(messageId, attachmentId, mailboxScopeOf(principal))
     .pipe(storeCall);
   if (stored === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("attachment_not_found", `Attachment ${attachmentId}`);
   }
-  const bytes = yield* deps.archive.get(stored.r2Key).pipe(
-    Effect.mapError(
-      () =>
-        new ArchiveTransportProblem({
-          message: "The attachment archive is temporarily unavailable.",
-        }),
-    ),
-  );
+  const bytes = yield* deps.archive.get(stored.r2Key).pipe(Effect.mapError(archiveUnavailable));
   if (bytes === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("attachment_not_found", `Attachment ${attachmentId}`);
   }
   return { stored, bytes };
 });
@@ -342,8 +346,7 @@ export const submitMessage = Effect.fn("submitMessage")(function* (
   yield* requireSend(principal);
   const prepared = yield* prepareOutbound(deps, principal, payload);
   const now = yield* currentIso;
-  const requestId = payload.requestId ?? SubmissionRequestId.make(yield* randomId);
-  const submitted = yield* submitPrepared(deps, prepared, principal, requestId, now);
+  const submitted = yield* submitPrepared(deps, prepared, principal, payload.requestId, now);
   return projectJobStatus(submitted.job);
 });
 
@@ -372,7 +375,7 @@ export const getJob = Effect.fn("getJob")(function* (
 ) {
   const job = yield* deps.account.getOutboundJob(jobId, jobViewer(principal)).pipe(storeCall);
   if (job === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("job_not_found", `Job ${jobId}`);
   }
   return projectJobStatus(job);
 });
@@ -388,7 +391,7 @@ const readReplyParent = Effect.fn("readReplyParent")(function* (
     .getMessageSummary(messageId, mailboxScopeOf(principal))
     .pipe(storeCall);
   if (parent === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* notFound("message_not_found", `Message ${messageId}`);
   }
   return parent;
 });
@@ -418,7 +421,8 @@ const replyRecipients = Effect.fn("replyRecipients")(function* (
   );
   const [first, ...rest] = recipients.to;
   if (first === undefined) {
-    return yield* new ApiProblem({
+    return yield* new InvalidRequest({
+      code: "no_external_recipients",
       message: "The message being replied to has no recipients.",
     });
   }
@@ -462,15 +466,22 @@ const prepareOutbound = Effect.fn("prepareOutbound")(function* (
     .resolveSendingIdentity(payload.fromAddressId)
     .pipe(storeCall);
   if (identity === null) {
-    return yield* new ApiProblem({ message: "The from address is unknown or inactive." });
+    return yield* new InvalidRequest({
+      code: "from_address_unknown",
+      message: `Sending identity ${payload.fromAddressId} is unknown or inactive.`,
+    });
   }
   if (!mailboxAllowed(principal, identity.id)) {
-    return yield* new HttpApiError.Forbidden();
+    return yield* new NotPermitted({
+      code: "mailbox_forbidden",
+      message: `This client may not send from mailbox ${identity.id}.`,
+    });
   }
   const recipients = yield* resolveSubmitRecipients(deps, principal, payload);
   if (recipients.to.length + recipients.cc.length > MAX_OUTBOUND_RECIPIENTS) {
-    return yield* new ApiProblem({
-      message: "A message may have at most 50 To and CC recipients.",
+    return yield* new InvalidRequest({
+      code: "too_many_recipients",
+      message: `A message may have at most ${MAX_OUTBOUND_RECIPIENTS} To and CC recipients.`,
     });
   }
   const storedHtml = yield* sanitizeOutboundHtml(deps, suppliedHtml);
@@ -550,7 +561,15 @@ function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {
   }
   return deps.htmlPolicy
     .sanitizeForStorage(suppliedHtml, { messageId: "outbound", attachments: [] })
-    .pipe(Effect.mapError(() => new ApiProblem({ message: HTML_BODY_VALIDATION_PROBLEM })));
+    .pipe(
+      Effect.mapError(
+        () =>
+          new InvalidRequest({
+            code: "html_unsafe",
+            message: "The HTML body could not be processed safely.",
+          }),
+      ),
+    );
 }
 
 function outboundRequester(principal: Principal): OutboundRequester {
@@ -596,20 +615,40 @@ const decodeCursor = Effect.fn("decodeCursor")(function* (cursor: string | undef
   }
   const decoded = Encoding.decodeBase64UrlString(cursor);
   if (Result.isFailure(decoded)) {
-    return yield* new HttpApiError.BadRequest();
+    return yield* invalidCursor;
   }
   const text = decoded.success;
   const separator = text.indexOf("\n");
   if (separator <= 0 || separator !== text.lastIndexOf("\n")) {
-    return yield* new HttpApiError.BadRequest();
+    return yield* invalidCursor;
   }
   const at = text.slice(0, separator);
   const id = text.slice(separator + 1);
   if (id.length === 0 || parseUtcInstant(at) !== at) {
-    return yield* new HttpApiError.BadRequest();
+    return yield* invalidCursor;
   }
   return { at, id } satisfies PageCursor;
 });
+
+const invalidCursor = new InvalidRequest({
+  code: "invalid_cursor",
+  message: "The cursor is not valid.",
+});
+
+// Unknown ids and ids outside the caller's access get the same answer.
+function notFound(code: NotFoundCode, subject: string) {
+  return new NotFound({
+    code,
+    message: `${subject} was not found, or it is outside this client's access.`,
+  });
+}
+
+function archiveUnavailable() {
+  return new Unavailable({
+    code: "archive_unavailable",
+    message: "The message archive is temporarily unavailable. Try again.",
+  });
+}
 
 function encodeCursor(cursor: PageCursor | null): string | null {
   return cursor === null ? null : Encoding.encodeBase64Url(`${cursor.at}\n${cursor.id}`);

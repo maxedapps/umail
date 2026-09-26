@@ -1,10 +1,10 @@
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
+import { Conflict, NotFound, RequestErrors, Unavailable } from "./errors.ts";
 import { ExternalMailAddress, MailContact } from "./mail-contact.ts";
 import { MailboxAddress } from "./mailbox-address.ts";
 import { NormalizedRfcMessageId } from "./message-threading.ts";
@@ -186,12 +186,10 @@ export class ListThreadMessagesQuery extends Schema.Class<ListThreadMessagesQuer
 }) {}
 
 const messageFields = {
-  requestId: Schema.optionalKey(
-    SubmissionRequestId.annotate({
-      description:
-        "Optional UUID. Retrying with the same requestId and identical content returns the original job instead of sending twice.",
-    }),
-  ),
+  requestId: SubmissionRequestId.annotate({
+    description:
+      "A UUID you generate for this message (any case). To retry, resend the same requestId with the same content: you get the existing job and the message is never sent twice. Use a new requestId for a new message.",
+  }).pipe(Schema.annotateKey({ messageMissingKey: "Expected a requestId (a UUID you generate)" })),
   fromAddressId: Schema.String,
   subject: Schema.String,
   text: Schema.optionalKey(Schema.String),
@@ -200,7 +198,9 @@ const messageFields = {
 
 export const composeFields = {
   ...messageFields,
-  to: Schema.NonEmptyArray(MailContact),
+  to: Schema.NonEmptyArray(
+    MailContact.pipe(Schema.annotateKey({ messageMissingKey: "Expected at least one recipient" })),
+  ),
   cc: Schema.optionalKey(Schema.Array(MailContact)),
 };
 
@@ -234,7 +234,7 @@ export class ReplySubmissionPayload extends Schema.Class<ReplySubmissionPayload>
 export const SubmitMessagePayload = Schema.Union([
   ComposeSubmissionPayload.check(hasMessageBody),
   ReplySubmissionPayload.check(hasMessageBody),
-]);
+]).annotate({ expected: 'a compose or reply submission (intent: "compose" | "reply")' });
 export type SubmitMessagePayload = typeof SubmitMessagePayload.Type;
 
 export class OutboundJobStatus extends Schema.Class<OutboundJobStatus>("OutboundJobStatus")({
@@ -298,50 +298,29 @@ const AttachmentParams = Schema.Struct({
   attachmentId: Schema.String,
 });
 
-export class ApiProblem extends Schema.TaggedError<ApiProblem>()(
-  "ApiProblem",
-  { message: Schema.String },
-  { httpApiStatus: 400 },
-) {}
-
-export class ArchiveTransportProblem extends Schema.TaggedError<ArchiveTransportProblem>()(
-  "ArchiveTransportProblem",
-  { message: Schema.String },
-  { httpApiStatus: 502 },
-) {}
-
-export class OutboundMessageHasNoSource extends Schema.TaggedError<OutboundMessageHasNoSource>()(
-  "OutboundMessageHasNoSource",
-  {},
-  { httpApiStatus: 409 },
-) {}
-
-const businessErrors = [
-  HttpApiError.NotFound,
-  HttpApiError.BadRequest,
-  HttpApiError.Conflict,
-] as const;
-const scopedErrors = [...businessErrors, HttpApiError.Forbidden] as const;
+// Every store call can fail with these; the policy and request errors come from the API's
+// middlewares (PrincipalAuthorization, RequestErrors).
+const storeErrors = [NotFound, Conflict] as const;
 
 class AddressesGroup extends HttpApiGroup.make("Addresses")
   .add(
     HttpApiEndpoint.post("createAddress", "/addresses", {
       payload: CreateAddressPayload,
       success: Address,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.get("listAddresses", "/addresses", {
       success: Schema.Array(Address),
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.get("getAddress", "/addresses/:id", {
       params: IdParams,
       success: Address,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
@@ -349,7 +328,7 @@ class AddressesGroup extends HttpApiGroup.make("Addresses")
       params: IdParams,
       payload: PatchAddressPayload,
       success: Address,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
@@ -357,21 +336,21 @@ class AddressesGroup extends HttpApiGroup.make("Addresses")
       params: IdParams,
       payload: SetForwardingPayload,
       success: AddressForwarding,
-      error: [...scopedErrors, ApiProblem],
+      error: [...storeErrors, Unavailable],
     }),
   )
   .add(
     HttpApiEndpoint.delete("removeForwarding", "/addresses/:id/forwarding", {
       params: IdParams,
       success: Address,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   ) {}
 
 class SendingIdentitiesGroup extends HttpApiGroup.make("SendingIdentities").add(
   HttpApiEndpoint.get("listSendingIdentities", "/sending-identities", {
     success: Schema.Array(SendingIdentity),
-    error: businessErrors,
+    error: storeErrors,
   }),
 ) {}
 
@@ -380,7 +359,7 @@ class ThreadsGroup extends HttpApiGroup.make("Threads")
     HttpApiEndpoint.get("listThreads", "/threads", {
       query: ListThreadsQuery,
       success: MailThreadPage,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
@@ -388,28 +367,28 @@ class ThreadsGroup extends HttpApiGroup.make("Threads")
       params: IdParams,
       query: ListThreadMessagesQuery,
       success: MailThreadDetail,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.patch("markThreadRead", "/threads/:id/read", {
       params: IdParams,
       success: MailThreadDetail,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.patch("markThreadUnread", "/threads/:id/unread", {
       params: IdParams,
       success: MailThreadDetail,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.delete("softDeleteThread", "/threads/:id", {
       params: IdParams,
       success: HttpApiSchema.NoContent,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   ) {}
 
@@ -418,14 +397,14 @@ class MessagesGroup extends HttpApiGroup.make("Messages")
     HttpApiEndpoint.get("listMessages", "/messages", {
       query: ListMessagesQuery,
       success: MailMessagePage,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.get("getMessage", "/messages/:id", {
       params: IdParams,
       success: ThreadMessage,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
@@ -437,7 +416,7 @@ class MessagesGroup extends HttpApiGroup.make("Messages")
         "x-content-type-options": Schema.String,
         "content-security-policy": Schema.optionalKey(Schema.String),
       }),
-      error: [...scopedErrors, ArchiveTransportProblem],
+      error: [...storeErrors, Unavailable],
     }),
   )
   .add(
@@ -448,7 +427,7 @@ class MessagesGroup extends HttpApiGroup.make("Messages")
         "content-disposition": Schema.String,
         "x-content-type-options": Schema.String,
       }),
-      error: [...scopedErrors, ArchiveTransportProblem, OutboundMessageHasNoSource],
+      error: [...storeErrors, Unavailable],
     }),
   ) {}
 
@@ -456,7 +435,7 @@ class SubmissionsGroup extends HttpApiGroup.make("Submissions").add(
   HttpApiEndpoint.post("submitMessage", "/submissions", {
     payload: SubmitMessagePayload,
     success: OutboundJobStatus,
-    error: [...scopedErrors, ApiProblem],
+    error: storeErrors,
   }),
 ) {}
 
@@ -465,14 +444,14 @@ class JobsGroup extends HttpApiGroup.make("Jobs")
     HttpApiEndpoint.get("listJobs", "/jobs", {
       query: ListJobsQuery,
       success: OutboundJobStatusPage,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   )
   .add(
     HttpApiEndpoint.get("getJob", "/jobs/:id", {
       params: IdParams,
       success: OutboundJobStatus,
-      error: scopedErrors,
+      error: storeErrors,
     }),
   ) {}
 
@@ -609,4 +588,5 @@ export class UmailApi extends HttpApi.make("UmailApi")
   .add(MessagesGroup)
   .add(SubmissionsGroup)
   .add(JobsGroup)
-  .middleware(PrincipalAuthorization) {}
+  .middleware(PrincipalAuthorization)
+  .middleware(RequestErrors) {}

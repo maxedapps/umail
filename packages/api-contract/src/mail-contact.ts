@@ -6,7 +6,9 @@ import { MailboxAddress, parseMailboxAddress, type MailDomain } from "./mailbox-
 
 export const ExternalMailAddress = Schema.String.check(
   Schema.makeFilter((raw: string) =>
-    isCanonicalExternalMailAddress(raw) ? undefined : "Invalid external mail address",
+    isCanonicalExternalMailAddress(raw)
+      ? undefined
+      : "Expected a bare address like name@example.com, with a lowercase domain and no display name",
   ),
 ).pipe(Schema.brand("ExternalMailAddress"));
 export type ExternalMailAddress = typeof ExternalMailAddress.Type;

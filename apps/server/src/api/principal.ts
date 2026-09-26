@@ -1,18 +1,21 @@
 import type { MailboxScope } from "../account/domain.ts";
-import type { Principal } from "@umail/api-contract";
+import { NotPermitted, type Principal } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
-export function requireRead(principal: Principal): Effect.Effect<void, HttpApiError.Forbidden> {
+export function requireRead(principal: Principal): Effect.Effect<void, NotPermitted> {
   if (principal.policy.canRead) {
     return Effect.void;
   }
-  return Effect.fail(new HttpApiError.Forbidden());
+  return Effect.fail(
+    new NotPermitted({ code: "read_denied", message: "This client has no read access." }),
+  );
 }
 
-export function requireSend(principal: Principal): Effect.Effect<void, HttpApiError.Forbidden> {
+export function requireSend(principal: Principal): Effect.Effect<void, NotPermitted> {
   if (principal.policy.sendMode.kind === "deny") {
-    return Effect.fail(new HttpApiError.Forbidden());
+    return Effect.fail(
+      new NotPermitted({ code: "send_denied", message: "This client may not send mail." }),
+    );
   }
   return Effect.void;
 }

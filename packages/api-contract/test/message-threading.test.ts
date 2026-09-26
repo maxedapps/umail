@@ -109,10 +109,12 @@ describe("outbound References construction", () => {
 
 describe("compose and reply contract", () => {
   const contact = { address: "user+tag@example.com", displayName: "Ada" };
+  const requestId = "11111111-1111-4111-8111-111111111111";
 
   it("accepts compose with To and optional CC and at least one body", () => {
     const decoded = Schema.decodeResult(SubmitMessagePayload)({
       intent: "compose",
+      requestId,
       fromAddressId: "addr-1",
       to: [contact],
       cc: [{ address: "cc@example.com" }],
@@ -127,6 +129,7 @@ describe("compose and reply contract", () => {
   it("accepts reply with a mode and no client recipients", () => {
     const decoded = Schema.decodeResult(SubmitMessagePayload)({
       intent: "reply",
+      requestId,
       fromAddressId: "addr-1",
       replyToMessageId: "in_1",
       replyMode: "reply-all",
@@ -166,6 +169,7 @@ describe("compose and reply contract", () => {
       Result.isFailure(
         Schema.decodeResult(SubmitMessagePayload)({
           intent: "compose",
+          requestId,
           fromAddressId: "addr-1",
           to: [contact],
           subject: "Hello",

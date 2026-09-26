@@ -1,10 +1,13 @@
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Explicit ranges, not the `i` flag: JSON Schema patterns have no flags, and MCP validates tool
+// arguments against this pattern before decoding. Decoding lower-cases the id.
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-export const SubmissionRequestId = Schema.String.check(Schema.isPattern(UUID)).pipe(
-  Schema.brand("SubmissionRequestId"),
-);
+export const SubmissionRequestId = Schema.String.check(
+  Schema.isPattern(UUID, { expected: "a UUID" }),
+).pipe(Schema.decode(SchemaTransformation.toLowerCase()), Schema.brand("SubmissionRequestId"));
 export type SubmissionRequestId = typeof SubmissionRequestId.Type;
 
 export function approvalNotificationIdempotencyKey(requestId: SubmissionRequestId): string {

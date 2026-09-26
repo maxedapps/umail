@@ -1,6 +1,6 @@
 # Plan for 0005: Errors that say what happened and what to do
 
-- **Status:** Ready
+- **Status:** In progress
 - **ADR:** `adrs/0005-error-reporting.md`
 
 ## Goal
@@ -62,7 +62,7 @@
 | `InvalidRequest` | 400 | `invalid_request` (decode), `invalid_cursor`, `address_invalid`, `address_reserved`, `from_address_unknown`, `from_address_inactive`, `too_many_recipients`, `html_too_complex`, `html_unsafe`, `no_external_recipients`, `forwarding_rejected` |
 | `Unauthenticated` | 401 | `token_invalid` |
 | `NotPermitted` | 403 | `read_denied`, `send_denied`, `mailbox_forbidden`, `recipient_not_allowed`, `client_inactive`, `insufficient_scope` |
-| `NotFound` | 404 | `thread_not_found`, `message_not_found`, `job_not_found`, `attachment_not_found`, `mailbox_not_found`, `source_not_found` |
+| `NotFound` | 404 | `thread_not_found`, `message_not_found`, `job_not_found`, `attachment_not_found`, `mailbox_not_found`, `source_not_found`, `client_not_found` (console only) |
 | `Conflict` | 409 | `address_exists`, `request_id_reused`, `no_archived_source` |
 | `Unavailable` | 502 | `archive_unavailable`, `cloudflare_unavailable`, `cloudflare_misconfigured` |
 
@@ -137,7 +137,12 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 - **MCP test:** an upper-case `requestId` is accepted and stored lower-cased.
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- Each error class narrows its constructor to its own codes (`Props<NotFoundCode>`); `code` stays `Schema.String` on the wire.
+- Endpoints declare `[NotFound, Conflict]` (every store call can raise them), plus `Unavailable` for forwarding, attachments and message source. `InvalidRequest`, `Unauthenticated` and `NotPermitted` come from the two API middlewares, which HttpApi applies to every endpoint.
+- **Deviation:** a response that fails to encode dies with the bare `SchemaError`, not the `HttpApiSchemaError`, because the latter is itself respondable and would still render as an empty 400.
+- **Deviation:** the console's client pages raise `NotFound` `client_not_found`, a code the table did not list.
 
 ### 2. Reasons and messages where the cause is known
 

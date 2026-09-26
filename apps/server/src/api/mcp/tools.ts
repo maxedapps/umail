@@ -1,5 +1,5 @@
 import {
-  ApiProblem,
+  isApiError,
   ListMessagesQuery,
   MailMessagePage,
   MailThreadDetail,
@@ -65,23 +65,9 @@ const sends: ToolAnnotations = {
 const strict = { parseOptions: { onExcessProperty: "error" } } as const;
 const GENERIC_FAILURE = "The AgentMail API request failed.";
 
-// The ApiProblems MCP tools can reach (operations.ts) carry fixed, client-safe messages, so they are passed through.
-function failureMessage(error: { readonly _tag: string }): string {
-  if (Schema.is(ApiProblem)(error)) {
-    return error.message;
-  }
-  switch (error._tag) {
-    case "Forbidden":
-      return "The request is not permitted.";
-    case "NotFound":
-      return "The requested resource was not found.";
-    case "Conflict":
-      return "requestId reused with different content.";
-    case "OutboundMessageHasNoSource":
-      return "The message has no archived source; only inbound messages are archived.";
-    default:
-      return GENERIC_FAILURE;
-  }
+// API errors carry client-safe messages written where the cause is known, so they are passed through.
+function failureMessage(error: unknown): string {
+  return isApiError(error) ? error.message : GENERIC_FAILURE;
 }
 
 function failureResult(message: string): CallToolResult {

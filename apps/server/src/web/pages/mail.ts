@@ -1,17 +1,17 @@
-import type {
-  Address,
-  MailContact,
-  MailMessageSummary,
-  MailThreadSummary,
-  Principal,
-  ThreadMessage,
+import {
+  NotFound,
+  type Address,
+  type MailContact,
+  type MailMessageSummary,
+  type MailThreadSummary,
+  type Principal,
+  type ThreadMessage,
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import type { ApiDeps } from "../../api/app.ts";
 import { attachmentResponseHeaders } from "../../api/attachments.ts";
@@ -351,7 +351,10 @@ export const threadRoute = Effect.fn("threadRoute")(function* (
   }
   const openId = params.open ?? thread.messages.at(-1)?.id;
   if (openId === undefined || !thread.messages.some((message) => message.id === openId)) {
-    return yield* new HttpApiError.NotFound();
+    return yield* new NotFound({
+      code: "message_not_found",
+      message: `Message ${openId ?? ""} is not in this conversation.`,
+    });
   }
   const open = yield* getMessage(deps, principal, openId);
   return yield* htmlResponse(
@@ -391,7 +394,10 @@ export const messageBodyRoute = Effect.fn("messageBodyRoute")(function* (
   const { messageId } = yield* HttpRouter.schemaPathParams(MessageParams);
   const message = yield* getMessage(deps, principal, messageId);
   if (message.htmlBody === null) {
-    return yield* new HttpApiError.NotFound();
+    return yield* new NotFound({
+      code: "message_not_found",
+      message: `Message ${messageId} has no HTML body.`,
+    });
   }
   return HttpServerResponse.text(bodyDocument(message.htmlBody), {
     contentType: "text/html; charset=utf-8",

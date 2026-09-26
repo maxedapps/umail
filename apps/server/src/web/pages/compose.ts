@@ -336,7 +336,7 @@ export const sendRoute = Effect.fn("sendRoute")(function* (deps: ApiDeps, princi
   // The store can still refuse the send, e.g. from a mailbox deactivated since; keep what was typed.
   return yield* submitMessage(deps, principal, payload).pipe(
     Effect.map((job) => redirect(`/mail/sent/${encodeURIComponent(job.jobId)}`)),
-    Effect.catchTag("ApiProblem", (problem) =>
+    Effect.catchTag("InvalidRequest", (problem) =>
       Effect.flatMap(listSendingIdentities(deps, principal), (identities) =>
         Effect.flatMap(sidebarMailboxes(deps), (mailboxes) =>
           htmlResponse(400, {

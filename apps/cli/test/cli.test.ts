@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 
-import { ApprovalToken } from "@umail/api-contract";
+import { ApprovalToken, NotFound } from "@umail/api-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, layer } from "@effect/vitest";
 import * as Clock from "effect/Clock";
@@ -18,7 +18,6 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
 import { OAuthScheduler, type OAuthSchedulerService } from "../src/auth.ts";
 import { OAuthCredentialStore, type OAuthCredentialStoreService } from "../src/credential-store.ts";
@@ -1449,6 +1448,13 @@ describe("removed CLI surface and safe errors", () => {
 
     expect(formatted).toContain("401");
     expect(formatted).not.toContain(keyValue);
-    expect(formatCliError(new HttpApiError.NotFound())).toBe("NotFound");
+    expect(
+      formatCliError(
+        new NotFound({
+          code: "thread_not_found",
+          message: "Thread t1 was not found, or it is outside this client's access.",
+        }),
+      ),
+    ).toBe("Thread t1 was not found, or it is outside this client's access.");
   });
 });
