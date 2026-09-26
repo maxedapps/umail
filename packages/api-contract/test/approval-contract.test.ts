@@ -183,15 +183,15 @@ describe("public approval API contract", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const missing = yield* Effect.flip(baseUrlFrom({}));
-        expect(missing.message).toBe("UMAIL_URL is required");
+        expect(missing.message).toContain("UMAIL_URL is required.");
         const path = yield* Effect.flip(
           baseUrlFrom({
             UMAIL_URL: "https://umail.example.test/api",
           }),
         );
-        expect(path.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
+        expect(path.message).toContain("must be an HTTP(S) origin");
         const protocol = yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "file:///tmp/umail" }));
-        expect(protocol.message).toBe("UMAIL_URL must be a valid HTTP(S) origin");
+        expect(protocol.message).toContain("must be an HTTP(S) origin");
       }),
     ));
 });

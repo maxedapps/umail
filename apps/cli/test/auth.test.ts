@@ -20,7 +20,7 @@ import {
 import {
   makeCredentialStore,
   OAuthCredentialStore,
-  OAuthCredentialStoreError,
+  CredentialFileError,
   type OAuthCredentials,
   type OAuthCredentialStoreService,
 } from "../src/credential-store.ts";
@@ -187,7 +187,9 @@ describe("OAuth device login", () => {
       const error = yield* Effect.flip(
         withAuth(login, http.httpClient, store.service, controlledScheduler().service),
       );
-      expect(error.message).toContain("invalid response");
+      expect(error.message).toBe(
+        `OAuth discovery failed: endpoint https://attacker.invalid/device is not on ${ORIGIN}. Try again; if it keeps failing, check UMAIL_URL.`,
+      );
       expect(http.requests).toHaveLength(1);
       expect(store.changes).toEqual([]);
     }),
@@ -205,7 +207,7 @@ describe("OAuth device login", () => {
       const error = yield* Effect.flip(
         withAuth(login, http.httpClient, store.service, controlledScheduler().service),
       );
-      expect(error.message).toBe("Device authorization was denied.");
+      expect(error.message).toBe("Device authorization was denied in the browser.");
       expect(store.current()).toBeNull();
     }),
   );
@@ -238,14 +240,26 @@ describe("OAuth refresh and logout", () => {
           controlledScheduler().service,
         ),
       );
-      expect(error.message).toBe("OAuth login required. Run: umail login");
+      expect(error.message).toBe(
+        `Stored credentials are for https://other.example.test, not ${ORIGIN}. Run: umail login`,
+      );
     }),
   );
 
   it.effect.each([
-    { error: "invalid_grant", message: "OAuth login required. Run: umail login" },
-    { error: "invalid_client", message: "OAuth login required. Run: umail login" },
-    { error: "invalid_request", message: "The OAuth server returned an invalid response." },
+    {
+      error: "invalid_grant",
+      message: "The session expired or was revoked (invalid_grant). Run: umail login",
+    },
+    {
+      error: "invalid_client",
+      message: "The session expired or was revoked (invalid_client). Run: umail login",
+    },
+    {
+      error: "invalid_request",
+      message:
+        "OAuth token refresh failed: HTTP 400 invalid_request. Try again; if it keeps failing, check UMAIL_URL.",
+    },
   ])("maps a $error refresh rejection to a clear error", ({ error, message }) =>
     Effect.gen(function* () {
       const store = memoryStore(validCredentials({ expiresAt: 1_001 }));
@@ -289,7 +303,13 @@ describe("OAuth refresh and logout", () => {
     Effect.gen(function* () {
       const store = {
         ...memoryStore(validCredentials({ expiresAt: 1_001 })).service,
-        write: () => Effect.fail(new OAuthCredentialStoreError()),
+        write: () =>
+          Effect.fail(
+            new CredentialFileError({
+              path: "/state/oauth.json",
+              problem: "cannot be written: disk full",
+            }),
+          ),
       } satisfies OAuthCredentialStoreService;
       const responses = [
         json(METADATA),
@@ -304,7 +324,7 @@ describe("OAuth refresh and logout", () => {
       const error = yield* Effect.flip(
         withAuth(accessToken, http.httpClient, store, controlledScheduler(1_000).service),
       );
-      expect(error.message).toBe("The OAuth credential file is missing or insecure.");
+      expect(error.message).toBe("/state/oauth.json cannot be written: disk full");
     }),
   );
 
@@ -316,7 +336,9 @@ describe("OAuth refresh and logout", () => {
       const error = yield* Effect.flip(
         withAuth(logout, http.httpClient, store.service, controlledScheduler().service),
       );
-      expect(error.message).toContain("local OAuth credentials were kept");
+      expect(error.message).toBe(
+        "Could not revoke access on the server; local OAuth credentials were kept. OAuth revocation failed: HTTP 500 server_error. Try again; if it keeps failing, check UMAIL_URL.",
+      );
       expect(store.current()).toEqual(validCredentials());
       expect(store.changes).toEqual([]);
     }),
@@ -406,7 +428,31 @@ layer(NodeServices.layer)("POSIX OAuth credential store", (it) => {
         }
         const store = yield* makeCredentialStore(file);
         const error = yield* Effect.flip(store.read);
-        expect(error.message).toBe("The OAuth credential file is missing or insecure.");
+        expect(error.message).toContain(" is a symlink; umail only uses a regular path it owns.");
+      }),
+    ),
+  );
+
+  it.effect("says which permission is too open and how to fix it", () =>
+    inTemporaryState((stateHome, file) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const store = yield* makeCredentialStore(file);
+        yield* store.withLock(store.write(validCredentials()));
+        yield* fs.chmod(file, 0o644);
+        expect((yield* Effect.flip(store.read)).message).toBe(
+          `${file} is open to other users (mode 644). Run: chmod 600 ${file}`,
+        );
+        yield* fs.chmod(file, 0o600);
+        yield* fs.chmod(`${stateHome}/umail`, 0o755);
+        expect((yield* Effect.flip(store.read)).message).toBe(
+          `${stateHome}/umail is open to other users (mode 755). Run: chmod 700 ${stateHome}/umail`,
+        );
+        yield* fs.chmod(`${stateHome}/umail`, 0o700);
+        yield* fs.writeFileString(file, "{not json", { mode: 0o600 });
+        expect((yield* Effect.flip(store.read)).message).toBe(
+          `${file} is not valid umail credentials. Delete it and run: umail login`,
+        );
       }),
     ),
   );

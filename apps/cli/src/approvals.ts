@@ -12,6 +12,7 @@ import * as Prompt from "effect/unstable/cli/Prompt";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { publicApprovalClient } from "./client.ts";
+import { UnexpectedResponse, fromHttpClientError } from "./errors.ts";
 
 type ApprovalDecisionCommand = "approve" | "deny";
 
@@ -72,9 +73,18 @@ export class ApprovalTokenSource extends Context.Service<
   );
 }
 
-export class PublicApprovalRequestError extends Data.TaggedError("PublicApprovalRequestError") {
-  override readonly message = "Could not complete the approval request.";
+// The server's answer about the token. The messages never repeat the token or the request URL.
+export class ApprovalRefused extends Data.TaggedError("ApprovalRefused")<{
+  readonly reason: "unknown" | "gone";
+}> {
+  override readonly message =
+    this.reason === "unknown"
+      ? "This approval token is not recognized."
+      : "This approval is no longer available.";
 }
+
+// Named without the request path, which carries the token.
+const APPROVAL_STEP = "the approval request";
 
 interface ApprovalDecisionOutput {
   readonly state: ApprovalDecisionState;
@@ -93,7 +103,13 @@ export const decideApproval = Effect.fn("decideApproval")(function* (
       ? client.PublicApprovals.approveApproval({ params: { token } })
       : client.PublicApprovals.denyApproval({ params: { token } });
   const response = yield* request.pipe(
-    Effect.catchCause(() => Effect.fail(new PublicApprovalRequestError())),
+    Effect.catchTags({
+      ApprovalPageNotFound: () => Effect.fail(new ApprovalRefused({ reason: "unknown" })),
+      ApprovalPageGone: () => Effect.fail(new ApprovalRefused({ reason: "gone" })),
+      HttpClientError: (error) => fromHttpClientError(error, APPROVAL_STEP),
+      SchemaError: () =>
+        Effect.fail(new UnexpectedResponse({ detail: `${APPROVAL_STEP} answered unreadably` })),
+    }),
   );
   return {
     state: response.headers["x-umail-approval-state"],

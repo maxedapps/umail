@@ -29,20 +29,15 @@ class UmailClientConfigurationError extends Data.TaggedError(
 )<UmailClientConfigurationErrorFields> {}
 
 function parseBaseUrl(value: string) {
+  const origin = new UmailClientConfigurationError({
+    message: `UMAIL_URL "${value}" must be an HTTP(S) origin like https://mail.example.com, with no path.`,
+  });
   return Schema.decodeEffect(Schema.URLFromString)(value).pipe(
-    Effect.mapError(
-      () =>
-        new UmailClientConfigurationError({
-          message: "UMAIL_URL must be a valid HTTP(S) origin",
-        }),
-    ),
+    Effect.mapError(() => origin),
     Effect.filterOrFail(
       (url) =>
         (url.protocol === "https:" || url.protocol === "http:") && url.href === `${url.origin}/`,
-      () =>
-        new UmailClientConfigurationError({
-          message: "UMAIL_URL must be a valid HTTP(S) origin",
-        }),
+      () => origin,
     ),
     Effect.filterOrFail(
       (url) =>
@@ -52,7 +47,7 @@ function parseBaseUrl(value: string) {
         url.hostname === "[::1]",
       () =>
         new UmailClientConfigurationError({
-          message: "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
+          message: `UMAIL_URL "${value}" must use HTTPS except on localhost, 127.0.0.1, or [::1].`,
         }),
     ),
     Effect.map((url) => url.origin),
@@ -64,13 +59,17 @@ export const umailBaseUrl: Effect.Effect<string, UmailClientConfigurationError> 
   Config.string("UMAIL_URL"),
 ).pipe(
   Effect.mapError(
-    () =>
-      new UmailClientConfigurationError({ message: "UMAIL_URL must be a valid HTTP(S) origin" }),
+    () => new UmailClientConfigurationError({ message: "UMAIL_URL could not be read." }),
   ),
   Effect.flatMap(
     Option.match({
       onNone: () =>
-        Effect.fail(new UmailClientConfigurationError({ message: "UMAIL_URL is required" })),
+        Effect.fail(
+          new UmailClientConfigurationError({
+            message:
+              "UMAIL_URL is required. Set it to your AgentMail origin, e.g. https://mail.example.com.",
+          }),
+        ),
       onSome: parseBaseUrl,
     }),
   ),

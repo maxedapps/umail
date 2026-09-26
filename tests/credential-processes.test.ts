@@ -225,7 +225,9 @@ layer(NodeServices.layer, { excludeTestServices: true })(
         yield* fs.writeFileString(file, "{not-json\n", { mode: 0o600 });
         const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("missing or insecure");
+        expect(result.stderr).toContain(
+          "is not valid umail credentials. Delete it and run: umail login",
+        );
         expectNoSecrets(result);
       }),
     );
@@ -238,7 +240,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
         yield* fs.chmod(yield* credentialFileIn(stateHome), 0o666);
         const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("missing or insecure");
+        expect(result.stderr).toContain("is open to other users (mode 666). Run: chmod 600");
         expectNoSecrets(result);
       }),
     );
@@ -253,7 +255,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
         yield* fs.symlink(path.join(stateHome, "missing"), file);
         const result = yield* (yield* spawnCli(["addresses", "list"], env)).finished;
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("missing or insecure");
+        expect(result.stderr).toContain("is a symlink;");
         expectNoSecrets(result);
       }),
     );

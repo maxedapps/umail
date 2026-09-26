@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 import { ApprovalToken, NotFound } from "@umail/api-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, layer } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,7 @@ import * as Result from "effect/Result";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
 import * as TestConsole from "effect/testing/TestConsole";
+import * as Command from "effect/unstable/cli/Command";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -25,9 +27,9 @@ import {
   ApprovalTokenInputError,
   ApprovalTokenSource,
   type ApprovalTokenSourceService,
-  PublicApprovalRequestError,
 } from "../src/approvals.ts";
-import { formatCliError, program } from "../src/main.ts";
+import { umailCommand } from "../src/commands/index.ts";
+import { renderCause, program } from "../src/main.ts";
 
 interface CapturedRequest {
   readonly method: string;
@@ -291,7 +293,7 @@ function runProgram(
 ) {
   return Effect.gen(function* () {
     const outcome = yield* Effect.exit(
-      program(argv).pipe(
+      program(umailCommand, argv).pipe(
         Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
       ),
     );
@@ -370,12 +372,13 @@ function approvalTransportFailure(description: string) {
 interface ApprovalFailureFixture {
   readonly name: string;
   readonly httpClient: HttpClient.HttpClient;
+  readonly expected: string;
 }
 
 function runApprovalFailure(httpClient: HttpClient.HttpClient) {
   return Effect.gen(function* () {
     const result = yield* Effect.result(
-      program(["approvals", "approve"]).pipe(
+      program(umailCommand, ["approvals", "approve"]).pipe(
         Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(testEnv)),
       ),
     );
@@ -400,7 +403,12 @@ function runApprovalFailure(httpClient: HttpClient.HttpClient) {
 
 type ApprovalFailureCapture = Effect.Success<ReturnType<typeof runApprovalFailure>>;
 
-function serializePublicApprovalError(failure: PublicApprovalRequestError): string {
+// What the CLI prints for a failure.
+function rendered(error: unknown): string | null {
+  return renderCause(Cause.fail(error));
+}
+
+function serializePublicApprovalError(failure: Error): string {
   return JSON.stringify(failure);
 }
 
@@ -884,7 +892,9 @@ layer(NodeServices.layer)("retained CLI dispatch", (it) => {
         unusedHttpClient(),
       );
       expect(Exit.isFailure(hoursOverflow.outcome)).toBe(true);
-      expect(hoursOverflow.stderr).toEqual(["--since-hours produced a date outside years 1-9999"]);
+      expect(hoursOverflow.stderr).toEqual([
+        "umail: --since-hours produced a date outside years 1-9999",
+      ]);
 
       const conflicting = yield* runProgram(
         ["messages", "list", "--since", "2026-08-25T00:00:00.000Z", "--since-hours", "24"],
@@ -1113,49 +1123,52 @@ layer(NodeServices.layer)("public approval capability commands", (it) => {
 
         const invalid = yield* Effect.flip(readToken(invalidPath));
         expect(invalid).toEqual(new ApprovalTokenInputError({ reason: "invalid" }));
-        for (const rendered of [
+        for (const output of [
           invalid.message,
           invalid.stack ?? "",
           String(invalid),
           inspect(invalid),
-          formatCliError(invalid),
+          rendered(invalid) ?? "",
         ]) {
-          expect(rendered).not.toContain(invalidToken);
-          expect(rendered).not.toContain(invalidPath);
+          expect(output).not.toContain(invalidToken);
+          expect(output).not.toContain(invalidPath);
         }
 
         const missingPath = path.join(directory, "missing-token");
         const unreadable = yield* Effect.flip(readToken(missingPath));
         expect(unreadable).toEqual(new ApprovalTokenInputError({ reason: "unreadable" }));
-        for (const rendered of [
+        for (const output of [
           unreadable.message,
           unreadable.stack ?? "",
           String(unreadable),
           inspect(unreadable),
           serializeApprovalTokenInputError(unreadable),
-          formatCliError(unreadable),
+          rendered(unreadable) ?? "",
         ]) {
-          expect(rendered).not.toContain(missingPath);
+          expect(output).not.toContain(missingPath);
         }
       }),
   );
 
-  it.effect("collapses every public client failure without retaining its URL or token", () =>
+  it.effect("names each public client failure without its request URL or token", () =>
     Effect.gen(function* () {
       const maliciousBody = `<p>${testEnv.UMAIL_URL}/approvals/${approvalTokenText}</p>`;
       const responseClient = (response: Response) => capturingClient(() => response).httpClient;
+      const unreachable = `Could not reach ${testEnv.UMAIL_URL} during the approval request. Check that the server is up and UMAIL_URL is right.`;
       const fixtures: ReadonlyArray<ApprovalFailureFixture> = [
         {
           name: "typed 404",
           httpClient: responseClient(
             new Response(maliciousBody, { status: 404, headers: approvalTrustedHeaders }),
           ),
+          expected: "This approval token is not recognized.",
         },
         {
           name: "typed 410",
           httpClient: responseClient(
             new Response(maliciousBody, { status: 410, headers: approvalTrustedHeaders }),
           ),
+          expected: "This approval is no longer available.",
         },
         {
           name: "unexpected status",
@@ -1165,16 +1178,19 @@ layer(NodeServices.layer)("public approval capability commands", (it) => {
               headers: { "content-type": "text/html; charset=utf-8" },
             }),
           ),
+          expected: "The umail server failed (HTTP 500) on the approval request. Try again later.",
         },
         {
           name: "transport",
           httpClient: approvalTransportFailure(`transport at ${testEnv.UMAIL_URL}`),
+          expected: unreachable,
         },
         {
           name: "timeout",
           httpClient: approvalTransportFailure(
             `timeout for ${testEnv.UMAIL_URL}/approvals/${approvalTokenText}`,
           ),
+          expected: unreachable,
         },
         {
           name: "response decoding",
@@ -1189,41 +1205,35 @@ layer(NodeServices.layer)("public approval capability commands", (it) => {
               },
             }),
           ),
+          expected:
+            "Unexpected response from the umail server: the approval request answered unreadably. Update the CLI or check UMAIL_URL.",
         },
       ];
 
       for (const fixture of fixtures) {
         const captured = yield* runApprovalFailure(fixture.httpClient);
         const failure = captured.failure;
-        expect(failure, fixture.name).toEqual(new PublicApprovalRequestError());
         expect(failure, fixture.name).not.toHaveProperty("cause");
-        if (!(failure instanceof PublicApprovalRequestError)) {
-          throw new Error(`Expected owner-specific approval failure for ${fixture.name}`);
+        if (!(failure instanceof Error)) {
+          throw new Error(`Expected an approval failure for ${fixture.name}`);
         }
-        const rendered = [
+        expect(failure.message, fixture.name).toBe(fixture.expected);
+        const outputs = [
           failure.message,
           failure.name,
           failure.stack ?? "",
           String(failure),
           serializePublicApprovalError(failure),
           inspect(failure),
-          formatCliError(failure),
+          rendered(failure) ?? "",
+          serializeApprovalFailureCapture(captured),
         ];
-        for (const output of rendered) {
+        for (const output of outputs) {
           expect(output, fixture.name).not.toContain(approvalTokenText);
-          expect(output, fixture.name).not.toContain(testEnv.UMAIL_URL);
+          expect(output, fixture.name).not.toContain("/approvals/");
         }
-        expect(formatCliError(failure), fixture.name).toBe(
-          "Could not complete the approval request.",
-        );
         expect(captured.stdout, fixture.name).toEqual([]);
-        expect(captured.stderr, fixture.name).toEqual(["Could not complete the approval request."]);
-        expect(serializeApprovalFailureCapture(captured), fixture.name).not.toContain(
-          approvalTokenText,
-        );
-        expect(serializeApprovalFailureCapture(captured), fixture.name).not.toContain(
-          testEnv.UMAIL_URL,
-        );
+        expect(captured.stderr, fixture.name).toEqual([`umail: ${fixture.expected}`]);
       }
     }),
   );
@@ -1246,8 +1256,8 @@ layer(NodeServices.layer)("public approval capability commands", (it) => {
       if (Result.isFailure(result)) {
         expect(result.failure).toEqual(new ApprovalTokenInputError({ reason: "invalid" }));
       }
-      expect(formatCliError(new ApprovalTokenInputError({ reason: "invalid" }))).toBe(
-        "Approval token must be 64 lowercase hexadecimal characters",
+      expect(rendered(new ApprovalTokenInputError({ reason: "invalid" }))).toBe(
+        "umail: Approval token must be 64 lowercase hexadecimal characters",
       );
     });
   });
@@ -1404,7 +1414,9 @@ describe("removed CLI surface and safe errors", () => {
       const unconfigured = yield* runProgram(["threads", "list"], {}, unusedHttpClient());
       expect(Exit.isFailure(unconfigured.outcome)).toBe(true);
       expect(unconfigured.stdout).toEqual([]);
-      expect(unconfigured.stderr).toEqual(["UMAIL_URL is required"]);
+      expect(unconfigured.stderr).toEqual([
+        "umail: UMAIL_URL is required. Set it to your AgentMail origin, e.g. https://mail.example.com.",
+      ]);
 
       const usage = yield* runProgram(
         [
@@ -1434,27 +1446,198 @@ describe("removed CLI surface and safe errors", () => {
     }),
   );
 
-  it("formats HTTP and API errors without request credentials", () => {
-    const keyValue = "root-key-that-must-not-render";
-    const request = HttpClientRequest.get("https://umail.example.test/addresses").pipe(
-      HttpClientRequest.setHeader("authorization", `Bearer ${keyValue}`),
-    );
-    const response = HttpClientResponse.fromWeb(request, new Response(null, { status: 401 }));
-    const formatted = formatCliError(
-      new HttpClientError.HttpClientError({
-        reason: new HttpClientError.StatusCodeError({ request, response }),
-      }),
-    );
-
-    expect(formatted).toContain("401");
-    expect(formatted).not.toContain(keyValue);
+  it("renders an API error as the server's sentence and a defect in full", () => {
     expect(
-      formatCliError(
+      rendered(
         new NotFound({
           code: "thread_not_found",
           message: "Thread t1 was not found, or it is outside this client's access.",
         }),
       ),
-    ).toBe("Thread t1 was not found, or it is outside this client's access.");
+    ).toBe("umail: Thread t1 was not found, or it is outside this client's access.");
+    expect(renderCause(Cause.die(new Error("boom")))).toContain("Error: boom");
   });
+});
+
+describe("failure messages", () => {
+  const ORIGIN = testEnv.UMAIL_URL;
+  const metadata = {
+    issuer: `${ORIGIN}/api/auth`,
+    device_authorization_endpoint: `${ORIGIN}/api/auth/device/code`,
+    token_endpoint: `${ORIGIN}/api/auth/oauth2/token`,
+    revocation_endpoint: `${ORIGIN}/api/auth/oauth2/revoke`,
+  };
+  const json = (value: Json, status = 200) =>
+    new Response(JSON.stringify(value), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  const stderrOf = (
+    argv: ReadonlyArray<string>,
+    respond: CliResponseFactory,
+    credentialStore: OAuthCredentialStoreService = testCredentialStore,
+  ) =>
+    Effect.map(
+      runProgram(
+        argv,
+        testEnv,
+        capturingClient(respond).httpClient,
+        unusedApprovalTokenSource,
+        credentialStore,
+      ),
+      (captured) => captured.stderr,
+    );
+  const refused = HttpClient.make((request) =>
+    Effect.fail(
+      new HttpClientError.HttpClientError({
+        reason: new HttpClientError.TransportError({
+          request,
+          cause: Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
+        }),
+      }),
+    ),
+  );
+
+  it.effect("names the step and the network code when the server cannot be reached", () =>
+    Effect.gen(function* () {
+      const login = yield* runProgram(["login"], testEnv, refused);
+      expect(login.stderr).toEqual([
+        `umail: Could not reach ${ORIGIN} during discovery (ECONNREFUSED). Check that the server is up and UMAIL_URL is right.`,
+      ]);
+    }),
+  );
+
+  it.effect("says what the OAuth server answered and what was wrong with it", () =>
+    Effect.gen(function* () {
+      const expired = {
+        ...testCredentialStore,
+        read: Effect.map(testCredentialStore.read, (credentials) => ({
+          ...credentials,
+          expiresAt: 0,
+        })),
+      } satisfies OAuthCredentialStoreService;
+      expect(
+        yield* stderrOf(
+          ["threads", "list"],
+          (_request, url) =>
+            url.pathname.startsWith("/.well-known/")
+              ? json(metadata)
+              : json({ error: "server_error", error_description: "database down" }, 500),
+          expired,
+        ),
+      ).toEqual([
+        "umail: OAuth token refresh failed: HTTP 500 server_error: database down. Try again; if it keeps failing, check UMAIL_URL.",
+      ]);
+      expect(
+        yield* stderrOf(["login"], () =>
+          json({ ...metadata, issuer: "https://evil.example/api/auth" }),
+        ),
+      ).toEqual([
+        `umail: OAuth discovery failed: issuer is https://evil.example/api/auth, expected ${ORIGIN}/api/auth. Try again; if it keeps failing, check UMAIL_URL.`,
+      ]);
+    }),
+  );
+
+  it.effect("prints the server's own message for a declared error", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* stderrOf(["threads", "list"], () =>
+          json(
+            {
+              _tag: "NotPermitted",
+              code: "read_denied",
+              message: "This client has no read access.",
+            },
+            403,
+          ),
+        ),
+      ).toEqual(["umail: This client has no read access."]);
+      expect(
+        yield* stderrOf(["threads", "list"], () =>
+          json(
+            {
+              _tag: "Unauthenticated",
+              code: "token_invalid",
+              message: "The access token is invalid or expired. Run: umail login",
+            },
+            401,
+          ),
+        ),
+      ).toEqual(["umail: The access token is invalid or expired. Run: umail login"]);
+    }),
+  );
+
+  it.effect("tells an undeclared status and a body outside the contract apart", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* stderrOf(["threads", "list"], () => new Response("upstream down", { status: 503 })),
+      ).toEqual(["umail: The umail server failed (HTTP 503) on GET /threads. Try again later."]);
+      expect(
+        yield* stderrOf(["threads", "list"], () =>
+          json({ items: [{ threadId: 7 }], nextCursor: null }),
+        ),
+      ).toEqual([
+        "umail: Unexpected response from the umail server: items.0.threadId: Expected string. Update the CLI or check UMAIL_URL.",
+      ]);
+    }),
+  );
+
+  it.effect("prints the request id to retry with when a submission's outcome is unknown", () =>
+    Effect.gen(function* () {
+      let submissions = 0;
+      const httpClient = HttpClient.make((request, url) => {
+        if (url.pathname === "/sending-identities") {
+          return Effect.succeed(HttpClientResponse.fromWeb(request, json([sendingIdentity])));
+        }
+        submissions += 1;
+        return Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        );
+      });
+      const captured = yield* runProgram(
+        [
+          "messages",
+          "compose",
+          "--from",
+          "inbox@umail.example.test",
+          "--to",
+          "bob@example.com",
+          "--subject",
+          "Hello",
+          "--text",
+          "Body",
+          "--request-id",
+          REQUEST_ID,
+        ],
+        testEnv,
+        httpClient,
+      );
+      expect(submissions).toBe(3);
+      expect(captured.stderr).toEqual([
+        `umail: Could not reach ${ORIGIN} during POST /submissions. Check that the server is up and UMAIL_URL is right. The submission may have been accepted. Retry with --request-id ${REQUEST_ID} and the same content to get the existing job.`,
+      ]);
+    }),
+  );
+
+  it.effect("reports a missing HOME while the command's services are set up", () =>
+    Effect.gen(function* () {
+      const outcome = yield* Effect.exit(
+        program(umailCommand.pipe(Command.provide(OAuthCredentialStore.layer)), [
+          "threads",
+          "list",
+        ]).pipe(
+          Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(testEnv)),
+          Effect.provideService(HttpClient.HttpClient, unusedHttpClient()),
+          Effect.provideService(OAuthScheduler, testScheduler),
+          Effect.provideService(ApprovalTokenSource, unusedApprovalTokenSource),
+        ),
+      );
+      expect(Exit.isFailure(outcome)).toBe(true);
+      expect(yield* TestConsole.errorLines).toEqual([
+        "umail: Set HOME or XDG_STATE_HOME to locate umail credentials.",
+      ]);
+    }).pipe(Effect.provide(cliTestLayer())),
+  );
 });

@@ -346,7 +346,9 @@ layer(Layer.provideMerge(BuildClients, NodeServices.layer), {
         );
         expect(result.status).not.toBe(0);
         expect(result.stdout).toBe("");
-        expect(result.stderr).toBe("Could not complete the approval request.\n");
+        expect(result.stderr).toBe(
+          "umail: The umail server failed (HTTP 500) on the approval request. Try again later.\n",
+        );
         expectNoSecretLeakage(result, api.baseUrl);
       }),
     30_000,

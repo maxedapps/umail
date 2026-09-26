@@ -29,22 +29,29 @@ export type OAuthCredentials = typeof OAuthCredentials.Type;
 
 const CredentialsJson = Schema.fromJsonString(OAuthCredentials);
 
-export class OAuthCredentialStoreError extends Data.TaggedError("OAuthCredentialStoreError") {
-  override readonly message = "The OAuth credential file is missing or insecure.";
+// What is wrong with the credential file or its directory, and how to fix it.
+export class CredentialFileError extends Data.TaggedError("CredentialFileError")<{
+  readonly path: string;
+  readonly problem: string;
+}> {
+  override readonly message = `${this.path} ${this.problem}`;
+}
+class MissingStateHome extends Data.TaggedError("MissingStateHome") {
+  override readonly message = "Set HOME or XDG_STATE_HOME to locate umail credentials.";
 }
 export class OAuthCredentialLockError extends Data.TaggedError("OAuthCredentialLockError") {
   override readonly message = "Could not acquire the OAuth credential lock.";
 }
 
 export interface OAuthCredentialStoreService {
-  readonly read: Effect.Effect<OAuthCredentials | null, OAuthCredentialStoreError>;
-  readonly write: (credentials: OAuthCredentials) => Effect.Effect<void, OAuthCredentialStoreError>;
-  readonly remove: Effect.Effect<void, OAuthCredentialStoreError>;
+  readonly read: Effect.Effect<OAuthCredentials | null, CredentialFileError>;
+  readonly write: (credentials: OAuthCredentials) => Effect.Effect<void, CredentialFileError>;
+  readonly remove: Effect.Effect<void, CredentialFileError>;
   // Serialises login, refresh and logout across CLI processes, so none acts on tokens another
   // process is replacing.
   readonly withLock: <A, E, R>(
     body: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | OAuthCredentialStoreError | OAuthCredentialLockError, R>;
+  ) => Effect.Effect<A, E | CredentialFileError | OAuthCredentialLockError, R>;
 }
 
 // `$XDG_STATE_HOME/umail/oauth.json`, else `~/.local/state/umail/oauth.json`.
@@ -54,6 +61,7 @@ export const credentialFile = Effect.gen(function* () {
     Config.orElse(() =>
       Config.string("HOME").pipe(Config.map((home) => path.join(home, ".local", "state"))),
     ),
+    Effect.mapError(() => new MissingStateHome()),
   );
   return path.join(root, "umail", "oauth.json");
 });
@@ -78,25 +86,47 @@ export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (f
       ),
     );
 
+  const problem = (target: string, text: string) =>
+    new CredentialFileError({ path: target, problem: text });
+
   // Not a symlink, owned by this user and, when private, closed to everyone else.
   const assertSafe = Effect.fn("assertSafe")(function* (
     target: string,
     type: "Directory" | "File",
     isPrivate: boolean,
   ) {
-    if ((yield* entryAt(target)) === "symlink") return yield* new OAuthCredentialStoreError();
-    const info = yield* fs.stat(target);
-    if (
-      info.type !== type ||
-      Option.getOrUndefined(info.uid) !== uid ||
-      (isPrivate && (info.mode & 0o077) !== 0)
-    ) {
-      return yield* new OAuthCredentialStoreError();
+    if ((yield* entryAt(target)) === "symlink") {
+      return yield* problem(
+        target,
+        "is a symlink; umail only uses a regular path it owns. Remove it and run: umail login",
+      );
+    }
+    const info = yield* fs
+      .stat(target)
+      .pipe(Effect.mapError((error) => problem(target, `cannot be read: ${error.message}`)));
+    if (info.type !== type) {
+      return yield* problem(
+        target,
+        `is not a ${type.toLowerCase()}. Remove it and run: umail login`,
+      );
+    }
+    if (Option.getOrUndefined(info.uid) !== uid) {
+      return yield* problem(target, "is owned by another user. Remove it and run: umail login");
+    }
+    if (isPrivate && (info.mode & 0o077) !== 0) {
+      const mode = (info.mode & 0o777).toString(8);
+      const wanted = type === "File" ? "600" : "700";
+      return yield* problem(
+        target,
+        `is open to other users (mode ${mode}). Run: chmod ${wanted} ${target}`,
+      );
     }
   });
 
   const ensureDirectory = Effect.gen(function* () {
-    yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
+    yield* fs
+      .makeDirectory(directory, { recursive: true, mode: 0o700 })
+      .pipe(Effect.mapError((error) => problem(directory, `cannot be created: ${error.message}`)));
     yield* assertSafe(root, "Directory", false);
     yield* assertSafe(directory, "Directory", true);
   });
@@ -104,46 +134,52 @@ export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (f
   const read = Effect.gen(function* () {
     const entry = yield* entryAt(file);
     if (entry === "missing") return null;
-    if (entry === "symlink") return yield* new OAuthCredentialStoreError();
     yield* assertSafe(root, "Directory", false);
     yield* assertSafe(directory, "Directory", true);
     yield* assertSafe(file, "File", true);
-    return yield* Schema.decodeEffect(CredentialsJson)(yield* fs.readFileString(file));
-  }).pipe(Effect.mapError(() => new OAuthCredentialStoreError()));
+    const text = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((error) => problem(file, `cannot be read: ${error.message}`)));
+    return yield* Schema.decodeEffect(CredentialsJson)(text).pipe(
+      Effect.mapError(() =>
+        problem(file, "is not valid umail credentials. Delete it and run: umail login"),
+      ),
+    );
+  });
 
   // Written to a private temporary file, then renamed over the old one, so readers never see a
   // partial file.
-  const write = Effect.fn("OAuthCredentialStore.write")(
-    function* (credentials: OAuthCredentials) {
-      yield* ensureDirectory;
-      if ((yield* entryAt(file)) === "entry") yield* assertSafe(file, "File", true);
-      const temporary = path.join(directory, `.oauth-${yield* crypto.randomUUIDv4}.tmp`);
-      yield* fs
-        .writeFileString(
-          temporary,
-          `${yield* Schema.encodeEffect(CredentialsJson)(credentials)}\n`,
-          {
-            flag: "wx",
-            mode: 0o600,
-          },
-        )
-        .pipe(
-          Effect.andThen(fs.rename(temporary, file)),
-          Effect.onError(() => fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
-        );
-    },
-    Effect.uninterruptible,
-    Effect.mapError(() => new OAuthCredentialStoreError()),
-  );
+  const write = Effect.fn("OAuthCredentialStore.write")(function* (credentials: OAuthCredentials) {
+    yield* ensureDirectory;
+    if ((yield* entryAt(file)) === "entry") yield* assertSafe(file, "File", true);
+    const temporary = path.join(
+      directory,
+      `.oauth-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.tmp`,
+    );
+    yield* fs
+      .writeFileString(
+        temporary,
+        `${yield* Schema.encodeEffect(CredentialsJson)(credentials).pipe(Effect.orDie)}\n`,
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      )
+      .pipe(
+        Effect.andThen(fs.rename(temporary, file)),
+        Effect.onError(() => fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
+        Effect.mapError((error) => problem(file, `cannot be written: ${error.message}`)),
+      );
+  }, Effect.uninterruptible);
 
   const remove = fs
     .remove(file, { force: true })
-    .pipe(Effect.mapError(() => new OAuthCredentialStoreError()));
+    .pipe(Effect.mapError((error) => problem(file, `cannot be removed: ${error.message}`)));
 
   // The lock is a directory: creating it is atomic. One left behind by a killed process is removed
   // once it is older than LOCK_STALE.
   const acquireLock = Effect.gen(function* () {
-    yield* ensureDirectory.pipe(Effect.mapError(() => new OAuthCredentialStoreError()));
+    yield* ensureDirectory;
     const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(LOCK_TIMEOUT);
     while (true) {
       const created = yield* fs.makeDirectory(lock, { mode: 0o700 }).pipe(
@@ -151,7 +187,7 @@ export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (f
         Effect.catch((error: PlatformError.PlatformError) =>
           error.reason._tag === "AlreadyExists"
             ? Effect.succeed(false)
-            : Effect.fail(new OAuthCredentialStoreError()),
+            : Effect.fail(problem(lock, `cannot be created: ${error.message}`)),
         ),
       );
       if (created) return;

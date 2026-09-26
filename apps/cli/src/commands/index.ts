@@ -25,11 +25,11 @@ import * as Schema from "effect/Schema";
 import * as Command from "effect/unstable/cli/Command";
 import * as Flag from "effect/unstable/cli/Flag";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
 
 import { decideApproval } from "../approvals.ts";
 import { login, logout } from "../auth.ts";
-import { umailClient } from "../client.ts";
+import { apiCall, umailClient } from "../client.ts";
+import type { ServerFailed, ServerUnreachable } from "../errors.ts";
 import {
   ccFlag,
   cursorFlag,
@@ -71,6 +71,15 @@ class ConflictingSinceFlagsError extends Data.TaggedError("ConflictingSinceFlags
 
 class InvalidSinceHoursError extends Data.TaggedError("InvalidSinceHoursError") {
   override readonly message = "--since-hours produced a date outside years 1-9999";
+}
+
+// The server may have stored the submission before the failure, so the way to find out is to
+// resubmit with the same request id, which returns the existing job instead of sending twice.
+class SubmissionOutcomeUnknown extends Data.TaggedError("SubmissionOutcomeUnknown")<{
+  readonly failure: ServerUnreachable | ServerFailed;
+  readonly requestId: string;
+}> {
+  override readonly message = `${this.failure.message} The submission may have been accepted. Retry with --request-id ${this.requestId} and the same content to get the existing job.`;
 }
 
 const pageFlags = { limit: limitFlag, cursor: cursorFlag };
@@ -261,7 +270,7 @@ const messagesCompose = Command.make(
         ...presentOptions({ cc: Option.liftPredicate(cc, (list) => list.length > 0) }),
         ...body,
       });
-      yield* printJson(yield* retryTransport(client.Submissions.submitMessage({ payload })));
+      yield* printJson(yield* submit(client, { payload }));
     }),
 ).pipe(Command.withDescription("Compose a new message with explicit To/CC"));
 
@@ -289,7 +298,7 @@ const messagesReply = Command.make(
         replyMode: replyAll ? "reply-all" : "reply",
         ...body,
       });
-      yield* printJson(yield* retryTransport(client.Submissions.submitMessage({ payload })));
+      yield* printJson(yield* submit(client, { payload }));
     }),
 ).pipe(Command.withDescription("Reply to a message; recipients are derived from the parent"));
 
@@ -370,7 +379,10 @@ function requireClient() {
 
 /** Runs one authenticated API call and prints its result as JSON. */
 function callApi<A, E, R>(request: (client: UmailClient) => Effect.Effect<A, E, R>) {
-  return requireClient().pipe(Effect.flatMap(request), Effect.flatMap(printJson));
+  return requireClient().pipe(
+    Effect.flatMap((client) => apiCall(request(client))),
+    Effect.flatMap(printJson),
+  );
 }
 
 function printJson<A>(value: A) {
@@ -398,7 +410,7 @@ const download = Effect.fn("download")(function* <E, R>(
     R
   >,
 ) {
-  const result = yield* request(yield* requireClient());
+  const result = yield* apiCall(request(yield* requireClient()));
   const fs = yield* FileSystem.FileSystem;
   yield* fs.writeFile(output, result.body);
   yield* printJson({
@@ -423,7 +435,7 @@ const resolveFromAddressId = Effect.fn("resolveFromAddressId")(function* (
   client: UmailClient,
   from: MailboxAddress,
 ) {
-  const identities = yield* client.SendingIdentities.listSendingIdentities({});
+  const identities = yield* apiCall(client.SendingIdentities.listSendingIdentities({}));
   const identity = identities.find((candidate) => candidate.address === from);
   if (identity === undefined) {
     return yield* new IneligibleSendingIdentityError({ address: from });
@@ -431,12 +443,24 @@ const resolveFromAddressId = Effect.fn("resolveFromAddressId")(function* (
   return identity.id;
 });
 
-function retryTransport<A, E, R>(effect: Effect.Effect<A, E, R>) {
-  return Effect.retry(effect, {
-    times: SUBMIT_TRANSPORT_RETRIES,
-    while: (error) =>
-      HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError",
-  });
+// Retries a dropped connection with the same request id; when the outcome stays unknown, says how
+// to find out safely.
+function submit(
+  client: UmailClient,
+  request: Parameters<UmailClient["Submissions"]["submitMessage"]>[0],
+) {
+  const requestId = request.payload.requestId;
+  return apiCall(client.Submissions.submitMessage(request)).pipe(
+    Effect.retry({
+      times: SUBMIT_TRANSPORT_RETRIES,
+      while: (error) => error._tag === "ServerUnreachable",
+    }),
+    Effect.catchTags({
+      ServerUnreachable: (failure) =>
+        Effect.fail(new SubmissionOutcomeUnknown({ failure, requestId })),
+      ServerFailed: (failure) => Effect.fail(new SubmissionOutcomeUnknown({ failure, requestId })),
+    }),
+  );
 }
 
 function resolveRequestId(provided: Option.Option<SubmissionRequestId>) {

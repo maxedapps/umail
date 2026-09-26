@@ -365,7 +365,14 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 - **Update `cli.test.ts:1144-1232`**, the approval safe-error tests, to the new messages. They must still leak no URL or token.
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- **Deviation:** `UnexpectedResponse` carries only the schema issue, not `(GET /threads)`: `HttpApiClient` reports a success-body mismatch as a bare `SchemaError` without the request, and capturing the last request on the side would be a workaround. A transport failure and an undeclared status still name the request.
+- `ServerFailed` covers 429 ("rate-limited … try again shortly") as planned; it and `ServerUnreachable` take a `step`: `GET /threads` for the API, the OAuth step name for sign-in, and "the approval request" for approvals so the token never appears.
+- `apiCall` in `client.ts` maps every API call's HTTP and schema failures once; `program(command, argv)` takes the command so tests keep providing their own services while `runtime.ts` provides `CliLive` with `Command.provide`.
+- `renderCause` is the one renderer: `umail: <message>` for an expected error, `Cause.pretty` for a defect or an empty failure, nothing for a `CliError` or an interrupt.
+- The approval safe-error test now pins each message; it still forbids the token and the `/approvals/` path. The origin can appear, e.g. in "Could not reach https://… during the approval request".
+- A refresh failure with an OAuth body (e.g. `server_error`) reads "OAuth token refresh failed: HTTP 500 server_error: …"; a failing status without one is `ServerFailed`.
 
 ### 7. Deploy errors and inbound diagnostics
 

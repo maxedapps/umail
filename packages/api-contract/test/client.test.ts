@@ -206,7 +206,7 @@ describe("shared client configuration", () => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(baseUrlFrom({ UMAIL_URL: origin }));
       expect(error.message).toBe(
-        "UMAIL_URL must use HTTPS except on localhost, 127.0.0.1, or [::1]",
+        `UMAIL_URL "${origin}" must use HTTPS except on localhost, 127.0.0.1, or [::1].`,
       );
     }),
   );
@@ -231,15 +231,19 @@ describe("shared client configuration", () => {
     }),
   );
 
-  it.effect("reports safe errors for missing or invalid environment values", () =>
+  it.effect("echoes the configured value and the rule it breaks", () =>
     Effect.gen(function* () {
-      expect((yield* Effect.flip(baseUrlFrom({}))).message).toBe("UMAIL_URL is required");
+      expect((yield* Effect.flip(baseUrlFrom({}))).message).toBe(
+        "UMAIL_URL is required. Set it to your AgentMail origin, e.g. https://mail.example.com.",
+      );
       expect((yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "not a URL" }))).message).toBe(
-        "UMAIL_URL must be a valid HTTP(S) origin",
+        'UMAIL_URL "not a URL" must be an HTTP(S) origin like https://mail.example.com, with no path.',
       );
       expect(
         (yield* Effect.flip(baseUrlFrom({ UMAIL_URL: "https://umail.example.test/api" }))).message,
-      ).toBe("UMAIL_URL must be a valid HTTP(S) origin");
+      ).toBe(
+        'UMAIL_URL "https://umail.example.test/api" must be an HTTP(S) origin like https://mail.example.com, with no path.',
+      );
     }),
   );
 });
