@@ -87,12 +87,26 @@ export const verifyOAuthBearerToken = Effect.fn("verifyOAuthBearerToken")(functi
   } satisfies OAuthAccess;
 });
 
+// RFC 6750 §3.1: a request that sent a token which is not valid (malformed, expired or revoked) is
+// told error="invalid_token", so the client re-authorizes; a request without one gets the plain
+// challenge.
 export function oauthResourceChallenge(
   error: unknown,
   resource: string,
   scopes: ReadonlyArray<string>,
+  tokenSent: boolean,
 ) {
-  return createResourceServerChallenge(error, resource, { challengeScopes: scopes });
+  const challenge = createResourceServerChallenge(error, resource, { challengeScopes: scopes });
+  if (challenge === undefined || !tokenSent || challenge.statusCode !== 401) return challenge;
+  const headers = new Headers(challenge.headers);
+  const bearer = headers.get("www-authenticate") ?? "Bearer";
+  headers.set("www-authenticate", bearer.replace(/^Bearer\b ?/, 'Bearer error="invalid_token", '));
+  return new APIError("UNAUTHORIZED", { message: challenge.message }, headers);
+}
+
+// A valid token whose grant was revoked.
+export function revokedAccess(): APIError {
+  return new APIError("UNAUTHORIZED", { message: "This client's access was revoked." });
 }
 
 function hasExactAudience(audience: string | ReadonlyArray<string>, expected: string): boolean {

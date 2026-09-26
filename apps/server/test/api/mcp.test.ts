@@ -14,6 +14,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 
 import type { AccountStoreError } from "../../src/account/errors.ts";
@@ -50,7 +51,6 @@ const JobToolOutput = Schema.Struct({ job: OutboundJobStatus });
 const GetThreadToolOutput = Schema.Struct({ thread: MailThreadDetail });
 const ListMessagesToolOutput = Schema.Struct({ page: MailMessagePage });
 const GetMessageToolOutput = Schema.Struct({ message: ThreadMessage });
-const ToolErrorBody = Schema.Struct({ error: Schema.String });
 const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("OAuth-only MCP Streamable HTTP route", () => {
@@ -72,6 +72,10 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
 
       expect(response.status).toBe(401);
       expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
+      // Only a request that sent a Bearer token is told it is invalid.
+      expect(response.headers.get("www-authenticate")?.includes('error="invalid_token"')).toBe(
+        authorization?.startsWith("Bearer ") === true,
+      );
       const body = yield* readText(response);
       expect(body).not.toContain(world.operatorAccessToken);
       expect(yield* listMcpPolicyRows(world)).toEqual([]);
@@ -254,6 +258,22 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
     }),
   );
 
+  it.effect("tells a connected client without an access policy to ask the operator", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const token = yield* issueMcpAccessToken(world, yield* registerMcpClient(world));
+      yield* query(world, "DELETE FROM mcpPolicy");
+      const response = yield* rawToolsList(world, token.access_token);
+      expect(response.status).toBe(403);
+      expect(yield* readJson(response)).toMatchObject({
+        error: {
+          message:
+            "This client is connected but has no access policy. Ask the operator to configure it under Clients.",
+        },
+      });
+    }),
+  );
+
   it.effect(
     "narrows a live grant, and revoking ends it at once until the operator consents again",
     () =>
@@ -282,7 +302,13 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
           },
         );
         expect(revoked.status).toBe(303);
-        expect((yield* rawToolsList(world, token.access_token)).status).toBe(403);
+        // The token is still signed and unexpired, but its grant is gone: the client is told to
+        // re-authorize, not that it lacks permission.
+        const afterRevoke = yield* rawToolsList(world, token.access_token);
+        expect(afterRevoke.status).toBe(401);
+        expect(afterRevoke.headers.get("www-authenticate")).toMatch(
+          /^Bearer error="invalid_token", resource_metadata="[^"]+", scope="umail:access"$/,
+        );
         expect(yield* listMcpPolicyRows(world)).toEqual([]);
         const refreshed = yield* world.request("http://umail.test/api/auth/oauth2/token", {
           method: "POST",
@@ -1002,9 +1028,17 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
 
   it.effect("answers a generic failure and logs once in the tool helper for an RpcCallError", () =>
     Effect.gen(function* () {
-      const logs: Array<{ readonly message: unknown; readonly defect: unknown }> = [];
-      const capture = Logger.make(({ message, cause }) => {
-        logs.push({ message, defect: Cause.squash(cause) });
+      const logs: Array<{
+        readonly message: unknown;
+        readonly defect: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const capture = Logger.make(({ message, cause, fiber }) => {
+        logs.push({
+          message,
+          defect: Cause.squash(cause),
+          annotations: fiber.getRef(References.CurrentLogAnnotations),
+        });
       });
       const world = yield* createWorld({
         account: {
@@ -1015,7 +1049,8 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         },
         requestContext: Context.make(Logger.CurrentLoggers, new Set([capture])),
       });
-      const token = yield* issueMcpAccessToken(world, yield* registerMcpClient(world));
+      const registered = yield* registerMcpClient(world);
+      const token = yield* issueMcpAccessToken(world, registered);
       const client = yield* connectedMcp(world, token.access_token);
       logs.length = 0;
       const result = yield* callTool(client, {
@@ -1023,11 +1058,49 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         arguments: {},
       });
       expect(result.isError).toBe(true);
-      expect(yield* toolErrorText(result)).toBe("The AgentMail API request failed.");
+      expect(yield* toolErrorText(result)).toBe("The AgentMail tool failed unexpectedly.");
       expect(toJson(result)).not.toContain("DO reset");
       expect(logs).toHaveLength(1);
       expect(logs[0]?.message).toEqual(["MCP tool failed"]);
       expect(logs[0]?.defect).toBeInstanceOf(RpcCallError);
+      expect(logs[0]?.annotations).toEqual({
+        tool: "umail_list_sending_identities",
+        clientId: registered.clientId,
+      });
+    }),
+  );
+
+  it.effect("tells an agent how to retry a send whose outcome is unknown", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld({
+        account: {
+          submitOutbound: () =>
+            failOverRpc(new RpcCallError({ method: "submitOutbound", cause: new Error("lost") })),
+        },
+      });
+      const mailbox = yield* seedMailbox(world);
+      const registered = yield* registerMcpClient(world);
+      const token = yield* issueMcpAccessToken(world, registered);
+      yield* updatePolicy(world, registered.clientId, {
+        mailboxes: mailbox.id,
+        sendMode: "allow",
+        recipients: "any",
+      });
+      const client = yield* connectedMcp(world, token.access_token);
+      const result = yield* callTool(client, {
+        name: "umail_send_message",
+        arguments: {
+          requestId: "11111111-1111-4111-8111-111111111111",
+          fromAddressId: mailbox.id,
+          to: [{ address: "recipient@example.com" }],
+          subject: "Lost",
+          text: "body",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(yield* toolErrorText(result)).toBe(
+        "The AgentMail tool failed unexpectedly. The message may or may not have been queued. Resubmit with the same requestId and content to get the existing job; it will never send twice.",
+      );
     }),
   );
 
@@ -1114,17 +1187,11 @@ function callTool(client: Client, params: Parameters<Client["callTool"]>[0]) {
   return Effect.promise(() => client.callTool(params));
 }
 
+// A tool error is plain text: the sentence an agent reads.
 const toolErrorText = Effect.fn("toolErrorText")(function* (
-  result: Effect.Success<ReturnType<typeof callTool>>,
-) {
-  const body = yield* Schema.decodeUnknownEffect(ToolErrorBody)(yield* parseTextResult(result));
-  return body.error;
-});
-
-const parseTextResult = Effect.fn("parseTextResult")(function* (
   result: Effect.Success<ReturnType<typeof callTool>>,
 ) {
   const content = result.content[0];
   if (content?.type !== "text") return yield* Effect.die("Expected one MCP text result block");
-  return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(content.text);
+  return content.text;
 });

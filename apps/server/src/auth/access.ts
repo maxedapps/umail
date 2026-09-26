@@ -42,21 +42,30 @@ const GrantRow = Schema.Struct({
 });
 
 export function makeAccess(db: Cloudflare.D1.QueryDatabaseClient, operatorId: string) {
+  // The operator's grant to the client: none (never given, or revoked), a consent without a usable
+  // policy, or the policy. Only a policy gives access.
+  const mcpGrant = Effect.fn("Access.mcpGrant")(function* (clientId: string) {
+    const row = yield* db
+      .prepare(
+        `SELECT p.policy AS policy
+         FROM oauthConsent c
+         LEFT JOIN mcpPolicy p ON p.consentId = c.id
+         WHERE c.clientId = ? AND c.userId = ?`,
+      )
+      .bind(clientId, operatorId)
+      .first();
+    if (row === null) return { kind: "none" } as const;
+    const policy = decodeStoredPolicy(row);
+    return policy === null
+      ? ({ kind: "no_policy" } as const)
+      : ({ kind: "policy", policy } as const);
+  });
   return {
-    // The client's policy, or null: no consent, no policy, or a policy that no longer decodes all
-    // mean no access.
-    mcpPolicy: Effect.fn("Access.mcpPolicy")(function* (clientId: string) {
-      const row = yield* db
-        .prepare(
-          `SELECT p.policy AS policy
-           FROM oauthConsent c
-           JOIN mcpPolicy p ON p.consentId = c.id
-           WHERE c.clientId = ? AND c.userId = ?`,
-        )
-        .bind(clientId, operatorId)
-        .first();
-      return decodeStoredPolicy(row);
-    }),
+    mcpGrant,
+
+    // The client's policy, or null for no access.
+    mcpPolicy: (clientId: string) =>
+      Effect.map(mcpGrant(clientId), (grant) => (grant.kind === "policy" ? grant.policy : null)),
 
     list: Effect.fn("Access.list")(function* () {
       const { results } = yield* db

@@ -49,7 +49,7 @@ describe("MCP tool request services", () => {
         Context.add(services, Logger.CurrentLoggers, new Set([capture])),
       );
       expect(result.isError).toBe(true);
-      expect(toJson(result.content)).toContain("The AgentMail API request failed.");
+      expect(toJson(result.content)).toContain("The AgentMail tool failed unexpectedly.");
       expect(toJson(result)).not.toContain("Service not found");
       expect(messages).toEqual([["MCP tool failed"]]);
     }),

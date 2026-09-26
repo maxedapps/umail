@@ -13,6 +13,7 @@ import { agentMailMcpServerInfo } from "../brand/identity.ts";
 import type { ApiDeps } from "../app.ts";
 import {
   oauthResourceChallenge,
+  revokedAccess,
   verifyOAuthResourceRequest,
   type OAuthAccess,
 } from "../../auth/oauth-resource.ts";
@@ -39,26 +40,40 @@ export const serveMcpRequest = Effect.fn("serveMcpRequest")(function* (deps: Api
       scopes: [UMAIL_OAUTH_SCOPE],
     }),
   );
+  // RFC 6750 §3.1: only a Bearer token that was sent can be "invalid"; no token or another
+  // scheme gets the plain challenge.
+  const tokenSent = /^Bearer\s/i.test(webRequest.headers.get("authorization") ?? "");
   if (Result.isFailure(verified)) {
-    return HttpServerResponse.fromWeb(mcpChallengeResponse(verified.failure, resource));
+    return HttpServerResponse.fromWeb(mcpChallengeResponse(verified.failure, resource, tokenSent));
   }
 
   const principal = yield* mcpPrincipalForAccess(deps, verified.success);
-  if (principal === null) {
-    return HttpServerResponse.fromWeb(jsonRpcError(403, "Forbidden"));
+  if (principal === "revoked") {
+    return HttpServerResponse.fromWeb(mcpChallengeResponse(revokedAccess(), resource, true));
+  }
+  if (principal === "no_policy") {
+    return HttpServerResponse.fromWeb(
+      jsonRpcError(
+        403,
+        "This client is connected but has no access policy. Ask the operator to configure it under Clients.",
+      ),
+    );
   }
   return yield* serveAuthenticatedMcp(deps, principal, verified.success, webRequest);
 });
 
-// Only the operator's grants count, and only while the operator's consent for the client has a
-// policy; anything else is no principal.
+// Only the operator's grants count. A token without one (revoked, or from a former operator) is
+// answered as an invalid token so the client re-authorizes; a consent still waiting for its policy
+// is a plain 403.
 const mcpPrincipalForAccess = Effect.fn("mcpPrincipalForAccess")(function* (
   deps: ApiDeps,
   access: OAuthAccess,
 ) {
-  if (access.subject !== deps.operatorId) return null;
-  const policy = yield* deps.access.mcpPolicy(access.clientId);
-  if (policy === null) return null;
+  if (access.subject !== deps.operatorId) return "revoked";
+  const grant = yield* deps.access.mcpGrant(access.clientId);
+  if (grant.kind === "none") return "revoked";
+  if (grant.kind === "no_policy") return "no_policy";
+  const policy = grant.policy;
   return {
     authority: "mcp",
     identity: {
@@ -100,8 +115,8 @@ const serveAuthenticatedMcp = Effect.fn("serveAuthenticatedMcp")(function* (
   return HttpServerResponse.fromWeb(response);
 });
 
-function mcpChallengeResponse(error: unknown, resource: string): Response {
-  const challenge = oauthResourceChallenge(error, resource, [UMAIL_OAUTH_SCOPE]);
+function mcpChallengeResponse(error: unknown, resource: string, tokenSent: boolean): Response {
+  const challenge = oauthResourceChallenge(error, resource, [UMAIL_OAUTH_SCOPE], tokenSent);
   if (challenge === undefined) return jsonRpcError(401, "Unauthorized");
   return jsonRpcError(challenge.statusCode, challenge.message, new Headers(challenge.headers));
 }

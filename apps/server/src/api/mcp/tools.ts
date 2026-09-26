@@ -1,5 +1,4 @@
 import {
-  isApiError,
   ListMessagesQuery,
   MailMessagePage,
   MailThreadDetail,
@@ -11,10 +10,10 @@ import {
   composeFields,
   hasMessageBody,
   replyFields,
+  type ApiError,
   type Principal,
 } from "@umail/api-contract";
 import type { CallToolResult, McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
-import * as Cause from "effect/Cause";
 import type * as Alchemy from "alchemy";
 import type * as Crypto from "effect/Crypto";
 import type * as Context from "effect/Context";
@@ -63,15 +62,12 @@ const sends: ToolAnnotations = {
 };
 
 const strict = { parseOptions: { onExcessProperty: "error" } } as const;
-const GENERIC_FAILURE = "The AgentMail API request failed.";
+const UNEXPECTED_FAILURE = "The AgentMail tool failed unexpectedly.";
+const UNKNOWN_SEND_OUTCOME =
+  "The message may or may not have been queued. Resubmit with the same requestId and content to get the existing job; it will never send twice.";
 
-// API errors carry client-safe messages written where the cause is known, so they are passed through.
-function failureMessage(error: unknown): string {
-  return isApiError(error) ? error.message : GENERIC_FAILURE;
-}
-
-function failureResult(message: string): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error: message }) }], isError: true };
+function toolError(text: string): CallToolResult {
+  return { content: [{ type: "text", text }], isError: true };
 }
 
 export function registerTools(
@@ -90,10 +86,15 @@ export function registerTools(
       readonly input: Schema.ConstraintDecoder<In>;
       readonly output: Schema.ConstraintDecoder<Out>;
     },
-    handler: (
-      input: In,
-    ) => Effect.Effect<Out, { readonly _tag: string }, Crypto.Crypto | Alchemy.RuntimeContext>,
+    handler: (input: In) => Effect.Effect<Out, ApiError, Crypto.Crypto | Alchemy.RuntimeContext>,
   ) {
+    // API errors carry client-safe messages written where the cause is known, so they are passed
+    // through. Anything else is logged and answered with a fixed text; for a send, it says how to
+    // find out whether the message was queued.
+    const unexpected =
+      config.annotations.destructiveHint === true
+        ? `${UNEXPECTED_FAILURE} ${UNKNOWN_SEND_OUTCOME}`
+        : UNEXPECTED_FAILURE;
     server.registerTool(
       name,
       {
@@ -107,19 +108,15 @@ export function registerTools(
       (input, ctx) =>
         run(
           Effect.suspend(() => handler(input)).pipe(
-            Effect.match({
-              onSuccess: (output): CallToolResult => ({
-                content: [{ type: "text", text: JSON.stringify(output) }],
-                structuredContent: output,
-              }),
-              onFailure: (error) => failureResult(failureMessage(error)),
-            }),
-            Effect.catchDefect((defect) =>
-              Effect.as(
-                Effect.logError("MCP tool failed", Cause.die(defect)),
-                failureResult(GENERIC_FAILURE),
-              ),
+            Effect.map((output): CallToolResult => ({
+              content: [{ type: "text", text: JSON.stringify(output) }],
+              structuredContent: output,
+            })),
+            Effect.catch((error) => Effect.succeed(toolError(error.message))),
+            Effect.catchCause((cause) =>
+              Effect.as(Effect.logError("MCP tool failed", cause), toolError(unexpected)),
             ),
+            Effect.annotateLogs({ tool: name, clientId: principal.identity.clientId }),
           ),
           { signal: ctx.mcpReq.signal },
         ),
@@ -224,7 +221,7 @@ export function registerTools(
     "umail_send_message",
     {
       description:
-        "Send a new message to explicit To/CC recipients. Returns a durable job; poll umail_get_job for provider acceptance. May wait for operator approval.",
+        "Send a new message to explicit To/CC recipients. requestId is required: a UUID you generate (any case). To retry after an error or a lost response, resend the same requestId with the same content; you get the existing job and the message is never sent twice. Returns a durable job; poll umail_get_job for provider acceptance. May wait for operator approval.",
       annotations: sends,
       input: Schema.Struct({ ...composeFields, fromAddressId }).check(hasMessageBody),
       output: Schema.Struct({ job: OutboundJobStatus }),
@@ -239,7 +236,7 @@ export function registerTools(
     "umail_reply_to_message",
     {
       description:
-        "Reply to a message; recipients and threading headers are derived from the parent. Returns a durable job; poll umail_get_job for provider acceptance. May wait for operator approval.",
+        "Reply to a message; recipients and threading headers are derived from the parent. requestId is required: a UUID you generate (any case). To retry after an error or a lost response, resend the same requestId with the same content; you get the existing job and the message is never sent twice. Returns a durable job; poll umail_get_job for provider acceptance. May wait for operator approval.",
       annotations: sends,
       input: Schema.Struct({ ...replyFields, fromAddressId }).check(hasMessageBody),
       output: Schema.Struct({ job: OutboundJobStatus }),

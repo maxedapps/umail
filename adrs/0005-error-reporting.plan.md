@@ -228,7 +228,12 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
   - a revoked client gets 401 with `invalid_token` (replaces the current 403 assertion at `mcp.test.ts:279`).
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- `Access.mcpGrant` tells no grant (`none`), a consent without a policy, and a policy apart; `mcpPolicy` is derived from it. A token from someone other than the operator is treated as revoked.
+- Only a request that sent a `Bearer` token is told `invalid_token`; no token or another scheme gets the plain challenge (RFC 6750 §3.1).
+- The send fallback is chosen by the tool's `destructiveHint`, which only the two send tools set.
+- Extra test: a send that dies returns the unknown-outcome retry text.
 
 ### 4. Truthful send outcomes and structured logs
 
