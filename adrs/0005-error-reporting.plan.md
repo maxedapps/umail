@@ -1,6 +1,6 @@
 # Plan for 0005: Errors that say what happened and what to do
 
-- **Status:** Implemented (PR #4)
+- **Status:** Done (PR #4, merged 2026-09-26)
 - **ADR:** `adrs/0005-error-reporting.md`
 
 ## Goal
@@ -314,7 +314,7 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 **Done:** yes.
 
 - `noticePage` gains an optional link, used by the error pages ("Back to Mail") and the approval "gone" page ("Open the conversation").
-- The "gone" page now states a recorded decision even after expiry ("You denied it; it was not sent."). This replaces a test that pinned a neutral page for a replayed, expired link; the plan asks for the decision whenever it is known.
+- The "gone" page now states a recorded decision even after expiry ("You denied it; it was not sent."). This replaces a test that pinned a neutral page for a replayed, expired link; the plan asks for the decision whenever it is known. The owner accepted this on 2026-09-26.
 - The device pages decide from `deviceVerify`'s own `status`: a code that is no longer `pending` was already approved or denied.
 - A Cloudflare fault on the forwarding form answers 502 with the flash.
 - The browser spec adds a `login-limited` fixture whose sign-in request is stubbed with a 429 and `X-Retry-After: 7`.
