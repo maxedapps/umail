@@ -160,7 +160,7 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
     ${
       message.direction === "inbound" && message.forwardOutcome === "failure"
         ? html`<p class="note warning">
-            ${icon("alert")}Forwarding to ${bidiAddress(message.forwardDestination ?? "")} failed.
+            ${icon("alert")}Forwarding to ${message.forwardDestination ?? "its destination"} failed.
           </p>`
         : null
     }

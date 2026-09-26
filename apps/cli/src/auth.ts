@@ -15,7 +15,7 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import { OAuthCredentialStore } from "./credential-store.ts";
-import { ServerFailed, ServerUnreachable, fromHttpClientError, schemaIssueText } from "./errors.ts";
+import { ServerUnreachable, fromHttpClientError, schemaIssueText, statusError } from "./errors.ts";
 
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
 const REFRESH_GRANT = "refresh_token" as const;
@@ -427,7 +427,7 @@ function executeOAuth(
 function readEndpointError(step: OAuthStep, response: HttpClientResponse.HttpClientResponse) {
   return HttpClientResponse.schemaBodyJson(OAuthErrorResponse)(response).pipe(
     Effect.map((body) => new OAuthEndpointError({ step, status: response.status, ...body })),
-    Effect.mapError(() => new ServerFailed({ status: response.status, step })),
+    Effect.mapError(() => statusError(response.status, step)),
   );
 }
 

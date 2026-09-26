@@ -12,8 +12,11 @@ import { AuthDb, NotificationKey } from "./resources.ts";
 import { currentSite } from "./site.ts";
 
 // Workers Logs get one JSON object per log line, with its annotations (jobId, tool, clientId) as
-// fields. Provided on both Workers' init effects so it reaches every event.
-export const StructuredLogs = Telemetry.layer(Logger.layer([Logger.consoleStructured]));
+// fields, at its own level (console.error for logError). Provided on both Workers' init effects so
+// it reaches every event.
+export const StructuredLogs = Telemetry.layer(
+  Logger.layer([Logger.withLeveledConsole(Logger.formatStructured)]),
+);
 
 // What the App Worker and the AccountStore both build at construction.
 export const appRuntime = Effect.gen(function* () {

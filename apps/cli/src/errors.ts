@@ -61,17 +61,20 @@ export function fromHttpClientError(
     case "StatusCodeError":
     case "DecodeError":
     case "EmptyBodyError":
-      return reason.response.status >= 400
-        ? Effect.fail(new ServerFailed({ status: reason.response.status, step }))
-        : Effect.fail(
-            new UnexpectedResponse({
-              detail: `${step} answered HTTP ${reason.response.status} with a body the CLI cannot read`,
-            }),
-          );
+      return Effect.fail(statusError(reason.response.status, step));
     case "EncodeError":
     case "InvalidUrlError":
       return Effect.die(error);
   }
+}
+
+// A status the contract does not declare. Only a 5xx or a 429 is the server failing, and worth a
+// retry; any other means the request went somewhere that is not a umail server of this version,
+// e.g. a wrong UMAIL_URL, so nothing was stored.
+export function statusError(status: number, step: string): ServerFailed | UnexpectedResponse {
+  return status >= 500 || status === 429
+    ? new ServerFailed({ status, step })
+    : new UnexpectedResponse({ detail: `${step} answered HTTP ${status}` });
 }
 
 // The first issue of a body that does not match the contract, e.g. "items.0.threadId: Expected

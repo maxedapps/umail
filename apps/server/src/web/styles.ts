@@ -1024,6 +1024,8 @@ export const styles = String.raw`
     background: var(--hover);
     color: var(--text-2);
     font-size: 0.8125rem;
+    /* A long address in the text wraps instead of widening its container. */
+    overflow-wrap: anywhere;
 
     .icon {
       margin-block-start: 0.125rem;

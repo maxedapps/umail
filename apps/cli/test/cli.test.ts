@@ -1572,6 +1572,15 @@ describe("failure messages", () => {
       expect(
         yield* stderrOf(["threads", "list"], () => new Response("upstream down", { status: 503 })),
       ).toEqual(["umail: The umail server failed (HTTP 503) on GET /threads. Try again later."]);
+      // A 404 the contract does not declare means UMAIL_URL points somewhere else, not an outage.
+      expect(
+        yield* stderrOf(["threads", "list"], () => new Response("not here", { status: 404 })),
+      ).toEqual([
+        "umail: Unexpected response from the umail server: GET /threads answered HTTP 404. Update the CLI or check UMAIL_URL.",
+      ]);
+      expect(yield* stderrOf(["login"], () => new Response("not here", { status: 404 }))).toEqual([
+        "umail: Unexpected response from the umail server: discovery answered HTTP 404. Update the CLI or check UMAIL_URL.",
+      ]);
       expect(
         yield* stderrOf(["threads", "list"], () =>
           json({ items: [{ threadId: 7 }], nextCursor: null }),
