@@ -3,6 +3,8 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import type { Input } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
+import type { ScopedPlanStatusSession } from "alchemy/Report";
+import { UserFacingError } from "alchemy/UserFacingError";
 import { Resource, type Resource as AlchemyResource } from "alchemy/Resource";
 import * as dns from "@distilled.cloud/cloudflare/dns";
 import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
@@ -29,42 +31,64 @@ export type EmailRoutingDomain = AlchemyResource<
 
 export const EmailRoutingDomain = Resource<EmailRoutingDomain>(EmailRoutingDomainTypeId);
 
+const READY_POLLS = 12;
+const READY_POLL_INTERVAL = "5 seconds";
+
+// alchemy prints a UserFacingError as one line, so the deploy says which records to look at.
 export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDomainNotReady")<{
   readonly zoneId: string;
   readonly name: string;
-  readonly message: string;
-}> {}
+  readonly missing: ReadonlyArray<string>;
+}> {
+  readonly [UserFacingError] = true;
+  override readonly message = `Email Routing DNS for ${this.name} is not ready after 60 s.${
+    this.missing.length === 0 ? "" : ` Missing: ${this.missing.join("; ")}.`
+  } Check for conflicting MX/TXT records.`;
+}
 
-// The zone apex reports readiness in its routing settings. A subdomain is ready
-// once Cloudflare lists no missing DNS records for it.
+// The zone apex reports readiness in its routing settings. A subdomain is ready once Cloudflare
+// lists no missing DNS records for it; the ones it lists are what a stuck deploy reports.
 const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
   zoneId,
   name,
 }: EmailRoutingDomainProps) {
   const settings = yield* emailRouting.getEmailRouting({ zoneId });
   if (settings.name === name) {
-    return { apex: true, ready: settings.enabled && settings.status === "ready" };
+    return { apex: true, ready: settings.enabled && settings.status === "ready", missing: [] };
   }
   const dns = yield* emailRouting.getDns({ zoneId, subdomain: name });
-  return { apex: false, ready: (dns.errors ?? []).length === 0 };
+  const missing = (dns.errors ?? []).map(({ code, missing }) =>
+    missing === null || missing === undefined ? (code ?? "unknown") : describeRecord(missing),
+  );
+  return { apex: false, ready: missing.length === 0, missing };
 });
 
-function waitUntilReady(domain: EmailRoutingDomainProps) {
+// "MX mail.example.com → route1.mx.cloudflare.net (priority 1)"
+function describeRecord(record: {
+  readonly type?: string | null;
+  readonly name?: string | null;
+  readonly content?: string | null;
+  readonly priority?: number | null;
+}): string {
+  const priority =
+    record.priority === null || record.priority === undefined
+      ? ""
+      : ` (priority ${record.priority})`;
+  return `${record.type ?? "?"} ${record.name ?? "?"} → ${record.content ?? "?"}${priority}`;
+}
+
+function waitUntilReady(domain: EmailRoutingDomainProps, session: ScopedPlanStatusSession) {
   return inspect(domain).pipe(
+    Effect.tap(({ ready, missing }) =>
+      ready ? Effect.void : session.note(`waiting for Email Routing DNS: ${missing.join("; ")}`),
+    ),
     Effect.repeat({
-      schedule: Schedule.spaced("5 seconds"),
+      schedule: Schedule.spaced(READY_POLL_INTERVAL),
       until: ({ ready }) => ready,
-      times: 12,
+      times: READY_POLLS,
     }),
-    Effect.flatMap(({ ready }) =>
-      ready
-        ? Effect.void
-        : Effect.fail(
-            new EmailRoutingDomainNotReady({
-              ...domain,
-              message: `Email Routing DNS for ${domain.name} did not become ready in time.`,
-            }),
-          ),
+    Effect.flatMap(({ ready, missing }) =>
+      ready ? Effect.void : Effect.fail(new EmailRoutingDomainNotReady({ ...domain, missing })),
     ),
   );
 }
@@ -92,12 +116,13 @@ export const diffEmailRoutingDomain = Effect.fn("diffEmailRoutingDomain")(functi
 
 export const reconcileEmailRoutingDomain = Effect.fn("reconcileEmailRoutingDomain")(function* (
   domain: EmailRoutingDomainProps,
+  session: ScopedPlanStatusSession,
 ) {
   const { zoneId, name } = domain;
   const { apex, ready } = yield* inspect(domain);
   if (!ready) {
     yield* emailRouting.createDns(apex ? { zoneId } : { zoneId, name });
-    yield* waitUntilReady(domain);
+    yield* waitUntilReady(domain, session);
   }
   return { zoneId, name };
 });
@@ -136,7 +161,7 @@ export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
   diff: ({ olds, news, output }) =>
     isResolved(news) ? diffEmailRoutingDomain(olds, news, output) : Effect.void,
   read: ({ olds }) => readEmailRoutingDomain(olds),
-  reconcile: ({ news }) => reconcileEmailRoutingDomain(news),
+  reconcile: ({ news, session }) => reconcileEmailRoutingDomain(news, session),
   delete: ({ output }) => deleteEmailRoutingDomain(output),
 });
 

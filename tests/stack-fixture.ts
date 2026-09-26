@@ -15,7 +15,10 @@ import * as Redacted from "effect/Redacted";
 import { application } from "../alchemy.run.ts";
 import { EmailRoutingDomain } from "../apps/server/src/mail/routing.ts";
 
-export const evaluateApplication = Effect.fn("evaluateApplication")(function* (stage: string) {
+export const evaluateApplication = Effect.fn("evaluateApplication")(function* (
+  stage: string,
+  env: Record<string, string> = {},
+) {
   const stack: Omit<StackSpec, "output"> = {
     name: "uMail",
     stage,
@@ -71,7 +74,9 @@ export const evaluateApplication = Effect.fn("evaluateApplication")(function* (s
           ConfigProvider.fromUnknown({
             UMAIL_DOMAIN: "umail.example.com",
             UMAIL_OPERATOR_EMAIL: "operator@example.net",
+            UMAIL_OPERATOR_PASSWORD: "operator-test-passphrase",
             CF_EMAIL_ROUTING_TOKEN: "unused-runtime-test-token",
+            ...env,
           }),
         ),
       ),

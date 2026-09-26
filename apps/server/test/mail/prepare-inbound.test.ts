@@ -102,9 +102,9 @@ describe("prepareInbound", () => {
   it.effect("enforces the exact aggregate MIME header boundary", () =>
     Effect.gen(function* () {
       ready(yield* prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize)));
-      expect(yield* prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize + 1))).toEqual(
-        policyFailure("parse_failed"),
-      );
+      expect(
+        yield* prepare(headerSizedEml(INBOX, INBOUND_MIME_LIMITS.maxHeadersSize + 1)),
+      ).toMatchObject(policyFailure("parse_failed"));
     }),
   );
 
@@ -113,7 +113,7 @@ describe("prepareInbound", () => {
       ready(yield* prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth)));
       expect(
         yield* prepare(nestedMultipartEml(INBOX, INBOUND_MIME_LIMITS.maxNestingDepth + 1)),
-      ).toEqual(policyFailure("parse_failed"));
+      ).toMatchObject(policyFailure("parse_failed"));
     }),
   );
 
@@ -122,7 +122,7 @@ describe("prepareInbound", () => {
       ready(yield* prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth)));
       expect(
         yield* prepare(nestedRfc822Eml(INBOX, INBOUND_MIME_LIMITS.maxRfc822NestingDepth + 1)),
-      ).toEqual(policyFailure("rfc822_depth"));
+      ).toMatchObject(policyFailure("rfc822_depth"));
     }),
   );
 
@@ -134,7 +134,7 @@ describe("prepareInbound", () => {
 
       const exceeded = new FakeMailHtmlPolicy();
       exceeded.setOutput("x".repeat(MAX_PERSISTED_MESSAGE_BYTES + 1));
-      expect(yield* prepare(relatedImageEml(INBOX), exceeded)).toEqual(
+      expect(yield* prepare(relatedImageEml(INBOX), exceeded)).toMatchObject(
         policyFailure("message_budget"),
       );
     }),
@@ -146,7 +146,7 @@ describe("prepareInbound", () => {
       expect(allowed.input.attachments).toHaveLength(MAX_ATTACHMENTS);
       expect(new Set(allowed.attachments.map((upload) => upload.r2Key)).size).toBe(MAX_ATTACHMENTS);
 
-      expect(yield* prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS + 1))).toEqual(
+      expect(yield* prepare(attachmentCountEml(INBOX, MAX_ATTACHMENTS + 1))).toMatchObject(
         policyFailure("attachment_cap"),
       );
     }),

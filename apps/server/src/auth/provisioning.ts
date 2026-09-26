@@ -7,7 +7,6 @@ import {
 } from "@umail/api-contract";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Redacted from "effect/Redacted";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
@@ -17,6 +16,7 @@ import * as Schema from "effect/Schema";
 
 import { WebCrypto, randomId } from "../crypto.ts";
 import { AuthDb } from "../resources.ts";
+import { operatorPassword } from "../site.ts";
 import {
   FIRST_PARTY_CLIENT_DISCOVERY_ID,
   firstPartyClients,
@@ -42,8 +42,8 @@ export const AuthProvision = Alchemy.Action(
   "AuthProvision",
   Effect.gen(function* () {
     const db = yield* Cloudflare.D1.QueryDatabase(AuthDb);
+    const password = Redacted.value(yield* operatorPassword);
     return Effect.fn(function* (input: AuthProvisionInput) {
-      const password = Redacted.value(yield* Config.redacted("UMAIL_OPERATOR_PASSWORD"));
       return yield* provisionAuth(db, { ...input, password });
     }, Effect.provide(WebCrypto));
   }).pipe(Effect.provide(Cloudflare.D1.QueryDatabaseLocal)),
@@ -91,12 +91,6 @@ export const provisionAuth = Effect.fn("provisionAuth")(function* (
   db: AuthDatabase,
   request: AuthProvisionInput & { readonly password: string },
 ) {
-  if (request.password.length === 0) {
-    return yield* Effect.die(new Error("UMAIL_OPERATOR_PASSWORD is required"));
-  }
-  if (request.password.length < 12) {
-    return yield* Effect.die(new Error("UMAIL_OPERATOR_PASSWORD must be at least 12 characters"));
-  }
   const operatorEmail = betterAuthLookupEmail(canonicalOperatorEmail(request.operatorEmail));
   yield* applyAuthSchema(db);
   const now = DateTime.formatIso(yield* DateTime.now);

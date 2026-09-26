@@ -7,6 +7,7 @@ import { TestClock } from "effect/testing";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { describe, expect, it } from "@effect/vitest";
+import type { ScopedPlanStatusSession } from "alchemy/Report";
 
 import {
   deleteEmailRoutingDomain,
@@ -35,6 +36,17 @@ const records = [
   record("verify", domain.name, "TXT", '"site-verification=abc"'),
   record("other", `other.${zoneName}`, "MX", "route1.mx.cloudflare.net"),
 ];
+
+// The deploy's status session: records the notes a waiting reconcile writes.
+function recordingSession() {
+  const notes: Array<string> = [];
+  const session = {
+    emit: () => Effect.void,
+    done: () => Effect.void,
+    note: (note: string) => Effect.sync(() => void notes.push(note)),
+  } satisfies ScopedPlanStatusSession;
+  return { notes, session };
+}
 
 interface FakeReadiness {
   // Each readiness probe takes the next answer; the last one repeats.
@@ -67,7 +79,12 @@ function fakeCloudflare({ apex = [true], subdomain = [true] }: FakeReadiness) {
     if (route !== `GET ${routingPath}/dns`) return undefined;
     const missing = {
       code: "missing",
-      missing: { type: "MX", name: url.searchParams.get("subdomain") },
+      missing: {
+        type: "MX",
+        name: url.searchParams.get("subdomain"),
+        content: "route1.mx.cloudflare.net",
+        priority: 1,
+      },
     };
     return { errors: next(subdomain) ? null : [missing], records: [] };
   };
@@ -135,7 +152,7 @@ describe("Email Routing domain provider", () => {
       const diff = yield* diffEmailRoutingDomain(domain, domain, domain).pipe(
         Effect.provide(cloudflare.layer),
       );
-      const result = yield* reconcileEmailRoutingDomain(domain).pipe(
+      const result = yield* reconcileEmailRoutingDomain(domain, recordingSession().session).pipe(
         Effect.provide(cloudflare.layer),
       );
 
@@ -152,7 +169,7 @@ describe("Email Routing domain provider", () => {
       const diff = yield* diffEmailRoutingDomain(domain, domain, domain).pipe(
         Effect.provide(cloudflare.layer),
       );
-      const fiber = yield* reconcileEmailRoutingDomain(domain).pipe(
+      const fiber = yield* reconcileEmailRoutingDomain(domain, recordingSession().session).pipe(
         Effect.provide(cloudflare.layer),
         Effect.forkChild,
       );
@@ -174,8 +191,9 @@ describe("Email Routing domain provider", () => {
   it.effect("fails when DNS does not become ready in time", () =>
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({ subdomain: [false] });
+      const { notes, session } = recordingSession();
 
-      const fiber = yield* reconcileEmailRoutingDomain(domain).pipe(
+      const fiber = yield* reconcileEmailRoutingDomain(domain, session).pipe(
         Effect.provide(cloudflare.layer),
         Effect.flip,
         Effect.forkChild,
@@ -184,6 +202,13 @@ describe("Email Routing domain provider", () => {
       const error = yield* Fiber.join(fiber);
 
       expect(error).toBeInstanceOf(EmailRoutingDomainNotReady);
+      // One line that names the record Cloudflare still misses.
+      expect(error.message).toBe(
+        `Email Routing DNS for ${domain.name} is not ready after 60 s. Missing: MX ${domain.name} → route1.mx.cloudflare.net (priority 1). Check for conflicting MX/TXT records.`,
+      );
+      expect(notes[0]).toBe(
+        `waiting for Email Routing DNS: MX ${domain.name} → route1.mx.cloudflare.net (priority 1)`,
+      );
       expect(cloudflare.requests.filter((request) => request.startsWith("POST"))).toHaveLength(1);
     }),
   );
@@ -219,7 +244,7 @@ describe("Email Routing domain provider", () => {
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({ apex: [false, false, true] });
 
-      const fiber = yield* reconcileEmailRoutingDomain(apex).pipe(
+      const fiber = yield* reconcileEmailRoutingDomain(apex, recordingSession().session).pipe(
         Effect.provide(cloudflare.layer),
         Effect.forkChild,
       );

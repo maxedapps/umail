@@ -12,7 +12,7 @@ import {
   EmailRoutingDomainProvider,
 } from "./apps/server/src/mail/routing.ts";
 import { AuthDb, ProvisionedOperator } from "./apps/server/src/resources.ts";
-import { currentSite, operatorEmail } from "./apps/server/src/site.ts";
+import { currentSite, deployConfigError, operatorEmail } from "./apps/server/src/site.ts";
 
 // Export the real application program so local tests can inspect its resource graph without cloud providers.
 export const application = Effect.gen(function* () {
@@ -41,7 +41,12 @@ export const application = Effect.gen(function* () {
   }).pipe(
     Effect.provide(AppLive.pipe(Layer.provide(Layer.succeed(ProvisionedOperator, provision)))),
   );
-}).pipe(Effect.provide(WebCrypto));
+}).pipe(
+  Effect.provide(WebCrypto),
+  // alchemy prints a UserFacingError, failed or died, as one line naming the variable instead of a
+  // SchemaError tree. Stack types its error channel as ConfigError, so this one dies.
+  Effect.catchTag("ConfigError", (error) => Effect.die(deployConfigError(error))),
+);
 
 export default Alchemy.Stack(
   "uMail",

@@ -25,19 +25,6 @@ const AUTH_SECRET = "umail-test-better-auth-secret";
 const SESSION_TIME = "2026-01-01T00:00:00.000Z";
 
 layer(WorkerServices)("auth provisioning", (it) => {
-  it.effect.each(["x", "12345678901"])(
-    "rejects a password shorter than 12 characters before modifying auth storage",
-    (password) =>
-      Effect.gen(function* () {
-        const db = new MemoryD1();
-        yield* expectDefect(
-          provision(db, { ...provisionRequest("short-password"), password }),
-          "UMAIL_OPERATOR_PASSWORD must be at least 12 characters",
-        );
-        expect(yield* query(db, "SELECT name FROM sqlite_master WHERE type = 'table'")).toEqual([]);
-      }),
-  );
-
   it.effect("accepts a 12-character password without requiring character classes", () =>
     Effect.gen(function* () {
       const db = new MemoryD1();
@@ -45,18 +32,6 @@ layer(WorkerServices)("auth provisioning", (it) => {
       yield* provision(db, { ...provisionRequest("minimum-password"), password });
       const hash = yield* credentialHash(db);
       expect(yield* Effect.promise(() => verifyPassword({ hash, password }))).toBe(true);
-    }),
-  );
-
-  it.effect("preserves the existing operator credentials when a weak replacement is rejected", () =>
-    Effect.gen(function* () {
-      const db = yield* provisionedDatabase;
-      const hash = yield* credentialHash(db);
-      yield* expectDefect(
-        provision(db, { ...provisionRequest("weak-replacement"), password: "short" }),
-        "UMAIL_OPERATOR_PASSWORD must be at least 12 characters",
-      );
-      expect(yield* credentialHash(db)).toBe(hash);
     }),
   );
 

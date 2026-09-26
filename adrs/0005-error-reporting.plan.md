@@ -398,7 +398,13 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 - **Manual:** run the stack check and `alchemy deploy --stage prod --dry-run` with `UMAIL_DOMAIN=https://x` in a temporary env. It must print one line.
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- `DeployConfigError` lives in `site.ts`; `deployConfigError` turns a `ConfigError` into "<VARIABLE> <problem>". An environment value that is unset or empty reads "is missing. Set it in .env.".
+- **Deviation:** alchemy's `Stack` types the application's error channel as `ConfigError`, so `alchemy.run.ts` raises the mapped error with `Effect.die`. alchemy prints a `UserFacingError` found as a failure or a defect the same way, one line.
+- `provisionAuth` no longer checks the password length; `operatorPassword` does, when the stack is evaluated. The two provisioning tests that pinned the old check are replaced by `tests/deploy-config.test.ts`. It is a file of its own because alchemy runs an Action's init once per process, so the check is only observable before any other evaluation in that module.
+- The inbound content-policy log carries `from`, `to` and, for a MIME parse failure, the parser's message (bounded to 300 characters).
+- **Manual check:** a dry run on a throwaway stage (`cfgcheck`, not prod) with `UMAIL_DOMAIN=https://x.example.com` printed `error: UMAIL_DOMAIN must be a hostname like mail.example.com (no scheme, path or port).`. With a short password it printed `error: UMAIL_OPERATOR_PASSWORD must be at least 12 characters.`.
 
 ### 8. Docs, sweep, live verification
 

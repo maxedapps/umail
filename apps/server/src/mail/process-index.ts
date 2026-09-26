@@ -92,7 +92,13 @@ export const indexReceipt = <R>(
     if (prepared.kind === "policy_failed") {
       yield* deps.account.failInboundReceiptPolicy({ receiptId, reason: prepared.reason });
       return yield* Effect.logWarning("Inbound message failed content policy").pipe(
-        Effect.annotateLogs({ receiptId, reason: prepared.reason }),
+        Effect.annotateLogs({
+          receiptId,
+          reason: prepared.reason,
+          from: receipt.envelopeFrom,
+          to: receipt.envelopeTo,
+          detail: prepared.detail,
+        }),
       );
     }
     // Attachment keys are content-addressed, so a retried or concurrent run rewrites the same bytes.
@@ -120,7 +126,12 @@ export type PreparedInbound =
       readonly input: AcceptInboundInput;
       readonly attachments: ReadonlyArray<PreparedAttachment>;
     }
-  | { readonly kind: "policy_failed"; readonly reason: ReceiptPolicyError };
+  | {
+      readonly kind: "policy_failed";
+      readonly reason: ReceiptPolicyError;
+      // What the MIME parser said, for the log.
+      readonly detail: string | null;
+    };
 
 // Turns raw MIME into the AccountStore write. It touches no storage; a sanitizer failure keeps
 // the message and drops only its HTML.
@@ -132,7 +143,7 @@ export const prepareInbound = (
   Effect.gen(function* () {
     const parsed = yield* parseMime(raw);
     if (parsed.kind === "failure") {
-      return policyFailure(parsed.reason);
+      return policyFailure(parsed.reason, parsed.detail);
     }
     const email = parsed.email;
     if (email.attachments.some((attachment) => attachment.rfc822DepthExceeded === true)) {
@@ -171,8 +182,8 @@ export const prepareInbound = (
     return { kind: "ready", input, attachments } as const;
   });
 
-function policyFailure(reason: ReceiptPolicyError): PreparedInbound {
-  return { kind: "policy_failed", reason };
+function policyFailure(reason: ReceiptPolicyError, detail: string | null = null): PreparedInbound {
+  return { kind: "policy_failed", reason, detail };
 }
 
 type StoredHtml = StoredMailHtml | { readonly body: null; readonly hasRemoteImages: false };
@@ -209,7 +220,7 @@ function sanitizeHtml(
 
 type MimeParseOutcome =
   | { readonly kind: "success"; readonly email: Email }
-  | { readonly kind: "failure"; readonly reason: ReceiptPolicyError };
+  | { readonly kind: "failure"; readonly reason: ReceiptPolicyError; readonly detail: string };
 
 function parseMime(raw: ArrayBuffer): Effect.Effect<MimeParseOutcome> {
   return Effect.tryPromise({
@@ -218,10 +229,13 @@ function parseMime(raw: ArrayBuffer): Effect.Effect<MimeParseOutcome> {
         attachmentEncoding: "arraybuffer",
         ...INBOUND_MIME_LIMITS,
       }),
-    catch: (error) => mimeFailureReason(error),
+    catch: (error) => ({
+      reason: mimeFailureReason(error),
+      detail: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+    }),
   }).pipe(
     Effect.match({
-      onFailure: (reason) => ({ kind: "failure", reason }) as const,
+      onFailure: ({ reason, detail }) => ({ kind: "failure", reason, detail }) as const,
       onSuccess: (email) => ({ kind: "success", email }) as const,
     }),
   );
