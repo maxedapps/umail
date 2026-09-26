@@ -167,6 +167,11 @@ describe("account-store outbound submissions", () => {
       });
       const denied = yield* failureOf(store, (host) => host.submitOutbound(deniedInput));
       expect(taggedName(denied)).toBe("JobAuthorizationError");
+      // Only the rejected recipient is named: never the allowlist, never an allowed recipient.
+      expect(denied).toMatchObject({
+        reason: "recipient_not_allowed",
+        addresses: ["blocked@example.com"],
+      });
 
       const waiting = yield* Effect.promise(() =>
         store.submitOutbound(

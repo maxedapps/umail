@@ -77,23 +77,49 @@ describe("cloudflare forwarding destinations", () => {
     }),
   );
 
-  it.effect("surfaces Cloudflare's own error message", () =>
-    Effect.gen(function* () {
-      const { ensure } = cloudflare([], () =>
-        Response.json(
-          {
-            success: false,
-            errors: [{ code: 1004, message: "Address is not allowed" }],
-            result: null,
-          },
-          { status: 400 },
-        ),
-      );
+  // Cloudflare's failure envelope for a create, with its HTTP status.
+  const refusal = (status: number, code: number, message: string) => () =>
+    Response.json({ success: false, errors: [{ code, message }], result: null }, { status });
 
-      expect(yield* Effect.flip(ensure("new@example.com"))).toMatchObject({
-        _tag: "DestinationError",
-        message: "Address is not allowed",
-      });
+  it.effect.each([
+    [
+      "an address Cloudflare will not accept",
+      refusal(400, 1004, "Address is not allowed"),
+      { _tag: "InvalidRequest", code: "forwarding_rejected", message: "Address is not allowed" },
+    ],
+    [
+      "a rate limit, keeping Cloudflare's reason",
+      refusal(429, 971, "Verification email has been sent too recently"),
+      {
+        _tag: "Unavailable",
+        code: "cloudflare_unavailable",
+        message: "Verification email has been sent too recently. Try again later.",
+      },
+    ],
+    [
+      "a token without access",
+      refusal(403, 10000, "Authentication error"),
+      {
+        _tag: "Unavailable",
+        code: "cloudflare_misconfigured",
+        message:
+          "Cloudflare refused CF_EMAIL_ROUTING_TOKEN. Give it Email Routing Addresses edit access on this account and redeploy.",
+      },
+    ],
+    [
+      "an outage",
+      refusal(503, 1000, "Service unavailable"),
+      {
+        _tag: "Unavailable",
+        code: "cloudflare_unavailable",
+        message: "Cloudflare Email Routing is unavailable. Try again.",
+      },
+    ],
+  ] as const)("classifies %s, without retrying", ([_name, create, expected]) =>
+    Effect.gen(function* () {
+      const { calls, ensure } = cloudflare([], create);
+      expect(yield* Effect.flip(ensure("new@example.com"))).toMatchObject(expected);
+      expect(calls.filter((call) => call.startsWith("POST"))).toHaveLength(1);
     }),
   );
 });

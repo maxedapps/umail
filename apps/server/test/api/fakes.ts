@@ -1,3 +1,4 @@
+import type { InvalidRequest, Unavailable } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 
 import {
@@ -7,12 +8,9 @@ import {
   type MailHtmlSanitization,
   type StoredMailHtml,
 } from "../../src/mail/html-policy.ts";
+import type { MailHtmlResourceLimit } from "../../src/mail/html-parser.ts";
 import { ArchiveTransportError, type MailArchiveReader } from "../../src/api/app.ts";
-import {
-  DestinationError,
-  type DestinationsClient,
-  type ForwardingDestination,
-} from "../../src/api/destinations.ts";
+import type { DestinationsClient, ForwardingDestination } from "../../src/api/destinations.ts";
 
 export class MemoryArchive implements MailArchiveReader {
   readonly objects = new Map<string, Uint8Array>();
@@ -43,23 +41,23 @@ export class MemoryArchive implements MailArchiveReader {
 export class MemoryDestinations implements DestinationsClient {
   readonly ensureCalls: string[] = [];
   readonly #verified = new Set<string>();
-  #failMessage: string | null = null;
+  #failure: InvalidRequest | Unavailable | null = null;
 
   verify(email: string): void {
     this.#verified.add(email.toLowerCase());
   }
 
-  failNext(message: string): void {
-    this.#failMessage = message;
+  failNext(error: InvalidRequest | Unavailable): void {
+    this.#failure = error;
   }
 
-  ensure(email: string): Effect.Effect<ForwardingDestination, DestinationError> {
+  ensure(email: string): Effect.Effect<ForwardingDestination, InvalidRequest | Unavailable> {
     return Effect.suspend(() => {
       this.ensureCalls.push(email);
-      if (this.#failMessage !== null) {
-        const message = this.#failMessage;
-        this.#failMessage = null;
-        return new DestinationError({ message });
+      if (this.#failure !== null) {
+        const failure = this.#failure;
+        this.#failure = null;
+        return Effect.fail(failure);
       }
       return Effect.succeed({ email, verified: this.#verified.has(email.toLowerCase()) });
     });
@@ -91,11 +89,15 @@ export type MailHtmlPolicySanitizeCall = {
 export class FaithfulMailHtmlPolicy implements MailHtmlPolicy {
   readonly sanitizeCalls: MailHtmlPolicySanitizeCall[] = [];
   readonly materializeCalls: MailHtmlMaterialization[] = [];
-  private sanitizerFails = false;
+  private sanitizerFailure: MailHtmlPolicyError | null = null;
   private materializerFails = false;
 
-  failSanitization(): void {
-    this.sanitizerFails = true;
+  // A resource limit when given, else a rewrite failure.
+  failSanitization(limit?: MailHtmlResourceLimit): void {
+    this.sanitizerFailure =
+      limit === undefined
+        ? new MailHtmlPolicyError({ reason: "rewrite_failed" })
+        : new MailHtmlPolicyError({ reason: "resource_exhausted", limit });
   }
 
   failMaterialization(): void {
@@ -108,8 +110,8 @@ export class FaithfulMailHtmlPolicy implements MailHtmlPolicy {
   ): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
     return Effect.suspend(() => {
       this.sanitizeCalls.push({ html, sanitization });
-      if (this.sanitizerFails) {
-        return new MailHtmlPolicyError({ reason: "rewrite_failed" });
+      if (this.sanitizerFailure !== null) {
+        return Effect.fail(this.sanitizerFailure);
       }
       if (html === REMOTE_HTML_SOURCE) {
         return Effect.succeed(storedMailHtml(REMOTE_HTML_STORED));

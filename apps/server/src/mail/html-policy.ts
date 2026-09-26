@@ -8,7 +8,11 @@ import { toHtml } from "hast-util-to-html";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { MailHtmlResourceExhaustion, parseBoundedMailHtmlFragment } from "./html-parser.ts";
+import {
+  MailHtmlResourceExhaustion,
+  MailHtmlResourceLimit,
+  parseBoundedMailHtmlFragment,
+} from "./html-parser.ts";
 
 export type MailHtmlAttachment = {
   readonly id: string;
@@ -34,7 +38,8 @@ export type StoredMailHtml = {
 export class MailHtmlPolicyError extends Schema.TaggedError<MailHtmlPolicyError>()(
   "MailHtmlPolicyError",
   {
-    reason: Schema.Union([Schema.Literal("resource_exhausted"), Schema.Literal("rewrite_failed")]),
+    reason: Schema.Literals(["resource_exhausted", "rewrite_failed"]),
+    limit: Schema.optionalKey(MailHtmlResourceLimit),
   },
 ) {}
 
@@ -356,9 +361,9 @@ function parseMailHtmlFragment(html: string): Root {
 }
 
 function mailHtmlPolicyErrorFromCause(cause: unknown): MailHtmlPolicyError {
-  return new MailHtmlPolicyError({
-    reason: Schema.is(MailHtmlResourceExhaustion)(cause) ? "resource_exhausted" : "rewrite_failed",
-  });
+  return Schema.is(MailHtmlResourceExhaustion)(cause)
+    ? new MailHtmlPolicyError({ reason: "resource_exhausted", limit: cause.limit })
+    : new MailHtmlPolicyError({ reason: "rewrite_failed" });
 }
 
 function cleanMailHtml(tree: Root, context: MailHtmlCleanContext): Root {

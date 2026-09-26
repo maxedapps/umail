@@ -48,7 +48,7 @@ describe("mailbox pages", () => {
       const duplicate = yield* post(world, "/mailboxes", { localPart: "support" });
       const body = yield* readText(duplicate);
       expect(duplicate.status).toBe(400);
-      expect(body).toContain("That address already exists.");
+      expect(body).toContain("support@umail.example.com already exists.");
       expect(body).toContain('value="support"');
     }),
   );

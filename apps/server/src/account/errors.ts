@@ -28,8 +28,7 @@ export class ThreadNotFoundError extends Data.TaggedError("ThreadNotFoundError")
 }> {}
 
 export class AccountConflictError extends Data.TaggedError("AccountConflictError")<{
-  readonly resource: "address";
-  readonly id: string;
+  readonly address: string;
 }> {}
 
 export const JobAuthorizationReason = [
@@ -40,8 +39,10 @@ export const JobAuthorizationReason = [
 ] as const;
 export type JobAuthorizationReason = (typeof JobAuthorizationReason)[number];
 
+// `addresses` lists the rejected recipients for `recipient_not_allowed`, and is empty otherwise.
 export class JobAuthorizationError extends Data.TaggedError("JobAuthorizationError")<{
   readonly reason: JobAuthorizationReason;
+  readonly addresses: ReadonlyArray<string>;
 }> {}
 
 export class SubmissionConflictError extends Data.TaggedError("SubmissionConflictError")<{

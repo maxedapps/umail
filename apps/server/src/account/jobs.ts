@@ -79,16 +79,19 @@ export function submitOutbound(
   return storage.transactionSync(() => {
     const identity = resolveSendingIdentity(storage, input.mailboxId);
     if (identity === null) {
-      throw new JobAuthorizationError({ reason: "mailbox_forbidden" });
+      throw new JobAuthorizationError({ reason: "mailbox_forbidden", addresses: [] });
     }
     const fromAddress = parseExternalMailAddress(identity.address);
     if (fromAddress.kind === "invalid") {
-      throw new JobAuthorizationError({ reason: "mailbox_forbidden" });
+      throw new JobAuthorizationError({ reason: "mailbox_forbidden", addresses: [] });
     }
     const recipients = [...to, ...cc];
     const authorization = authorizeOutbound(input.policy, identity.id, recipients);
     if (authorization.kind === "denied") {
-      throw new JobAuthorizationError({ reason: authorization.reason });
+      throw new JobAuthorizationError({
+        reason: authorization.reason,
+        addresses: authorization.addresses,
+      });
     }
     const fingerprint = outboundIntentFingerprint({
       mailboxId: identity.id,
@@ -666,26 +669,30 @@ function authorizeOutbound(
 ):
   | { readonly kind: "allow" }
   | { readonly kind: "require_approval" }
-  | { readonly kind: "denied"; readonly reason: JobAuthorizationReason } {
+  | {
+      readonly kind: "denied";
+      readonly reason: JobAuthorizationReason;
+      readonly addresses: ReadonlyArray<string>;
+    } {
   if (policy === null) {
-    return { kind: "denied", reason: "client_inactive" };
+    return { kind: "denied", reason: "client_inactive", addresses: [] };
   }
   if (!mailboxInPolicy(policy.mailboxIds, mailboxId)) {
-    return { kind: "denied", reason: "mailbox_forbidden" };
+    return { kind: "denied", reason: "mailbox_forbidden", addresses: [] };
   }
   if (policy.sendMode.kind === "deny") {
-    return { kind: "denied", reason: "send_denied" };
+    return { kind: "denied", reason: "send_denied", addresses: [] };
   }
-  if (
-    policy.recipientAllowlist !== "any" &&
-    !allRecipientsIn(policy.recipientAllowlist, recipients)
-  ) {
-    return { kind: "denied", reason: "recipient_not_allowed" };
+  if (policy.recipientAllowlist !== "any") {
+    const rejected = recipientsOutside(policy.recipientAllowlist, recipients);
+    if (rejected.length > 0) {
+      return { kind: "denied", reason: "recipient_not_allowed", addresses: rejected };
+    }
   }
   if (policy.sendMode.kind === "allow") {
     return { kind: "allow" };
   }
-  if (allRecipientsIn(policy.sendMode.preapprovedRecipients, recipients)) {
+  if (recipientsOutside(policy.sendMode.preapprovedRecipients, recipients).length === 0) {
     return { kind: "allow" };
   }
   return { kind: "require_approval" };
@@ -698,12 +705,14 @@ function mailboxInPolicy(mailboxIds: PrincipalPolicy["mailboxIds"], mailboxId: s
   return mailboxIds.includes(mailboxId);
 }
 
-function allRecipientsIn(
+function recipientsOutside(
   addresses: ReadonlyArray<AccountMailContact["address"]>,
   recipients: ReadonlyArray<AccountMailContact>,
-): boolean {
+): ReadonlyArray<string> {
   const allowed = new Set(addresses.map(comparisonKey));
-  return recipients.every((recipient) => allowed.has(comparisonKey(recipient.address)));
+  return recipients
+    .filter((recipient) => !allowed.has(comparisonKey(recipient.address)))
+    .map((recipient) => recipient.address);
 }
 
 function outboundIntentFingerprint(input: {

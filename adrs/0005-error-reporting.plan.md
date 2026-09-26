@@ -194,7 +194,13 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 - **`test/account/*.worker.spec.ts`:** `JobAuthorizationError.addresses` lists only the rejected recipients.
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- `AccountConflictError` now carries the duplicate `address` instead of a generated id, so the 409 can name it.
+- `DestinationsClient.ensure` fails with `InvalidRequest`/`Unavailable` directly; `DestinationError` is gone. The call runs under distilled's `Retry.none`.
+- The store's own `mailbox_forbidden` (reached only when a mailbox changes mid-request) says "this mailbox"; the API's check before it names the id.
+- `MailHtmlPolicyError` gains an optional `limit`; `describeMailHtmlLimit` turns it into "128-level nesting" and so on.
+- `insufficient_scope` is mapped in `verify.ts` but not tested at the REST edge: the test world cannot mint a signed token without `umail:access`.
 
 ### 3. MCP: pass messages through, safe defects, correct authorization responses
 

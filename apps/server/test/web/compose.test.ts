@@ -114,7 +114,7 @@ describe("compose pages", () => {
 
       expect(response.status).toBe(400);
       expect(body).toContain(
-        `Nothing was sent. Sending identity ${inbox.id} is unknown or inactive.`,
+        `Nothing was sent. Mailbox ${inbox.id} (inbox@umail.example.com) is inactive.`,
       );
       expect(body).toContain(">Typed reply</textarea>");
     }),

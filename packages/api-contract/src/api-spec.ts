@@ -171,7 +171,11 @@ export class ListThreadsQuery extends Schema.Class<ListThreadsQuery>("ListThread
 
 export class ListMessagesQuery extends Schema.Class<ListMessagesQuery>("ListMessagesQuery")({
   direction: Schema.optionalKey(Schema.Literals(["inbound", "outbound"])),
-  addressId: Schema.optionalKey(Schema.String),
+  addressId: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "A mailbox id from the sending-identities listing, not an email address.",
+    }),
+  ),
   since: Schema.optionalKey(UtcInstant),
   unread: Schema.optionalKey(Schema.Boolean),
   limit: Schema.optionalKey(Schema.Int),

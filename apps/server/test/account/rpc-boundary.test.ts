@@ -24,10 +24,10 @@ describe("account-store RPC boundary", () => {
   });
 
   it("recognizes expected failures as class instances and as plain RPC envelopes", () => {
-    expect(isExpectedStoreFailure(new AccountConflictError({ resource: "address", id: "a" }))).toBe(
+    expect(isExpectedStoreFailure(new AccountConflictError({ address: "a@example.com" }))).toBe(
       true,
     );
-    expect(isExpectedStoreFailure({ _tag: "AccountConflictError", resource: "address" })).toBe(
+    expect(isExpectedStoreFailure({ _tag: "AccountConflictError", address: "a@example.com" })).toBe(
       true,
     );
     expect(isExpectedStoreFailure({ _tag: "RpcCallError" })).toBe(false);

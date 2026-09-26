@@ -92,7 +92,7 @@ export function createAddress(
       )
       .toArray();
     if (inserted.length === 0) {
-      throw new AccountConflictError({ resource: "address", id });
+      throw new AccountConflictError({ address: normalized.address });
     }
     return requireAddress(storage, id);
   });

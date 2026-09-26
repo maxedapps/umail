@@ -8,7 +8,11 @@ import {
   type SubmitOutboundInput,
   type SubmitOutboundResult,
 } from "../account/domain.ts";
-import { isExpectedStoreFailure, type AccountStoreError } from "../account/errors.ts";
+import {
+  isExpectedStoreFailure,
+  type AccountStoreError,
+  type JobAuthorizationError,
+} from "../account/errors.ts";
 import {
   Address,
   AddressForwarding,
@@ -21,6 +25,7 @@ import {
   OutboundJobStatusPage,
   SendingIdentity,
   buildOutboundReferences,
+  constructMailboxAddress,
   headerBlock,
   joinRfcMessageIds,
   NotFound,
@@ -44,6 +49,7 @@ import * as Encoding from "effect/Encoding";
 import * as Result from "effect/Result";
 
 import type { ApiDeps } from "./app.ts";
+import { describeMailHtmlLimit } from "../mail/html-parser.ts";
 import { newApprovalCapability } from "../mail/notifications.ts";
 import {
   projectJobStatus,
@@ -71,20 +77,17 @@ export const storeCall = <A, R>(
         return Effect.fail(notFound("thread_not_found", `Thread ${error.threadId}`));
       case "JobAuthorizationError":
         return Effect.fail(
-          new NotPermitted({
-            code: error.reason,
-            message: "This client may not send this message.",
-          }),
+          new NotPermitted({ code: error.reason, message: sendDeniedMessage(error) }),
         );
       case "AccountConflictError":
         return Effect.fail(
-          new Conflict({ code: "address_exists", message: "That address already exists." }),
+          new Conflict({ code: "address_exists", message: `${error.address} already exists.` }),
         );
       case "SubmissionConflictError":
         return Effect.fail(
           new Conflict({
             code: "request_id_reused",
-            message: `requestId ${error.requestId} was already used for different content.`,
+            message: `requestId ${error.requestId} was already used for different content. Resubmitting the same content returns the existing job; use a new requestId for a new message.`,
           }),
         );
       case "MessageConflictError":
@@ -92,20 +95,43 @@ export const storeCall = <A, R>(
     }
   });
 
+function sendDeniedMessage(error: JobAuthorizationError): string {
+  switch (error.reason) {
+    case "recipient_not_allowed":
+      return `Recipients not allowed for this client: ${error.addresses.join(", ")}. Remove them, or ask the operator to allow them.`;
+    case "mailbox_forbidden":
+      return "This client may not send from this mailbox. Use a sending identity it is allowed to use.";
+    case "send_denied":
+      return "This client may not send mail.";
+    case "client_inactive":
+      return "This client's access was revoked.";
+  }
+}
+
 // Mailboxes are operator-only: REST reaches these only with an operator token, the console only
 // with the operator's session.
 export const createAddress = Effect.fn("createAddress")(function* (
   deps: ApiDeps,
   input: { readonly localPart: string; readonly displayName?: string },
 ) {
+  const checked = constructMailboxAddress(input.localPart, deps.mailDomain);
+  if (checked.kind === "reserved") {
+    return yield* new InvalidRequest({
+      code: "address_reserved",
+      message: `"${input.localPart.trim()}" is reserved for mail-system use. Choose another name.`,
+    });
+  }
   const now = yield* currentIso;
-  const address = yield* deps.account
-    .createAddress(input.localPart, deps.mailDomain, input.displayName, now)
-    .pipe(storeCall);
+  const address =
+    checked.kind === "ok"
+      ? yield* deps.account
+          .createAddress(input.localPart, deps.mailDomain, input.displayName, now)
+          .pipe(storeCall)
+      : null;
   if (address === null) {
     return yield* new InvalidRequest({
       code: "address_invalid",
-      message: `"${input.localPart}" is not a valid mailbox name.`,
+      message: `"${input.localPart.trim()}" is not a valid mailbox name. Use only letters, digits, '.', '_' and '-'.`,
     });
   }
   return new Address(address);
@@ -144,13 +170,7 @@ export const setAddressForwarding = Effect.fn("setAddressForwarding")(function* 
   email: string,
 ) {
   const address = yield* getAddress(deps, id);
-  const destination = yield* deps.destinations
-    .ensure(email)
-    .pipe(
-      Effect.mapError(
-        (error) => new InvalidRequest({ code: "forwarding_rejected", message: error.message }),
-      ),
-    );
+  const destination = yield* deps.destinations.ensure(email);
   const now = yield* currentIso;
   const updated = yield* deps.account
     .setAddressForwarding(address.id, destination.email, now)
@@ -254,8 +274,13 @@ export const listMessages = Effect.fn("listMessages")(function* (
   query: ListMessagesQuery,
 ) {
   yield* requireRead(principal);
-  if (query.addressId !== undefined && !mailboxAllowed(principal, query.addressId)) {
-    return new MailMessagePage({ items: [], nextCursor: null });
+  if (query.addressId !== undefined) {
+    const mailbox = mailboxAllowed(principal, query.addressId)
+      ? yield* deps.account.getAddress(query.addressId).pipe(storeCall)
+      : null;
+    if (mailbox === null) {
+      return yield* notFound("mailbox_not_found", `Mailbox ${query.addressId}`);
+    }
   }
   const page = yield* deps.account
     .listMessageSummaries({
@@ -423,7 +448,7 @@ const replyRecipients = Effect.fn("replyRecipients")(function* (
   if (first === undefined) {
     return yield* new InvalidRequest({
       code: "no_external_recipients",
-      message: "The message being replied to has no recipients.",
+      message: `Message ${parent.id} has no external recipients to reply to: all participants are this account's own addresses. Send a new message with explicit recipients.`,
     });
   }
   const to: readonly [MailContact, ...Array<MailContact>] = [first, ...rest];
@@ -466,15 +491,12 @@ const prepareOutbound = Effect.fn("prepareOutbound")(function* (
     .resolveSendingIdentity(payload.fromAddressId)
     .pipe(storeCall);
   if (identity === null) {
-    return yield* new InvalidRequest({
-      code: "from_address_unknown",
-      message: `Sending identity ${payload.fromAddressId} is unknown or inactive.`,
-    });
+    return yield* unusableSender(deps, principal, payload.fromAddressId);
   }
   if (!mailboxAllowed(principal, identity.id)) {
     return yield* new NotPermitted({
       code: "mailbox_forbidden",
-      message: `This client may not send from mailbox ${identity.id}.`,
+      message: `This client may not send from mailbox ${identity.id}. Use a sending identity it is allowed to use.`,
     });
   }
   const recipients = yield* resolveSubmitRecipients(deps, principal, payload);
@@ -496,6 +518,27 @@ const prepareOutbound = Effect.fn("prepareOutbound")(function* (
     inReplyToHeader: recipients.inReplyToHeader,
     referencesHeader: recipients.referencesHeader,
   };
+});
+
+// An inactive mailbox is named only to a client that may use it; any other id reads as unknown.
+const unusableSender = Effect.fn("unusableSender")(function* (
+  deps: ApiDeps,
+  principal: Principal,
+  fromAddressId: string,
+) {
+  const address = mailboxAllowed(principal, fromAddressId)
+    ? yield* deps.account.getAddress(fromAddressId).pipe(storeCall)
+    : null;
+  if (address !== null && !address.active) {
+    return yield* new InvalidRequest({
+      code: "from_address_inactive",
+      message: `Mailbox ${fromAddressId} (${address.address}) is inactive. Reactivate it, or send from an active id in the sending-identities list.`,
+    });
+  }
+  return yield* new InvalidRequest({
+    code: "from_address_unknown",
+    message: `Sending identity ${fromAddressId} is unknown. Use an id from the sending-identities list.`,
+  });
 });
 
 const resolveSubmitRecipients = Effect.fn("resolveSubmitRecipients")(function* (
@@ -562,12 +605,16 @@ function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {
   return deps.htmlPolicy
     .sanitizeForStorage(suppliedHtml, { messageId: "outbound", attachments: [] })
     .pipe(
-      Effect.mapError(
-        () =>
-          new InvalidRequest({
-            code: "html_unsafe",
-            message: "The HTML body could not be processed safely.",
-          }),
+      Effect.mapError((error) =>
+        error.limit === undefined
+          ? new InvalidRequest({
+              code: "html_unsafe",
+              message: "The HTML body could not be sanitized. Send text only.",
+            })
+          : new InvalidRequest({
+              code: "html_too_complex",
+              message: `The HTML body exceeds the ${describeMailHtmlLimit(error.limit)} limit. Simplify it or send text only.`,
+            }),
       ),
     );
 }
@@ -632,7 +679,7 @@ const decodeCursor = Effect.fn("decodeCursor")(function* (cursor: string | undef
 
 const invalidCursor = new InvalidRequest({
   code: "invalid_cursor",
-  message: "The cursor is not valid.",
+  message: "The cursor is not valid. Pass nextCursor from the previous page unchanged, or omit it.",
 });
 
 // Unknown ids and ids outside the caller's access get the same answer.

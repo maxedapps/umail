@@ -20,14 +20,32 @@ export const MAIL_HTML_PARSE_LIMITS = {
   admittedAttributes: 80_000,
 } as const;
 
-const MailHtmlResourceLimit = Schema.Union([
-  Schema.Literal("admitted_attributes"),
-  Schema.Literal("allocated_nodes"),
-  Schema.Literal("attributes_per_element"),
-  Schema.Literal("final_tree_depth"),
-  Schema.Literal("input_bytes"),
-  Schema.Literal("open_elements"),
+export const MailHtmlResourceLimit = Schema.Literals([
+  "admitted_attributes",
+  "allocated_nodes",
+  "attributes_per_element",
+  "final_tree_depth",
+  "input_bytes",
+  "open_elements",
 ]);
+export type MailHtmlResourceLimit = typeof MailHtmlResourceLimit.Type;
+
+// The limit as a person reads it, e.g. "The HTML body exceeds the 128-level nesting limit."
+export function describeMailHtmlLimit(limit: MailHtmlResourceLimit): string {
+  switch (limit) {
+    case "admitted_attributes":
+      return `${MAIL_HTML_PARSE_LIMITS.admittedAttributes}-attribute`;
+    case "allocated_nodes":
+      return `${MAIL_HTML_PARSE_LIMITS.allocatedNodes}-node`;
+    case "attributes_per_element":
+      return `${MAIL_HTML_PARSE_LIMITS.attributesPerElement}-attributes-per-element`;
+    case "final_tree_depth":
+    case "open_elements":
+      return `${MAIL_HTML_PARSE_LIMITS.openElements}-level nesting`;
+    case "input_bytes":
+      return `${MAIL_HTML_PARSE_LIMITS.inputBytes / 1024 / 1024} MiB size`;
+  }
+}
 
 export class MailHtmlResourceExhaustion extends Schema.TaggedError<MailHtmlResourceExhaustion>()(
   "MailHtmlResourceExhaustion",

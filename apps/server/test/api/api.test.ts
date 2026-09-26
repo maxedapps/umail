@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
+import type * as Alchemy from "alchemy";
 import { RpcCallError } from "alchemy/Rpc";
+import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -13,6 +15,9 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
 import {
   AddressForwarding,
+  type ApiError,
+  ExternalMailAddress,
+  InvalidRequest,
   MailMessagePage,
   NormalizedRfcMessageId,
   type McpPrincipal,
@@ -23,6 +28,7 @@ import {
   OutboundThreadMessage,
   RequestErrors,
   SubmissionRequestId,
+  SubmitMessagePayload,
   ThreadMessage,
   UmailApi,
 } from "@umail/api-contract";
@@ -30,7 +36,12 @@ import type { ListMessageSummariesQuery } from "../../src/account/domain.ts";
 import type { AccountStoreError } from "../../src/account/errors.ts";
 import { attachmentHeaders, attachmentResponseHeaders } from "../../src/api/attachments.ts";
 import { RequestErrorsLive } from "../../src/api/app.ts";
-import { readMessageSource } from "../../src/api/operations.ts";
+import {
+  listMessages,
+  listThreads,
+  readMessageSource,
+  submitMessage,
+} from "../../src/api/operations.ts";
 import { REMOTE_HTML_SOURCE, REMOTE_HTML_STORED } from "./fakes.ts";
 import {
   FROM_ADDRESS,
@@ -175,6 +186,19 @@ describe("root authorization boundary", () => {
         expect(body).not.toContain(world.operatorAccessToken);
         expect(body).not.toContain(OPERATOR_PASSWORD);
       }),
+  );
+
+  it.effect("tells a caller with a bad token to log in again", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const response = yield* world.request("http://umail.test/threads", unauthorized());
+      expect(response.status).toBe(401);
+      expect(yield* readJson(response)).toEqual({
+        _tag: "Unauthenticated",
+        code: "token_invalid",
+        message: "The access token is invalid or expired. Run: umail login",
+      });
+    }),
   );
 
   it.effect("lets the exact operator OAuth token reach every retained endpoint group", () =>
@@ -763,7 +787,12 @@ describe("root mailbox API", () => {
       expect(verified.verified).toBe(true);
       expect(world.destinations.ensureCalls).toEqual(["owner@example.com", "owner@example.com"]);
 
-      world.destinations.failNext("This email address is not allowed.");
+      world.destinations.failNext(
+        new InvalidRequest({
+          code: "forwarding_rejected",
+          message: "This email address is not allowed.",
+        }),
+      );
       const refused = yield* forward("blocked@example.com");
       expect(refused.status).toBe(400);
       expect(yield* readJson(refused)).toMatchObject({
@@ -1164,13 +1193,275 @@ describe("root mailbox API", () => {
   );
 });
 
+const OK_RECIPIENT = Schema.decodeSync(ExternalMailAddress)("ok@example.com");
+
+describe("error reasons", () => {
+  // The status and body a caller reads for one request.
+  const answer = Effect.fn("answer")(function* (world: World, path: string, init?: RequestInit) {
+    const response = yield* world.request(`http://umail.test${path}`, {
+      ...authorized(world),
+      ...init,
+      headers: jsonHeaders(authorized(world).headers),
+    });
+    return { status: response.status, body: yield* readJson(response) };
+  });
+  const post = (world: World, path: string, body: unknown) =>
+    Effect.flatMap(jsonText(body), (text) => answer(world, path, { method: "POST", body: text }));
+  // The error's fields, as they would be encoded.
+  const failure = <A, E extends ApiError>(
+    world: World,
+    effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+  ) =>
+    Effect.map(Effect.flip(world.run(effect)), (error) => ({
+      _tag: error._tag,
+      code: error.code,
+      message: error.message,
+    }));
+  const compose = (fromAddressId: string, to: ReadonlyArray<string>, extra = {}) =>
+    Schema.decodeUnknownEffect(SubmitMessagePayload)({
+      intent: "compose",
+      requestId: REQUEST_ID,
+      fromAddressId,
+      to: to.map((address) => ({ address })),
+      subject: "Hello",
+      text: "body",
+      ...extra,
+    }).pipe(Effect.orDie);
+  const sender = (world: World, policy: Partial<PrincipalPolicy>): McpPrincipal => ({
+    authority: "mcp",
+    identity: { userId: world.operatorId, clientId: "agent", clientLabel: "agent" },
+    policy: {
+      mailboxIds: "all",
+      canRead: true,
+      sendMode: { kind: "allow" },
+      recipientAllowlist: "any",
+      ...policy,
+    },
+  });
+
+  it.effect("names the policy that refused a send, and only the caller's own inputs", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      const probe = yield* seedMailbox(world, "probe");
+      const allowlisted = sender(world, {
+        recipientAllowlist: [OK_RECIPIENT],
+      });
+
+      expect(
+        yield* failure(
+          world,
+          submitMessage(
+            world.deps,
+            allowlisted,
+            yield* compose(inbox.id, ["ok@example.com", "a@example.com"], {
+              cc: [{ address: "b@example.com" }],
+            }),
+          ),
+        ),
+      ).toEqual({
+        _tag: "NotPermitted",
+        code: "recipient_not_allowed",
+        message:
+          "Recipients not allowed for this client: a@example.com, b@example.com. Remove them, or ask the operator to allow them.",
+      });
+      expect(
+        yield* failure(
+          world,
+          submitMessage(
+            world.deps,
+            sender(world, { mailboxIds: [probe.id] }),
+            yield* compose(inbox.id, ["a@example.com"]),
+          ),
+        ),
+      ).toEqual({
+        _tag: "NotPermitted",
+        code: "mailbox_forbidden",
+        message: `This client may not send from mailbox ${inbox.id}. Use a sending identity it is allowed to use.`,
+      });
+      expect(
+        yield* failure(
+          world,
+          submitMessage(
+            world.deps,
+            sender(world, { sendMode: { kind: "deny" } }),
+            yield* compose(inbox.id, ["a@example.com"]),
+          ),
+        ),
+      ).toEqual({
+        _tag: "NotPermitted",
+        code: "send_denied",
+        message: "This client may not send mail.",
+      });
+      expect(
+        yield* failure(
+          world,
+          listThreads(world.deps, sender(world, { canRead: false }), undefined, undefined),
+        ),
+      ).toEqual({
+        _tag: "NotPermitted",
+        code: "read_denied",
+        message: "This client has no read access.",
+      });
+
+      // A mailbox outside the client's scope reads exactly like one that does not exist.
+      const scoped = sender(world, { mailboxIds: [inbox.id] });
+      const outOfScope = yield* failure(
+        world,
+        listMessages(world.deps, scoped, { addressId: probe.id }),
+      );
+      expect(outOfScope).toEqual({
+        _tag: "NotFound",
+        code: "mailbox_not_found",
+        message: `Mailbox ${probe.id} was not found, or it is outside this client's access.`,
+      });
+      expect(
+        yield* failure(world, listMessages(world.deps, scoped, { addressId: "nope" })),
+      ).toEqual({ ...outOfScope, message: outOfScope.message.replace(probe.id, "nope") });
+      expect(
+        yield* Effect.map(
+          world.run(listMessages(world.deps, scoped, { addressId: inbox.id })),
+          (page) => page.items,
+        ),
+      ).toEqual([]);
+      const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
+      expect(jobs.items).toEqual([]);
+    }),
+  );
+
+  it.effect("names the missing id and says it may be outside the client's access", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const notFound = (code: string, subject: string) => ({
+        status: 404,
+        body: {
+          _tag: "NotFound",
+          code,
+          message: `${subject} was not found, or it is outside this client's access.`,
+        },
+      });
+      expect(yield* answer(world, "/threads/t-missing")).toEqual(
+        notFound("thread_not_found", "Thread t-missing"),
+      );
+      expect(yield* answer(world, "/messages/m-missing")).toEqual(
+        notFound("message_not_found", "Message m-missing"),
+      );
+      expect(yield* answer(world, "/jobs/j-missing")).toEqual(
+        notFound("job_not_found", "Job j-missing"),
+      );
+    }),
+  );
+
+  it.effect("explains a refused mailbox name and a duplicate", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      expect(yield* post(world, "/addresses", { localPart: "postmaster" })).toEqual({
+        status: 400,
+        body: {
+          _tag: "InvalidRequest",
+          code: "address_reserved",
+          message: '"postmaster" is reserved for mail-system use. Choose another name.',
+        },
+      });
+      expect(yield* post(world, "/addresses", { localPart: "no spaces" })).toEqual({
+        status: 400,
+        body: {
+          _tag: "InvalidRequest",
+          code: "address_invalid",
+          message:
+            "\"no spaces\" is not a valid mailbox name. Use only letters, digits, '.', '_' and '-'.",
+        },
+      });
+      expect((yield* post(world, "/addresses", { localPart: "support" })).status).toBe(200);
+      expect(yield* post(world, "/addresses", { localPart: "support" })).toEqual({
+        status: 409,
+        body: {
+          _tag: "Conflict",
+          code: "address_exists",
+          message: "support@umail.example.com already exists.",
+        },
+      });
+    }),
+  );
+
+  it.effect("explains a reused requestId, a bad cursor, an HTML limit and an inactive sender", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world);
+      const submission = {
+        intent: "compose",
+        requestId: REQUEST_ID,
+        fromAddressId: inbox.id,
+        to: [{ address: "a@example.com" }],
+        subject: "Hello",
+        text: "body",
+      };
+      expect((yield* post(world, "/submissions", submission)).status).toBe(200);
+      expect(yield* post(world, "/submissions", { ...submission, subject: "Changed" })).toEqual({
+        status: 409,
+        body: {
+          _tag: "Conflict",
+          code: "request_id_reused",
+          message: `requestId ${REQUEST_ID} was already used for different content. Resubmitting the same content returns the existing job; use a new requestId for a new message.`,
+        },
+      });
+
+      expect(yield* answer(world, "/threads?cursor=not-a-cursor")).toEqual({
+        status: 400,
+        body: {
+          _tag: "InvalidRequest",
+          code: "invalid_cursor",
+          message:
+            "The cursor is not valid. Pass nextCursor from the previous page unchanged, or omit it.",
+        },
+      });
+
+      world.htmlPolicy.failSanitization("open_elements");
+      expect(
+        yield* post(world, "/submissions", {
+          ...submission,
+          requestId: REPLY_REQUEST_ID,
+          html: "<div>deep</div>",
+        }),
+      ).toEqual({
+        status: 400,
+        body: {
+          _tag: "InvalidRequest",
+          code: "html_too_complex",
+          message:
+            "The HTML body exceeds the 128-level nesting limit. Simplify it or send text only.",
+        },
+      });
+
+      yield* world.account.patchAddress(inbox.id, { active: false }, "2026-01-02T00:00:00.000Z");
+      expect(
+        yield* post(world, "/submissions", { ...submission, requestId: REPLY_REQUEST_ID }),
+      ).toEqual({
+        status: 400,
+        body: {
+          _tag: "InvalidRequest",
+          code: "from_address_inactive",
+          message: `Mailbox ${inbox.id} (inbox@umail.example.com) is inactive. Reactivate it, or send from an active id in the sending-identities list.`,
+        },
+      });
+      expect(
+        yield* post(world, "/submissions", {
+          ...submission,
+          requestId: REPLY_REQUEST_ID,
+          fromAddressId: "nope",
+        }),
+      ).toMatchObject({ status: 400, body: { code: "from_address_unknown" } });
+    }),
+  );
+});
+
 describe("store failures and query input at the HTTP edge", () => {
   it.effect("answers 409 when creating an address fails with a plain conflict envelope", () =>
     Effect.gen(function* () {
       const world = yield* createWorld({
         account: {
           createAddress: () =>
-            failOverRpc({ _tag: "AccountConflictError", resource: "address", id: "inbox" }),
+            failOverRpc({ _tag: "AccountConflictError", address: "inbox@umail.example.com" }),
         },
       });
       const response = yield* world.request("http://umail.test/addresses", {

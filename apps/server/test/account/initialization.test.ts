@@ -62,7 +62,7 @@ class MemoryAddressProvisioning {
     return Effect.suspend(() => {
       const address = MailboxAddress.make(`${localPart}@${mailDomain}`);
       if (this.created.some((existing) => existing.address === address)) {
-        return Effect.fail(new AccountConflictError({ resource: "address", id: address }));
+        return Effect.fail(new AccountConflictError({ address }));
       }
       const created = {
         id: `addr-${this.created.length + 1}`,

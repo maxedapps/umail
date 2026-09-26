@@ -346,7 +346,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       const conflict = yield* send({ subject: "Changed" });
       expect(conflict.isError).toBe(true);
       expect(yield* toolErrorText(conflict)).toBe(
-        `requestId ${requestId} was already used for different content.`,
+        `requestId ${requestId} was already used for different content. Resubmitting the same content returns the existing job; use a new requestId for a new message.`,
       );
 
       const missing = yield* callTool(client, {
@@ -388,7 +388,9 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
         },
       });
       expect(result.isError).toBe(true);
-      expect(yield* toolErrorText(result)).toBe("This client may not send this message.");
+      expect(yield* toolErrorText(result)).toBe(
+        "Recipients not allowed for this client: blocked@example.com. Remove them, or ask the operator to allow them.",
+      );
       const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
       expect(jobs.items).toEqual([]);
     }),
@@ -421,7 +423,7 @@ describe("OAuth-only MCP Streamable HTTP route", () => {
       });
       expect(result.isError).toBe(true);
       expect(yield* toolErrorText(result)).toBe(
-        "Sending identity no-such-address is unknown or inactive.",
+        "Sending identity no-such-address is unknown. Use an id from the sending-identities list.",
       );
       const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
       expect(jobs.items).toEqual([]);

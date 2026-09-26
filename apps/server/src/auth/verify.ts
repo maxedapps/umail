@@ -1,11 +1,13 @@
 import {
   CurrentPrincipal,
+  NotPermitted,
   PrincipalAuthorization,
   Unauthenticated,
   operatorPrincipal,
   UMAIL_OAUTH_SCOPE,
 } from "@umail/api-contract";
 import { RuntimeContext } from "alchemy/RuntimeContext";
+import { APIError } from "better-auth/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -28,12 +30,16 @@ const authenticateOperatorBearer = Effect.fn("authenticateOperatorBearer")(funct
     audience: deps.resource,
     scopes: [UMAIL_OAUTH_SCOPE],
   }).pipe(
-    Effect.mapError(
-      () =>
-        new Unauthenticated({
-          code: "token_invalid",
-          message: "The access token is invalid or expired. Run: umail login",
-        }),
+    Effect.mapError((error) =>
+      error instanceof APIError && error.status === "FORBIDDEN"
+        ? new NotPermitted({
+            code: "insufficient_scope",
+            message: `The access token lacks the ${UMAIL_OAUTH_SCOPE} scope. Run: umail login`,
+          })
+        : new Unauthenticated({
+            code: "token_invalid",
+            message: "The access token is invalid or expired. Run: umail login",
+          }),
     ),
   );
   return operatorPrincipal(access.subject, access.clientId, "AgentMail CLI");
