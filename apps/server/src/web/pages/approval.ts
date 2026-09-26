@@ -13,6 +13,7 @@ import {
   type Html,
 } from "../html.ts";
 import { icon } from "../icons.ts";
+import { sendStateBadge, sendStateExplanation } from "../send-state.ts";
 import { noticePage } from "./notice.ts";
 
 type StatePresentation = {
@@ -76,39 +77,11 @@ function statePresentation(request: StoredApproval, job: OutboundJob): StatePres
       badge: html`<span class="badge danger">Denied</span>`,
     };
   }
-  if (job.state === "accepted") {
-    return {
-      title: "Outbound email approved",
-      heading: "Approved and sent",
-      lede: "Approved; accepted by Cloudflare for delivery. Recipient delivery is not yet confirmed.",
-      badge: html`<span class="badge success">Accepted by Cloudflare</span>`,
-    };
-  }
-  if (job.state === "ready" || job.state === "in_flight") {
-    return {
-      title: "Outbound email approved",
-      heading: "Approved for sending",
-      lede: "Approved; AgentMail is sending this email now.",
-      badge: html`<span class="badge accent">Sending</span>`,
-    };
-  }
-  if (job.state === "rejected") {
-    const reason =
-      job.failureClass === "provider"
-        ? `Cloudflare rejected it (${job.failureDetail ?? "no code"})`
-        : `it was not sent (${[job.failureClass, job.failureDetail].filter((part) => part !== null).join(": ")})`;
-    return {
-      title: "Outbound approval recorded",
-      heading: "Approved, not sent",
-      lede: `Approval recorded, but ${reason}.`,
-      badge: html`<span class="badge danger">Not sent</span>`,
-    };
-  }
   return {
-    title: "Outbound approval recorded",
-    heading: "Approved, outcome unknown",
-    lede: "Approval recorded; whether the email was sent is not confirmed. Do not retry automatically.",
-    badge: html`<span class="badge warning">Outcome unknown</span>`,
+    title: "Outbound email approved",
+    heading: "You approved this email",
+    lede: sendStateExplanation(job),
+    badge: sendStateBadge(job.state),
   };
 }
 

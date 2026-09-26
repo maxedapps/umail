@@ -46,7 +46,8 @@ type ProviderSendMessage = {
 };
 
 // Codes that prove the provider did not deliver the mail. Anything else may have been sent, so it
-// settles `unknown` and is never retried.
+// settles `unknown` and is never retried. E_DELIVERY_FAILED is a rejection by a recipient's server,
+// which may be partial across recipients, so it is `unknown` too.
 const REJECTED_CODES = new Set([
   "E_VALIDATION_ERROR",
   "E_FIELD_MISSING",
@@ -66,7 +67,6 @@ const REJECTED_CODES = new Set([
   "E_RATE_LIMIT_EXCEEDED",
   "E_RECIPIENT_SUPPRESSED",
   "E_DAILY_LIMIT_EXCEEDED",
-  "E_DELIVERY_FAILED",
 ]);
 
 const ProviderErrorFields = Schema.Struct({
@@ -113,13 +113,27 @@ export function toSendEmailMessage(mail: ProviderOutboundMail): ProviderSendMess
   return message;
 }
 
+// Both outcomes keep what the provider said: its code and a short message, without a stack.
 function classifyProviderFailure(cause: unknown): CompleteAttemptOutcome {
   const code = providerErrorCode(cause);
+  const failureDetail = providerFailureDetail(cause, code);
   if (code !== null && REJECTED_CODES.has(code)) {
-    return { kind: "rejected", failureDetail: code };
+    return { kind: "rejected", failureDetail };
   }
-  return { kind: "unknown" };
+  return { kind: "unknown", failureDetail };
 }
+
+function providerFailureDetail(cause: unknown, code: string | null): string {
+  const decoded = Schema.decodeUnknownResult(ProviderErrorFields)(cause);
+  const message =
+    Result.isSuccess(decoded) && decoded.success.message !== undefined
+      ? decoded.success.message
+      : String(cause);
+  const detail = code === null || message.includes(code) ? message : `${code}: ${message}`;
+  return detail.slice(0, MAX_FAILURE_DETAIL);
+}
+
+const MAX_FAILURE_DETAIL = 300;
 
 function namedAddress(sender: NamedMailboxSender) {
   return {

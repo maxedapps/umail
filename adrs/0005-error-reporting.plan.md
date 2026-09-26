@@ -270,7 +270,13 @@ HttpApi type-checks each handler's errors against its endpoint's declared errors
 - **Browser spec:** extend the `mail-thread` fixture with a rejected reply. It must show no CSP violations and no overflow at 320 px.
 - Full `pnpm test`.
 
-**Done:** no.
+**Done:** yes.
+
+- A provider detail is `code: message` (or the message alone when it already names the code), capped at 300 characters. An `unknown` job keeps `failure_class` null, so its `sendError` is the detail alone.
+- The conversation shows the badge only; the full explanation stays on the sent page. An inbound message whose forward failed shows the note when open and a "Forwarding failed" badge when collapsed.
+- The approval page, once decided, reads "You approved this email" with the shared badge and explanation.
+- `StructuredLogs` is defined once in `app-runtime.ts` and provided on both Workers.
+- The browser fixture opens the inbound message (`?open=m-thread`), so the rejected reply shows as a collapsed row.
 
 ### 5. Web pages
 

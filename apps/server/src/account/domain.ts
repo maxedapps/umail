@@ -551,7 +551,7 @@ export type CompleteAttemptOutcome =
       readonly rfcMessageId: NormalizedRfcMessageId | null;
     }
   | { readonly kind: "rejected"; readonly failureDetail: string }
-  | { readonly kind: "unknown" };
+  | { readonly kind: "unknown"; readonly failureDetail: string | null };
 
 export type CompleteAttemptInput = {
   readonly jobId: string;

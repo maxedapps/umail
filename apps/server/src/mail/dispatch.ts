@@ -80,6 +80,12 @@ export const dispatchJob = Effect.fn("dispatchJob")(function* (
   yield* Effect.sync(() =>
     completeAttempt(storage, { jobId, attemptId: claimed.attemptId, nowIso, outcome }),
   );
+  if (outcome.kind !== "accepted") {
+    yield* Effect.logError("Send attempt failed", {
+      outcome: outcome.kind,
+      detail: outcome.failureDetail,
+    }).pipe(Effect.annotateLogs({ jobId }));
+  }
 });
 
 type PreparedMail =

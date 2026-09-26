@@ -90,7 +90,7 @@ describe("public approval flow", () => {
       const terminal = yield* world.request(queued.reviewUrl);
       expect(terminal.status).toBe(200);
       const terminalHtml = yield* readText(terminal);
-      expect(terminalHtml).toContain("AgentMail is sending this email now");
+      expect(terminalHtml).toContain("AgentMail is sending it now");
       expect(terminalHtml).not.toContain("formaction=");
 
       const oppositeReplay = yield* world.request(queued.denyUrl, {
@@ -233,7 +233,7 @@ describe("public approval flow", () => {
       yield* world.request(queued.approveUrl, { method: "POST", redirect: "manual" });
 
       const sending = yield* readText(yield* world.request(queued.reviewUrl));
-      expect(sending).toContain("AgentMail is sending this email now");
+      expect(sending).toContain("AgentMail is sending it now");
       expect(sending).not.toContain("formaction");
       const replay = yield* world.request(queued.approveUrl, {
         method: "POST",

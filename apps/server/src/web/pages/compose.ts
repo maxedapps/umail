@@ -20,6 +20,7 @@ import {
   submitMessage,
 } from "../../api/operations.ts";
 import { randomId } from "../../crypto.ts";
+import { sendStateBadge, sendStateExplanation } from "../send-state.ts";
 import { htmlResponse, redirect, type MailboxNav, type PageView } from "../document.ts";
 import { contactListHtml, displayText, html, type Html } from "../html.ts";
 import { icon } from "../icons.ts";
@@ -143,43 +144,15 @@ export function composePage(
   };
 }
 
-const JOB_STATES = {
-  waiting_approval: ["Waiting for approval", "warning"],
-  ready: ["Queued", "accent"],
-  in_flight: ["Sending", "accent"],
-  accepted: ["Accepted by Cloudflare", "success"],
-  rejected: ["Not sent", "danger"],
-  unknown: ["Outcome unknown", "warning"],
-} as const;
-
-function jobExplanation(job: OutboundJobStatus): string {
-  switch (job.state) {
-    case "waiting_approval":
-      return "It waits for approval before it is sent.";
-    case "ready":
-    case "in_flight":
-      return "AgentMail is sending it now. Refresh to see the result.";
-    case "accepted":
-      return "Cloudflare accepted it for delivery. Delivery to the recipient is not confirmed.";
-    case "rejected":
-      return job.failureClass === "provider"
-        ? `Cloudflare rejected it (${job.failureDetail ?? "no code"}).`
-        : `It was not sent (${[job.failureClass, job.failureDetail].filter((part) => part !== null).join(": ")}).`;
-    case "unknown":
-      return "Whether it was sent is not confirmed. Check the conversation before sending again.";
-  }
-}
-
 export function sentPage(job: OutboundJobStatus, mailboxes: MailboxNav): PageView {
-  const [label, tone] = JOB_STATES[job.state];
   return {
     kind: "console",
     section: "mail",
     title: "Send status",
     heading: "Send status",
-    lede: html`<span class="badge ${tone}">${label}</span>`,
+    lede: sendStateBadge(job.state),
     mailboxes,
-    main: html`<p>${jobExplanation(job)}</p>
+    main: html`<p>${sendStateExplanation(job)}</p>
       <div class="actions">
         <a class="button" href="/mail/threads/${encodeURIComponent(job.threadId)}"
           >Open conversation</a

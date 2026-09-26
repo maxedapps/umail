@@ -76,6 +76,8 @@ describe("web pages in Chromium", () => {
       // Inline images stay blocked in the frame and are listed as attachments instead.
       expect(thread.frameImageWidth).toBe(0);
       expect(thread.bodyText).toContain("logo.png");
+      // The rejected reply says so in its collapsed row.
+      expect(thread.bodyText).toContain("Not sent");
       expect(thread.firstTimeText).not.toBeNull();
       expect(thread.firstTimeText).not.toContain("UTC");
       expect(thread.heading).toContain("<script data-hostile-subject>subject</script>");
@@ -154,9 +156,9 @@ describe("web pages in Chromium", () => {
   );
 
   it.effect.each([
-    ["accepted", 200, "accepted by Cloudflare for delivery"],
+    ["accepted", 200, "Cloudflare accepted it for delivery"],
     ["failed", 200, "Cloudflare rejected it (E_RECIPIENT_SUPPRESSED)"],
-    ["queued", 200, "AgentMail is sending this email now"],
+    ["queued", 200, "AgentMail is sending it now"],
     ["denied", 200, "The email was not sent"],
     ["expired", 410, "no longer available"],
     ["unknown", 404, "was not found"],

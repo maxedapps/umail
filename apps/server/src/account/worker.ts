@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 
 import { WebCrypto, randomId } from "../crypto.ts";
 import { cloudflareEmailSender } from "../mail/email-sender.ts";
-import { appRuntime } from "../app-runtime.ts";
+import { StructuredLogs, appRuntime } from "../app-runtime.ts";
 import { MailIndex } from "../resources.ts";
 import { operatorEmail } from "../site.ts";
 import {
@@ -186,6 +186,7 @@ export const AccountStoreLive = AccountStore.make(
         Cloudflare.Queues.WriteQueueBinding,
         Cloudflare.D1.QueryDatabaseBinding,
         WebCrypto,
+        StructuredLogs,
       ),
     ),
   ),

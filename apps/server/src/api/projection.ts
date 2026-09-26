@@ -90,9 +90,15 @@ function messageSummaryFields(summary: MessageSummary) {
     ...common,
     direction: "outbound",
     sendState: job.state,
-    sendError: job.failureClass,
+    sendError: sendError(job.failureClass, job.failureDetail),
     providerMessageId: job.providerMessageId,
   } as const;
+}
+
+// "provider: E_VALIDATION_ERROR: bad sender"; an unknown outcome has a detail but no class.
+function sendError(failureClass: string | null, failureDetail: string | null): string | null {
+  if (failureDetail === null) return failureClass;
+  return failureClass === null ? failureDetail : `${failureClass}: ${failureDetail}`;
 }
 
 export function projectJobStatus(job: OutboundJob): OutboundJobStatus {

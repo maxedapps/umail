@@ -1,6 +1,8 @@
+import { Telemetry } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
 
 import { makeAccess } from "./auth/access.ts";
@@ -8,6 +10,10 @@ import { createMailHtmlPolicy } from "./mail/html-policy.ts";
 import { notificationKeyFromHex } from "./mail/notifications.ts";
 import { AuthDb, NotificationKey } from "./resources.ts";
 import { currentSite } from "./site.ts";
+
+// Workers Logs get one JSON object per log line, with its annotations (jobId, tool, clientId) as
+// fields. Provided on both Workers' init effects so it reaches every event.
+export const StructuredLogs = Telemetry.layer(Logger.layer([Logger.consoleStructured]));
 
 // What the App Worker and the AccountStore both build at construction.
 export const appRuntime = Effect.gen(function* () {

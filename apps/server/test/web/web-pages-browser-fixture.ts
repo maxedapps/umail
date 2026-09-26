@@ -3,6 +3,7 @@ import {
   ApprovalToken,
   hashApprovalToken,
   NormalizedRfcMessageId,
+  operatorPrincipal,
   requireApprovalSendMode,
   SubmissionRequestId,
   SubmitMessagePayload,
@@ -714,9 +715,6 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
   yield* approveAndFail(world, failed);
   yield* decide(world, denied.token, "denied");
   yield* expire(world, expired.token);
-  // Approved last, so no pass sends it: its page shows the approved message as sending.
-  yield* decide(world, queued.token, "approved");
-  const consentPath = yield* consentAuthorizePath(world);
   const thread = yield* seedInboundMessage(world, mailbox.id, {
     id: "m-thread",
     subject: HOSTILE_SUBJECT,
@@ -738,6 +736,10 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
       },
     ],
   });
+  yield* replyAndFail(world, mailbox.id, "m-thread");
+  // Approved last, so no pass sends it: its page shows the approved message as sending.
+  yield* decide(world, queued.token, "approved");
+  const consentPath = yield* consentAuthorizePath(world);
   const agent = yield* registerMcpClient(world, { label: "Browser agent" });
   yield* issueMcpAccessToken(world, agent);
   return {
@@ -746,7 +748,8 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
       login: "/login",
       consent: consentPath,
       client: `/clients/${encodeURIComponent(agent.clientId)}`,
-      "mail-thread": `/mail/threads/${thread.threadId}`,
+      // The inbound message stays open; the rejected reply shows as a collapsed row.
+      "mail-thread": `/mail/threads/${thread.threadId}?open=m-thread`,
       compose: "/mail/compose",
       pending: approvalPath(pending.token),
       accepted: approvalPath(accepted.token),
@@ -875,6 +878,29 @@ const approveAndFail = Effect.fn("approveAndFail")(function* (
   yield* decide(world, submitted.token, "approved");
   yield* runDueWorkPass(world, {
     mcpPolicy: APPROVAL_POLICY,
+    outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED" },
+  });
+});
+
+// The operator's reply to the thread, which Cloudflare then rejects.
+const replyAndFail = Effect.fn("replyAndFail")(function* (
+  world: World,
+  mailboxId: string,
+  messageId: string,
+) {
+  const payload = yield* Schema.decodeEffect(SubmitMessagePayload)({
+    intent: "reply",
+    requestId: yield* Schema.decodeEffect(SubmissionRequestId)(yield* world.run(randomId)),
+    fromAddressId: mailboxId,
+    replyToMessageId: messageId,
+    replyMode: "reply",
+    subject: "Re: rejected",
+    text: "This reply is rejected.",
+  });
+  yield* world.run(
+    submitMessage(world.deps, operatorPrincipal(world.operatorId, "umail-web", "Browser"), payload),
+  );
+  yield* runDueWorkPass(world, {
     outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED" },
   });
 });

@@ -5,9 +5,12 @@ import * as Schema from "effect/Schema";
 import {
   authorized,
   createWorld,
+  jsonBody,
+  jsonHeaders,
   operatorCookieHeaders,
   readJson,
   readText,
+  runDueWorkPass,
   seedInboundMessage,
   seedMailbox,
   type World,
@@ -129,6 +132,48 @@ describe("mail pages", () => {
       expect(unread.status).toBe(303);
       expect(unread.headers.get("location")).toBe("/mail?unread");
       expect((yield* unreadCounts(world)).get(first.threadId)).toBe(2);
+    }),
+  );
+
+  it.effect("shows a rejected reply as not sent and a failed forward with its destination", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      const inbound = yield* seedInboundMessage(world, inbox.id, {
+        id: "m-in",
+        subject: "Plans",
+        forward: { kind: "failure", destination: "me@example.net" },
+      });
+      const reply = yield* world.request("http://umail.test/submissions", {
+        method: "POST",
+        headers: jsonHeaders(authorized(world).headers),
+        body: jsonBody({
+          intent: "reply",
+          requestId: "11111111-1111-4111-8111-111111111111",
+          fromAddressId: inbox.id,
+          replyToMessageId: "m-in",
+          replyMode: "reply",
+          subject: "Re: Plans",
+          text: "Rejected reply",
+        }),
+      });
+      expect(reply.status).toBe(200);
+      yield* runDueWorkPass(world, {
+        outcome: { kind: "rejected", failureDetail: "E_RECIPIENT_SUPPRESSED: suppressed" },
+      });
+      const threadPath = `/mail/threads/${inbound.threadId}`;
+
+      const newest = yield* page(world, threadPath);
+      expect(newest.body).toContain("Rejected reply");
+      expect(newest.body).toContain('<span class="badge danger">Not sent</span>');
+
+      const original = yield* page(world, `${threadPath}?open=m-in`);
+      expect(original.body).toContain("Forwarding to");
+      expect(original.body).toContain("me@example.net");
+      expect(original.body).toContain("failed.");
+      // The collapsed reply keeps its state; the open message's forward is not repeated as a badge.
+      expect(original.body).toContain('<span class="badge danger">Not sent</span>');
+      expect(original.body).not.toContain("Forwarding failed</span>");
     }),
   );
 

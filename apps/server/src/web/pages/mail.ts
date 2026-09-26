@@ -46,6 +46,7 @@ import {
   type Html,
 } from "../html.ts";
 import { icon } from "../icons.ts";
+import { sendStateBadge } from "../send-state.ts";
 
 const PAGE_SIZE = 25;
 
@@ -143,7 +144,7 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
             from === undefined
               ? null
               : html` <span class="mono muted">${bidiAddress(from.address)}</span>`
-          }</span
+          }${message.direction === "outbound" ? deliveryBadge(message) : null}</span
         >
         <small
           >${[
@@ -156,6 +157,13 @@ function openMessageHtml(message: ThreadMessage, mailbox: Address | undefined): 
       </div>
       ${timeHtml(message.occurredAt)}
     </div>
+    ${
+      message.direction === "inbound" && message.forwardOutcome === "failure"
+        ? html`<p class="note warning">
+            ${icon("alert")}Forwarding to ${bidiAddress(message.forwardDestination ?? "")} failed.
+          </p>`
+        : null
+    }
     <details class="more">
       <summary>Details</summary>
       <dl class="meta">
@@ -233,10 +241,21 @@ function collapsedMessageHtml(threadPath: string, message: MailMessageSummary): 
   return html`<li>
     <a class="message-row" href="${threadPath}?open=${encodeURIComponent(message.id)}">
       <span class="avatar">${bidiText(initials(name))}</span>
-      <b>${bidiText(name)}</b>
+      <span class="sender"><b>${bidiText(name)}</b>${deliveryBadge(message)}</span>
       ${shortTimeHtml(message.occurredAt)}
     </a>
   </li>`;
+}
+
+// What went wrong on the way: an outbound message's send state unless Cloudflare accepted it, or an
+// inbound message whose forwarding failed.
+function deliveryBadge(message: MailMessageSummary | ThreadMessage): Html | null {
+  if (message.direction === "outbound") {
+    return message.sendState === "accepted" ? null : html` ${sendStateBadge(message.sendState)}`;
+  }
+  return message.forwardOutcome === "failure"
+    ? html` <span class="badge warning">Forwarding failed</span>`
+    : null;
 }
 
 export function threadPage(

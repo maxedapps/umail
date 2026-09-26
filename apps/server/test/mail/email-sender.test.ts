@@ -152,7 +152,7 @@ describe("Cloudflare email sender", () => {
 
         expect(yield* sender.send(MAIL)).toEqual({
           kind: "rejected",
-          failureDetail: "E_RECIPIENT_SUPPRESSED",
+          failureDetail: "E_RECIPIENT_SUPPRESSED: suppressed",
         });
 
         binding.next = {
@@ -161,7 +161,7 @@ describe("Cloudflare email sender", () => {
         };
         expect(yield* sender.send(MAIL)).toEqual({
           kind: "rejected",
-          failureDetail: "E_VALIDATION_ERROR",
+          failureDetail: "E_VALIDATION_ERROR: bad sender",
         });
 
         binding.next = {
@@ -170,11 +170,27 @@ describe("Cloudflare email sender", () => {
         };
         expect(yield* sender.send(MAIL)).toEqual({
           kind: "rejected",
-          failureDetail: "E_RATE_LIMIT_EXCEEDED",
+          failureDetail: "E_RATE_LIMIT_EXCEEDED: too many sends",
         });
 
-        binding.next = { kind: "failed", error: new Error("connection lost") };
-        expect(yield* sender.send(MAIL)).toEqual({ kind: "unknown" });
+        // A recipient server's rejection may be partial, so it is not proof of "not sent".
+        binding.next = {
+          kind: "failed",
+          error: { code: "E_DELIVERY_FAILED", message: "550 mailbox unavailable" },
+        };
+        expect(yield* sender.send(MAIL)).toEqual({
+          kind: "unknown",
+          failureDetail: "E_DELIVERY_FAILED: 550 mailbox unavailable",
+        });
+
+        // An unrecognized failure keeps its message, bounded and without the stack.
+        binding.next = { kind: "failed", error: new Error(`connection lost ${"x".repeat(400)}`) };
+        const unknown = yield* sender.send(MAIL);
+        expect(unknown).toMatchObject({
+          kind: "unknown",
+          failureDetail: expect.stringMatching(/^connection lost x+$/),
+        });
+        expect(unknown.kind === "unknown" && unknown.failureDetail?.length).toBe(300);
       }),
   );
 });

@@ -1347,6 +1347,13 @@ export const styles = String.raw`
       background: var(--hover);
     }
 
+    .sender {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-inline-size: 0;
+    }
+
     b {
       color: var(--text);
       font-weight: 560;

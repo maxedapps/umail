@@ -180,10 +180,45 @@ describe("account-store job execution", () => {
             jobId: submitted.job.jobId,
             attemptId: claimed.attemptId,
             nowIso: LATER,
-            outcome: { kind: "unknown" },
+            outcome: { kind: "unknown", failureDetail: null },
           }),
         ),
       ).toMatchObject({ kind: "applied", job: { state: "accepted", providerMessageId: "prov-1" } });
+    }),
+  );
+
+  it.effect("keeps the provider's detail on a job whose outcome is unknown", () =>
+    Effect.gen(function* () {
+      const store = accountStore("jobs-unknown-detail");
+      const mailbox = yield* requireAddress(store, "inbox");
+      const submitted = yield* Effect.promise(() =>
+        store.submitOutbound(operatorSubmit(mailbox.id, REQUEST_A)),
+      );
+      const claimed = yield* Effect.promise<ClaimJobResult>(() =>
+        store.claimJob({
+          jobId: submitted.job.jobId,
+          nowIso: NOW,
+          claimExpiresAt: CLAIM_EXPIRES,
+          policy: OPERATOR_POLICY,
+        }),
+      );
+      if (claimed.kind !== "claimed") {
+        throw new Error("expected claim");
+      }
+      const detail = "E_DELIVERY_FAILED: 550 mailbox unavailable";
+      yield* Effect.promise<CompleteAttemptResult>(() =>
+        store.completeAttempt({
+          jobId: submitted.job.jobId,
+          attemptId: claimed.attemptId,
+          nowIso: LATER,
+          outcome: { kind: "unknown", failureDetail: detail },
+        }),
+      );
+      expect(
+        yield* Effect.promise(() =>
+          store.getOutboundJob(submitted.job.jobId, { kind: "operator" }),
+        ),
+      ).toMatchObject({ state: "unknown", failureClass: null, failureDetail: detail });
     }),
   );
 

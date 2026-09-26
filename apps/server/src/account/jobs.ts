@@ -385,9 +385,10 @@ export function completeAttempt(
     } else {
       storage.sql.exec(
         `UPDATE outbound_jobs
-         SET state = ?, updated_at = ?
+         SET state = ?, failure_detail = ?, updated_at = ?
          WHERE id = ? AND state = 'in_flight' AND attempt_id = ?`,
         "unknown",
+        outcome.failureDetail,
         input.nowIso,
         current.id,
         input.attemptId,

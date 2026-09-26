@@ -15,7 +15,7 @@ import { WebCrypto } from "./crypto.ts";
 import { asUmailBetterAuth, makeAuthOptions } from "./auth/options.ts";
 import { receiveInbound } from "./mail/inbound.ts";
 import { IndexReceiptWork, indexReceipt } from "./mail/process-index.ts";
-import { appRuntime } from "./app-runtime.ts";
+import { StructuredLogs, appRuntime } from "./app-runtime.ts";
 import { AuthDb, MailArchive, MailIndex, ProvisionedOperator } from "./resources.ts";
 import { currentSite } from "./site.ts";
 
@@ -128,6 +128,7 @@ export default App.make(
         Cloudflare.Queues.EventSourceLive,
         Cloudflare.EmailEventSourceLive,
         AccountStoreLive,
+        StructuredLogs,
       ),
     ),
   ),

@@ -206,7 +206,7 @@ describe("account-store approval decisions", () => {
           jobId: notification.jobId,
           attemptId: claimed.attemptId,
           nowIso: NOW,
-          outcome: { kind: "unknown" },
+          outcome: { kind: "unknown", failureDetail: null },
         }),
       );
       expect(
