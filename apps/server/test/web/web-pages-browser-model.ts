@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 export const WebPageBrowserFixture = Schema.Literals([
   "login",
+  "login-limited",
   "consent",
   "client",
   "mail-thread",

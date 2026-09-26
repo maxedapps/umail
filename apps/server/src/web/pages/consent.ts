@@ -24,6 +24,25 @@ function setPending(pending) {
   denyButton.disabled = pending;
 }
 
+// Better Auth's core routes answer { message }, its OAuth routes { error, error_description }.
+function consentFailure(status, payload) {
+  const message =
+    payload === null
+      ? null
+      : typeof payload.message === "string"
+        ? payload.message
+        : typeof payload.error_description === "string"
+          ? payload.error_description
+          : null;
+  if (message === null) {
+    return "Could not record your decision (HTTP " + status + "). Try again.";
+  }
+  if (/missing oauth query/i.test(message)) {
+    return "This consent request expired or is incomplete. Start the connection again from the client.";
+  }
+  return message;
+}
+
 async function consent(accept) {
   setPending(true);
   showStatus("Recording your decision…", "pending");
@@ -46,8 +65,7 @@ async function consent(accept) {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const message = payload !== null && typeof payload.message === "string" ? payload.message : null;
-      showStatus(message ?? "Could not complete consent.", "error");
+      showStatus(consentFailure(response.status, payload), "error");
       return;
     }
     const redirectUrl = browserRedirectUrl(payload);
@@ -57,7 +75,7 @@ async function consent(accept) {
     }
     showStatus("Consent recorded.", "success");
   } catch {
-    showStatus("Could not complete consent. Try again.", "error");
+    showStatus("Could not reach AgentMail. Check your connection and try again.", "error");
   } finally {
     setPending(false);
   }

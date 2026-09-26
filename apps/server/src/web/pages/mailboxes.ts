@@ -309,6 +309,22 @@ export const forwardingRoute = Effect.fn("forwardingRoute")(function* (deps: Api
     Effect.map((forwarding) =>
       redirect(`${path}?forwarding=${forwarding.verified ? "verified" : "pending"}`),
     ),
-    Effect.catchTag("InvalidRequest", (problem) => rejected(problem.message)),
+    Effect.catchTags({
+      InvalidRequest: (problem) => rejected(problem.message),
+      // Not the address's fault: Cloudflare is down or the deploy's token is wrong.
+      Unavailable: (problem) =>
+        Effect.flatMap(getAddress(deps, id), (address) =>
+          htmlResponse(
+            502,
+            mailboxPage(
+              address,
+              email,
+              null,
+              { tone: "error", message: `Forwarding was not changed. ${problem.message}` },
+              false,
+            ),
+          ),
+        ),
+    }),
   );
 });

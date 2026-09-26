@@ -27,7 +27,7 @@ import {
 
 import type { MailHtmlPolicy } from "../mail/html-policy.ts";
 import type { AccountStoreRpc } from "../account/worker.ts";
-import { decideApproval, reviewApproval } from "./approval-http.ts";
+import { decideApproval, reviewApproval, type ApprovalGone } from "./approval-http.ts";
 import { attachmentResponseHeaders, rfc6266ContentDisposition } from "./attachments.ts";
 import type { Access } from "../auth/access.ts";
 import type { UmailAuthInstance } from "../auth/options.ts";
@@ -305,7 +305,7 @@ const showApproval = Effect.fn("showApproval")(function* (deps: ApiDeps, rawToke
     return yield* approvalNotFound;
   }
   if (outcome.kind === "gone") {
-    return yield* approvalGone;
+    return yield* approvalGone(outcome);
   }
   const now = yield* currentIso;
   return HttpApiSchema.withHeaders(
@@ -324,8 +324,15 @@ const showApprovalMessagePreview = Effect.fn("showApprovalMessagePreview")(funct
   if (outcome.kind === "notFound") {
     return yield* approvalNotFound;
   }
-  if (outcome.kind === "gone" || outcome.message.htmlBody === null) {
-    return yield* approvalGone;
+  if (outcome.kind === "gone") {
+    return yield* approvalGone(outcome);
+  }
+  if (outcome.message.htmlBody === null) {
+    return yield* approvalGone({
+      kind: "gone",
+      state: outcome.approval.state,
+      threadId: outcome.job.threadId,
+    });
   }
   return HttpApiSchema.withHeaders({
     body: bodyDocument(outcome.message.htmlBody),
@@ -344,7 +351,7 @@ const decideApprovalRoute = Effect.fn("decideApprovalRoute")(function* (
     return yield* approvalNotFound;
   }
   if (outcome.kind === "gone") {
-    return yield* approvalGone;
+    return yield* approvalGone(outcome);
   }
   const headers = {
     location: approvalReviewUrl(deps.applicationUrl, token),
@@ -366,9 +373,10 @@ const approvalNotFound = Effect.flatMap(approvalHttpApiBody(approvalNotFoundPage
   Effect.fail(new ApprovalPageNotFound({ html: page.body, headers: page.headers })),
 );
 
-const approvalGone = Effect.flatMap(approvalHttpApiBody(approvalGonePage()), (page) =>
-  Effect.fail(new ApprovalPageGone({ html: page.body, headers: page.headers })),
-);
+const approvalGone = (gone: ApprovalGone) =>
+  Effect.flatMap(approvalHttpApiBody(approvalGonePage(gone)), (page) =>
+    Effect.fail(new ApprovalPageGone({ html: page.body, headers: page.headers })),
+  );
 
 function serveAttachment(
   deps: ApiDeps,

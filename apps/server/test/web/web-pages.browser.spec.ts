@@ -160,7 +160,7 @@ describe("web pages in Chromium", () => {
     ["failed", 200, "Cloudflare rejected it (E_RECIPIENT_SUPPRESSED)"],
     ["queued", 200, "AgentMail is sending it now"],
     ["denied", 200, "The email was not sent"],
-    ["expired", 410, "no longer available"],
+    ["expired", 410, "can no longer be used"],
     ["unknown", 404, "was not found"],
   ] as const)("renders %s as an action-free terminal page", ([fixture, status, expectedMeaning]) =>
     Effect.gen(function* () {
@@ -206,6 +206,13 @@ describe("web pages in Chromium", () => {
         expect(hostile.finalPath).toBe("/mail");
         expect(hostile.authRequestBody).not.toContain("oauth_query");
       }
+    }),
+  );
+
+  it.effect("tells a rate-limited sign-in how long to wait instead of blaming the password", () =>
+    Effect.gen(function* () {
+      const limited = yield* observe("login-limited");
+      expect(limited.statusText).toBe("Too many sign-in attempts. Wait 7 seconds and try again.");
     }),
   );
 

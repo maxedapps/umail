@@ -1,6 +1,7 @@
 import type { OutboundJob, StoredApproval } from "../account/domain.ts";
 import {
   hashApprovalToken,
+  type ApprovalState,
   type ApprovalToken,
   type OutboundThreadMessage,
 } from "@umail/api-contract";
@@ -23,7 +24,15 @@ type ApprovalReviewOutcome =
       readonly message: OutboundThreadMessage;
     }
   | { readonly kind: "notFound" }
-  | { readonly kind: "gone" };
+  | ApprovalGone;
+
+// A review link that can no longer be used: what was decided, if anything, and the conversation
+// that shows the message's send state.
+export type ApprovalGone = {
+  readonly kind: "gone";
+  readonly state: ApprovalState;
+  readonly threadId: string | null;
+};
 
 export const reviewApproval = Effect.fn("reviewApproval")(function* (
   deps: ApprovalHttpDeps,
@@ -34,12 +43,17 @@ export const reviewApproval = Effect.fn("reviewApproval")(function* (
     return { kind: "notFound" };
   }
   const now = DateTime.formatIso(yield* DateTime.now);
+  const gone = {
+    kind: "gone",
+    state: lookup.approval.state,
+    threadId: lookup.job.threadId,
+  } as const;
   if (lookup.approval.expiresAt <= now || isUnavailableState(lookup.approval.state)) {
-    return { kind: "gone" };
+    return gone;
   }
   const message = yield* loadApprovalMessage(deps, lookup.job.messageId);
   if (message === null || !messageMatchesApproval(lookup.approval, lookup.job, message)) {
-    return { kind: "gone" };
+    return gone;
   }
   return {
     kind: "available",
@@ -65,10 +79,10 @@ export const decideApproval = Effect.fn("decideApproval")(function* (
     case "missing":
       return { kind: "notFound" } as const;
     case "unavailable":
-      return { kind: "gone" } as const;
+      return { kind: "gone", state: result.state, threadId: null } as const;
     case "resolved":
       return result.expiresAt <= now
-        ? ({ kind: "gone" } as const)
+        ? ({ kind: "gone", state: result.state, threadId: result.job?.threadId ?? null } as const)
         : ({ kind: "redirect", state: result.state } as const);
     case "claimed":
       return { kind: "redirect", state: result.state } as const;

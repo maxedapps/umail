@@ -99,6 +99,20 @@ function setPending(pending) {
   submitButton.textContent = pending ? "Signing in…" : "Sign in";
 }
 
+// Better Auth answers a wrong password with 401 and too many attempts with 429 and X-Retry-After.
+async function signInFailure(response) {
+  if (response.status === 401) {
+    return "Wrong email or password.";
+  }
+  if (response.status === 429) {
+    const wait = Number(response.headers.get("X-Retry-After"));
+    return "Too many sign-in attempts. Wait " + (wait > 0 ? wait : "a few") + " seconds and try again.";
+  }
+  const payload = await response.json().catch(() => null);
+  const message = payload !== null && typeof payload.message === "string" ? payload.message : "";
+  return "Could not sign in (HTTP " + response.status + ")" + (message ? ": " + message.replace(/\\.$/, "") : "") + ".";
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const email = emailField.value;
@@ -117,7 +131,7 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify(signInBody),
     });
     if (!signIn.ok) {
-      showStatus("Could not sign in. Check your email and password.", "error");
+      showStatus(await signInFailure(signIn), "error");
       return;
     }
     const payload = await signIn.json();
@@ -129,7 +143,7 @@ form.addEventListener("submit", async (event) => {
     const next = sameOriginReturnPath(new URLSearchParams(location.search).get("next"));
     location.assign(next ?? "/mail");
   } catch {
-    showStatus("Could not sign in. Try again.", "error");
+    showStatus("Could not reach AgentMail. Check your connection and try again.", "error");
   } finally {
     setPending(false);
   }

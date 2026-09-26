@@ -320,6 +320,35 @@ const exerciseFixture = Effect.fn("exerciseFixture")(function* (
     }
     return { ...focus, statusText: null, authRequestPath, authRequestMethod, authRequestBody };
   }
+  if (visit.fixture === "login-limited") {
+    // Better Auth's sign-in limiter, as it answers the fourth fast attempt.
+    yield* Effect.promise(() =>
+      page.route("**/api/auth/sign-in/email", (route) =>
+        route.fulfill({
+          status: 429,
+          headers: { "content-type": "application/json", "X-Retry-After": "7" },
+          body: JSON.stringify({ message: "Too many requests. Please try again later." }),
+        }),
+      ),
+    );
+    yield* Effect.promise(() => page.getByLabel("Email").fill(OPERATOR_EMAIL));
+    yield* Effect.promise(() => page.getByLabel("Password").fill(OPERATOR_PASSWORD));
+    yield* Effect.promise(() => page.locator("#login-submit").click());
+    yield* Effect.promise(() =>
+      page.locator('#status[data-kind="error"]').waitFor({ state: "attached" }),
+    );
+    return {
+      keyboardFocusId: null,
+      keyboardFocusText: null,
+      outlineStyle: null,
+      outlineWidth: null,
+      controlHeight: null,
+      statusText: yield* optionalText(page.locator("#status")),
+      authRequestPath: null,
+      authRequestMethod: null,
+      authRequestBody: null,
+    };
+  }
   if (visit.fixture === "consent") {
     const accept = page.getByRole("button", { name: "Allow access" });
     yield* Effect.promise(() => accept.focus());
@@ -746,6 +775,7 @@ const createPreparedBrowserWorld = Effect.fn("createPreparedBrowserWorld")(funct
     world,
     paths: {
       login: "/login",
+      "login-limited": "/login",
       consent: consentPath,
       client: `/clients/${encodeURIComponent(agent.clientId)}`,
       // The inbound message stays open; the rejected reply shows as a collapsed row.

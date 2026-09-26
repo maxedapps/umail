@@ -152,7 +152,10 @@ describe("public approval flow", () => {
 
       const gone = yield* world.request(queued.reviewUrl);
       expect(gone.status).toBe(410);
-      expect(yield* readText(gone)).toContain("no longer available");
+      const goneHtml = yield* readText(gone);
+      expect(goneHtml).toContain("This review link can no longer be used");
+      expect(goneHtml).toContain("Nobody decided before it expired.");
+      expect(goneHtml).toContain(`/mail/threads/${encodeURIComponent(queued.job.threadId)}`);
       const late = yield* world.request(queued.approveUrl, { method: "POST", redirect: "manual" });
       expect(late.status).toBe(410);
       expect(world.accountStorage.writeCount).toBe(writesBefore);
@@ -166,18 +169,21 @@ describe("public approval flow", () => {
     }),
   );
 
-  it.effect("returns neutral 410 when a resolved capability is replayed after expiry", () =>
-    Effect.gen(function* () {
-      const world = yield* createWorld();
-      const queued = yield* queueApproval(world);
-      expect((yield* world.request(queued.denyUrl, { method: "POST" })).status).toBe(303);
-      yield* world.setTime("2026-08-29T10:00:00.000Z");
+  it.effect(
+    "answers 410 with the recorded decision when a capability is replayed after expiry",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* createWorld();
+        const queued = yield* queueApproval(world);
+        expect((yield* world.request(queued.denyUrl, { method: "POST" })).status).toBe(303);
+        yield* world.setTime("2026-08-29T10:00:00.000Z");
 
-      const replay = yield* world.request(queued.denyUrl, { method: "POST", redirect: "manual" });
-      expect(replay.status).toBe(410);
-      expect(replay.headers.get("x-umail-approval-state")).toBeNull();
-      expect(yield* readText(replay)).not.toContain("denied");
-    }),
+        const replay = yield* world.request(queued.denyUrl, { method: "POST", redirect: "manual" });
+        expect(replay.status).toBe(410);
+        expect(replay.headers.get("x-umail-approval-state")).toBeNull();
+        // The decision is known, so the page says it instead of guessing at the email's fate.
+        expect(yield* readText(replay)).toContain("You denied it; it was not sent.");
+      }),
   );
 
   it.effect(

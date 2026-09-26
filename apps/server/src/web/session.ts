@@ -39,7 +39,18 @@ export function withOperator<E extends { readonly _tag: string }, R>(
     }
     const principal = operatorPrincipal(session.user.id, UMAIL_WEB_CLIENT_ID, "AgentMail web");
     return yield* handler(principal).pipe(Effect.catch((error: E) => failureResponse(error)));
-  });
+  }).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.logError("Console page failed", defect).pipe(
+        Effect.andThen(
+          failurePage(
+            500,
+            "AgentMail failed while handling this page. Reload to retry; the Worker logs have the details.",
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 const API_ERROR_STATUS = {
@@ -64,14 +75,25 @@ function failureResponse(error: { readonly _tag: string }) {
   }
 }
 
-export function failurePage(status: 400 | 401 | 403 | 404 | 409 | 500 | 502, message: string) {
+const FAILURE_HEADINGS = {
+  400: "Invalid request",
+  401: "Sign-in required",
+  403: "Not allowed",
+  404: "Not found",
+  409: "Conflict",
+  500: "Server error",
+  502: "Service unavailable",
+} as const;
+
+export function failurePage(status: keyof typeof FAILURE_HEADINGS, message: string) {
   return htmlResponse(
     status,
     noticePage({
-      title: "Request failed",
-      heading: "The request could not be completed",
+      title: FAILURE_HEADINGS[status],
+      heading: FAILURE_HEADINGS[status],
       message,
       tone: "error",
+      link: { href: "/mail", label: "Back to Mail" },
     }),
   );
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { RpcCallError } from "alchemy/Rpc";
 import * as Effect from "effect/Effect";
 
 import { createWorld, operatorCookieHeaders, readText } from "../api/world.ts";
@@ -70,6 +71,41 @@ describe("operator browser session", () => {
         "http://umail.test/.well-known/oauth-authorization-server/api/auth",
       );
       expect(metadata.status).toBe(200);
+    }),
+  );
+
+  it.effect("heads an error page with its status and shows the error's own message", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const response = yield* world.request("http://umail.test/mail/threads/t-missing", {
+        headers: { cookie: world.sessionCookie },
+      });
+      expect(response.status).toBe(404);
+      const body = yield* readText(response);
+      expect(body).toContain("<h1>Not found</h1>");
+      expect(body).toContain("Thread t-missing was not found, or it is outside this client");
+      expect(body).toContain('href="/mail">Back to Mail</a>');
+    }),
+  );
+
+  it.effect("renders a 500 page, not a blank one, when a console page fails unexpectedly", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld({
+        account: {
+          listAddresses: () =>
+            Effect.die(new RpcCallError({ method: "listAddresses", cause: new Error("DO reset") })),
+        },
+      });
+      const response = yield* world.request("http://umail.test/mailboxes", {
+        headers: { cookie: world.sessionCookie },
+      });
+      expect(response.status).toBe(500);
+      const body = yield* readText(response);
+      expect(body).toContain("<h1>Server error</h1>");
+      expect(body).toContain(
+        "AgentMail failed while handling this page. Reload to retry; the Worker logs have the details.",
+      );
+      expect(body).not.toContain("DO reset");
     }),
   );
 });

@@ -2,6 +2,7 @@ import type { ApprovalToken, MailContact, OutboundThreadMessage } from "@umail/a
 import * as DateTime from "effect/DateTime";
 
 import type { OutboundJob, StoredApproval } from "../../account/domain.ts";
+import type { ApprovalGone } from "../../api/approval-http.ts";
 import type { PageView } from "../document.ts";
 import {
   bidiText,
@@ -50,15 +51,28 @@ export function approvalNotFoundPage(): PageView {
   });
 }
 
-export function approvalGonePage(): PageView {
+// Says what was decided when that is known, and leaves whether the email went out to the
+// conversation, which shows its send state.
+export function approvalGonePage(gone: ApprovalGone): PageView {
   return noticePage({
-    title: "Review request unavailable",
-    heading: "This review request is no longer available",
-    message:
-      "It may have expired or been cancelled, so it can no longer be used to review or decide this email.",
+    title: "Review link unavailable",
+    heading: "This review link can no longer be used",
+    message: GONE_DECISIONS[gone.state],
     tone: "error",
+    link: {
+      href: gone.threadId === null ? "/mail" : `/mail/threads/${encodeURIComponent(gone.threadId)}`,
+      label: "Open the conversation",
+    },
   });
 }
+
+const GONE_DECISIONS = {
+  approved: "You approved it. The conversation shows whether it was sent.",
+  denied: "You denied it; it was not sent.",
+  pending: "Nobody decided before it expired. The conversation shows its state.",
+  expired: "Nobody decided before it expired. The conversation shows its state.",
+  cancelled: "It was withdrawn before anyone decided. The conversation shows its state.",
+} as const satisfies Record<ApprovalGone["state"], string>;
 
 function statePresentation(request: StoredApproval, job: OutboundJob): StatePresentation {
   if (request.state === "pending") {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Unavailable } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 
 import { createWorld, operatorCookieHeaders, readText, type World } from "../api/world.ts";
@@ -98,6 +99,36 @@ describe("mailbox pages", () => {
       expect(removed.headers.get("location")).toBe(`${path}?forwarding=removed`);
       const addresses = yield* world.account.listAddresses();
       expect(addresses.find((address) => address.localPart === "support")?.forwardTo).toBeNull();
+    }),
+  );
+
+  it.effect("explains a reserved name under the field, and a Cloudflare fault as a flash", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const reserved = yield* post(world, "/mailboxes", { localPart: "postmaster" });
+      expect(reserved.status).toBe(400);
+      const reservedBody = yield* readText(reserved);
+      expect(reservedBody).toContain(
+        "&quot;postmaster&quot; is reserved for mail-system use. Choose another name.",
+      );
+      expect(reservedBody).toContain('<p class="error" role="alert">');
+
+      const path = yield* createMailbox(world, "support");
+      world.destinations.failNext(
+        new Unavailable({
+          code: "cloudflare_misconfigured",
+          message: "Cloudflare refused CF_EMAIL_ROUTING_TOKEN.",
+        }),
+      );
+      const refused = yield* post(world, `${path}/forwarding`, { email: "me@example.net" });
+      expect(refused.status).toBe(502);
+      const refusedBody = yield* readText(refused);
+      expect(refusedBody).toContain(
+        "Forwarding was not changed. Cloudflare refused CF_EMAIL_ROUTING_TOKEN.",
+      );
+      // The address itself was fine, so the field is not marked.
+      expect(refusedBody).not.toContain('<p class="error" role="alert">');
+      expect(refusedBody).toContain('value="me@example.net"');
     }),
   );
 });

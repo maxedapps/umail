@@ -1,5 +1,6 @@
 import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
@@ -24,26 +25,18 @@ export const deviceRoute = Effect.fn("deviceRoute")(function* (deps: DeviceDeps)
   }
   const request = yield* HttpServerRequest.HttpServerRequest;
   const webRequest = yield* HttpServerRequest.toWeb(request);
-  const auth = yield* deps.auth.auth;
-  const resource = deps.applicationUrl.origin;
-  return yield* Effect.tryPromise(() =>
-    auth.api.deviceVerify({ headers: webRequest.headers, query: { user_code: userCode } }),
-  ).pipe(
-    Effect.filterOrFail((verified) => deviceRequestAdmitted(verified, resource)),
-    Effect.flatMap((verified) =>
-      htmlResponse(
-        200,
-        deviceAuthorizationPage({
-          userCode: verified.user_code,
-          clientId: verified.client_id,
-          scope: verified.scope ?? "",
-          resource,
-        }),
-      ),
-    ),
-    Effect.catch(() =>
-      failurePage(400, "This device code is invalid, expired, or requests unsupported access."),
-    ),
+  const verified = yield* pendingDeviceRequest(deps, webRequest.headers, userCode);
+  if (typeof verified === "string") {
+    return yield* failurePage(400, verified);
+  }
+  return yield* htmlResponse(
+    200,
+    deviceAuthorizationPage({
+      userCode: verified.user_code,
+      clientId: verified.client_id,
+      scope: verified.scope ?? "",
+      resource: deps.applicationUrl.origin,
+    }),
   );
 });
 
@@ -54,27 +47,46 @@ export const deviceDecisionRoute = Effect.fn("deviceDecisionRoute")(function* (
   const request = yield* HttpServerRequest.HttpServerRequest;
   const webRequest = yield* HttpServerRequest.toWeb(request);
   const auth = yield* deps.auth.auth;
-  return yield* Effect.gen(function* () {
-    const form = yield* HttpServerRequest.schemaBodyUrlParams(DeviceDecisionForm);
-    const headers = webRequest.headers;
-    yield* Effect.tryPromise(() =>
-      auth.api.deviceVerify({ headers, query: { user_code: form.userCode } }),
-    ).pipe(
-      Effect.filterOrFail((verified) =>
-        deviceRequestAdmitted(verified, deps.applicationUrl.origin),
-      ),
-    );
-    yield* Effect.tryPromise(() =>
-      decision === "approved"
-        ? auth.api.deviceApprove({ headers, body: { userCode: form.userCode } })
-        : auth.api.deviceDeny({ headers, body: { userCode: form.userCode } }),
-    );
-    return yield* htmlResponse(200, deviceDecisionPage(decision));
-  }).pipe(
-    Effect.catch(() =>
-      failurePage(400, "This device code is invalid, expired, or already processed."),
-    ),
-  );
+  const form = yield* HttpServerRequest.schemaBodyUrlParams(DeviceDecisionForm);
+  const headers = webRequest.headers;
+  const verified = yield* pendingDeviceRequest(deps, headers, form.userCode);
+  if (typeof verified === "string") {
+    return yield* failurePage(400, verified);
+  }
+  // Another tab may have decided between the check and this call.
+  const decided = yield* Effect.tryPromise(() =>
+    decision === "approved"
+      ? auth.api.deviceApprove({ headers, body: { userCode: form.userCode } })
+      : auth.api.deviceDeny({ headers, body: { userCode: form.userCode } }),
+  ).pipe(Effect.option);
+  if (Option.isNone(decided)) {
+    return yield* failurePage(400, DEVICE_CODE_PROCESSED);
+  }
+  return yield* htmlResponse(200, deviceDecisionPage(decision));
+});
+
+const DEVICE_CODE_INVALID =
+  "This device code is invalid or expired. Run `umail login` again for a new code.";
+const DEVICE_CODE_PROCESSED = "This device code was already approved or denied.";
+const DEVICE_ACCESS_UNSUPPORTED =
+  "This device request asks for access AgentMail does not grant. Sign in with the AgentMail CLI.";
+
+// The still-undecided device request behind a user code, or why it cannot be decided.
+const pendingDeviceRequest = Effect.fn("pendingDeviceRequest")(function* (
+  deps: DeviceDeps,
+  headers: Headers,
+  userCode: string,
+) {
+  const auth = yield* deps.auth.auth;
+  const verified = yield* Effect.tryPromise(() =>
+    auth.api.deviceVerify({ headers, query: { user_code: userCode } }),
+  ).pipe(Effect.option);
+  if (Option.isNone(verified)) return DEVICE_CODE_INVALID;
+  if (!deviceRequestAdmitted(verified.value, deps.applicationUrl.origin)) {
+    return DEVICE_ACCESS_UNSUPPORTED;
+  }
+  if (verified.value.status !== "pending") return DEVICE_CODE_PROCESSED;
+  return verified.value;
 });
 
 // A device request must target the REST resource with the CLI's scopes, or it is refused.
