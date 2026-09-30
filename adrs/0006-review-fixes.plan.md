@@ -79,3 +79,7 @@ None.
 ## Code review
 
 Codex reviewed `b47d065..17359aa`: no bug or security findings. It re-ran the three repros independently (REST deactivate, reply replay before and after acceptance, a 405-message conversation in agent-browser) and checked alchemy, effect and oauth-provider source. One simplification, fixed: `threadPage` was still exported although only `threadRoute` uses it.
+
+## Deploy
+
+Pushed and deployed to prod on 2026-09-30 (277d856, Worker `umail-app-prod-gchxrjximuwaaqf2`; the dry run showed only the App Worker updating). Live send check through the new sender: MCP `umail_send_message` from `probe@mail.schwarzmueller.sh` to the owner, subject "[umail deploy check] 277d856 sender"; job `819d8cc4-2ff2-4b00-8de2-ee20db1ae0c9` reached `accepted` with a provider message id.
