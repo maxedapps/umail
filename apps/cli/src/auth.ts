@@ -2,11 +2,9 @@ import { OFFLINE_ACCESS_SCOPE, UMAIL_CLI_CLIENT_ID, UMAIL_OAUTH_SCOPE } from "@u
 import { umailBaseUrl } from "@umail/api-contract/client";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -86,29 +84,12 @@ class OAuthRevocationError extends Data.TaggedError("OAuthRevocationError")<{
   override readonly message = `Could not revoke access on the server; local OAuth credentials were kept. ${this.reason}`;
 }
 
-export interface OAuthSchedulerService {
-  readonly now: Effect.Effect<number>;
-  readonly sleep: (milliseconds: number) => Effect.Effect<void>;
-}
-export class OAuthScheduler extends Context.Service<OAuthScheduler, OAuthSchedulerService>()(
-  "umail/OAuthScheduler",
-) {
-  static readonly layer = Layer.effect(
-    OAuthScheduler,
-    Effect.map(Clock.Clock, (clock) => ({
-      now: clock.currentTimeMillis,
-      sleep: (milliseconds: number) => clock.sleep(Duration.millis(milliseconds)),
-    })),
-  );
-}
-
 // Device login as the static CLI client. The browser approval can take minutes, so only the final
 // write holds the credential lock.
 export const login = Effect.gen(function* () {
   const baseUrl = yield* umailBaseUrl;
   const httpClient = yield* HttpClient.HttpClient;
   const store = yield* OAuthCredentialStore;
-  const scheduler = yield* OAuthScheduler;
   const metadata = yield* discoverOAuth(httpClient, baseUrl);
   const device = yield* requestJson(
     httpClient,
@@ -136,19 +117,18 @@ export const login = Effect.gen(function* () {
       });
     }
   }
-  const startedAt = yield* scheduler.now;
+  const startedAt = yield* Clock.currentTimeMillis;
   yield* Console.log(`Open: ${device.verification_uri_complete}`);
   yield* Console.log(`Code: ${device.user_code}`);
   yield* Console.log("Waiting for approval…");
   const tokens = yield* pollForTokens(
     httpClient,
-    scheduler,
     metadata.token_endpoint,
     baseUrl,
     device,
     startedAt,
   );
-  const now = yield* scheduler.now;
+  const now = yield* Clock.currentTimeMillis;
   const scope = tokens.scope ?? REQUIRED_SCOPE;
   yield* checkTokens("sign-in approval", tokens, scope);
   const refreshToken = tokens.refresh_token;
@@ -170,7 +150,6 @@ export const login = Effect.gen(function* () {
 export const accessToken = Effect.gen(function* () {
   const baseUrl = yield* umailBaseUrl;
   const store = yield* OAuthCredentialStore;
-  const scheduler = yield* OAuthScheduler;
   return yield* store.withLock(
     Effect.gen(function* () {
       const credentials = yield* store.read;
@@ -187,7 +166,7 @@ export const accessToken = Effect.gen(function* () {
           reason: `Stored credentials lack the ${REQUIRED_SCOPE} scopes.`,
         });
       }
-      const now = yield* scheduler.now;
+      const now = yield* Clock.currentTimeMillis;
       if (credentials.expiresAt - now > REFRESH_SKEW_MS) {
         return Redacted.make(credentials.accessToken);
       }
@@ -343,7 +322,6 @@ function isDeviceVerificationUrl(value: string, origin: string): boolean {
 
 const pollForTokens = Effect.fn("pollForTokens")(function* (
   httpClient: HttpClient.HttpClient,
-  scheduler: OAuthSchedulerService,
   tokenEndpoint: string,
   resource: string,
   device: typeof DeviceCodeResponse.Type,
@@ -358,8 +336,8 @@ const pollForTokens = Effect.fn("pollForTokens")(function* (
   let intervalMs = Math.max(1, device.interval) * 1_000;
   const expiresAt = startedAt + device.expires_in * 1_000;
   while (true) {
-    yield* scheduler.sleep(intervalMs);
-    const now = yield* scheduler.now;
+    yield* Effect.sleep(Duration.millis(intervalMs));
+    const now = yield* Clock.currentTimeMillis;
     if (now >= expiresAt) return yield* new OAuthDeviceCodeExpiredError();
     const response = yield* executeOAuth(
       pollingClient,

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import {
   ComposeSubmissionPayload,
   CreateAddressPayload,
@@ -15,6 +13,7 @@ import {
   type MailboxAddress,
 } from "@umail/api-contract";
 import * as Console from "effect/Console";
+import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -263,7 +262,7 @@ const messagesCompose = Command.make(
       const client = yield* requireClient();
       const payload = new ComposeSubmissionPayload({
         intent: "compose",
-        requestId: resolveRequestId(requestId),
+        requestId: yield* resolveRequestId(requestId),
         fromAddressId: yield* resolveFromAddressId(client, from),
         subject,
         to: [first, ...rest],
@@ -291,7 +290,7 @@ const messagesReply = Command.make(
       const client = yield* requireClient();
       const payload = new ReplySubmissionPayload({
         intent: "reply",
-        requestId: resolveRequestId(requestId),
+        requestId: yield* resolveRequestId(requestId),
         fromAddressId: yield* resolveFromAddressId(client, from),
         subject,
         replyToMessageId: replyTo,
@@ -463,9 +462,13 @@ function submit(
   );
 }
 
-function resolveRequestId(provided: Option.Option<SubmissionRequestId>) {
-  return Option.getOrElse(provided, () => Schema.decodeSync(SubmissionRequestId)(randomUUID()));
-}
+const resolveRequestId = Effect.fn("resolveRequestId")(function* (
+  provided: Option.Option<SubmissionRequestId>,
+) {
+  if (Option.isSome(provided)) return provided.value;
+  const uuid = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+  return yield* Schema.decodeEffect(SubmissionRequestId)(uuid).pipe(Effect.orDie);
+});
 
 function messageBody(text: Option.Option<string>, html: Option.Option<string>) {
   const body = presentOptions({

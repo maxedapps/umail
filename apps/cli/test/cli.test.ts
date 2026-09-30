@@ -4,7 +4,6 @@ import { ApprovalToken, NotFound } from "@umail/api-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, layer } from "@effect/vitest";
 import * as Cause from "effect/Cause";
-import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,7 +20,6 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import { OAuthScheduler, type OAuthSchedulerService } from "../src/auth.ts";
 import { OAuthCredentialStore, type OAuthCredentialStoreService } from "../src/credential-store.ts";
 import {
   ApprovalTokenInputError,
@@ -62,11 +60,6 @@ const testCredentialStore = {
   remove: Effect.void,
   withLock: (body) => body,
 } satisfies OAuthCredentialStoreService;
-
-const testScheduler = {
-  now: Clock.currentTimeMillis,
-  sleep: () => Effect.void,
-} satisfies OAuthSchedulerService;
 
 const approvalTokenText = "a".repeat(64);
 const approvalToken = Schema.decodeSync(ApprovalToken)(approvalTokenText);
@@ -308,7 +301,6 @@ function runProgram(
     Effect.provideService(HttpClient.HttpClient, httpClient),
     Effect.provideService(ApprovalTokenSource, tokenSource),
     Effect.provideService(OAuthCredentialStore, credentialStore),
-    Effect.provideService(OAuthScheduler, testScheduler),
     Effect.provide(cliTestLayer()),
   );
 }
@@ -396,7 +388,6 @@ function runApprovalFailure(httpClient: HttpClient.HttpClient) {
     Effect.provideService(HttpClient.HttpClient, httpClient),
     Effect.provideService(ApprovalTokenSource, approvalTokenSource([])),
     Effect.provideService(OAuthCredentialStore, testCredentialStore),
-    Effect.provideService(OAuthScheduler, testScheduler),
     Effect.provide(cliTestLayer()),
   );
 }
@@ -1639,7 +1630,6 @@ describe("failure messages", () => {
         ]).pipe(
           Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(testEnv)),
           Effect.provideService(HttpClient.HttpClient, unusedHttpClient()),
-          Effect.provideService(OAuthScheduler, testScheduler),
           Effect.provideService(ApprovalTokenSource, unusedApprovalTokenSource),
         ),
       );

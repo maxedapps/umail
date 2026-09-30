@@ -1,22 +1,19 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, layer } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import {
-  accessToken,
-  login,
-  logout,
-  OAuthScheduler,
-  type OAuthSchedulerService,
-} from "../src/auth.ts";
+import { accessToken, login, logout } from "../src/auth.ts";
 import {
   makeCredentialStore,
   OAuthCredentialStore,
@@ -41,20 +38,26 @@ const DEVICE = {
   interval: 2,
 };
 
-type CapturedRequest = { readonly method: string; readonly url: string; readonly body: string };
+type CapturedRequest = {
+  readonly method: string;
+  readonly url: string;
+  readonly body: string;
+  // The clock's time when the request was sent.
+  readonly at: number;
+};
 type ResponseFactory = (request: CapturedRequest, index: number) => Response;
 
 function captureHttp(factory: ResponseFactory) {
   const requests: Array<CapturedRequest> = [];
-  const httpClient = HttpClient.make((request, url) => {
-    const body =
-      request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
-    const captured = { method: request.method, url: url.toString(), body };
-    requests.push(captured);
-    return Effect.succeed(
-      HttpClientResponse.fromWeb(request, factory(captured, requests.length - 1)),
-    );
-  });
+  const httpClient = HttpClient.make((request, url) =>
+    Effect.map(Clock.currentTimeMillis, (at) => {
+      const body =
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+      const captured = { method: request.method, url: url.toString(), body, at };
+      requests.push(captured);
+      return HttpClientResponse.fromWeb(request, factory(captured, requests.length - 1));
+    }),
+  );
   return { httpClient, requests };
 }
 
@@ -96,30 +99,26 @@ function memoryStore(initial: OAuthCredentials | null = null) {
   return { service, changes, current: () => current };
 }
 
-function controlledScheduler(initial = 1_000) {
-  let now = initial;
-  const sleeps: Array<number> = [];
-  const service = {
-    now: Effect.sync(() => now),
-    sleep: (milliseconds) =>
-      Effect.sync(() => {
-        sleeps.push(milliseconds);
-        now += milliseconds;
-      }),
-  } satisfies OAuthSchedulerService;
-  return { service, sleeps };
+// Runs the effect while the TestClock moves on a second at a time, as for a person approving the
+// device login in a browser.
+function whileTimePasses<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect);
+    while (fiber.pollUnsafe() === undefined) {
+      yield* TestClock.adjust("1 second");
+    }
+    return yield* Fiber.join(fiber);
+  });
 }
 
 function withAuth<A, E>(
-  effect: Effect.Effect<A, E, HttpClient.HttpClient | OAuthCredentialStore | OAuthScheduler>,
+  effect: Effect.Effect<A, E, HttpClient.HttpClient | OAuthCredentialStore>,
   httpClient: HttpClient.HttpClient,
   store: OAuthCredentialStoreService,
-  scheduler: OAuthSchedulerService,
 ) {
   return effect.pipe(
     Effect.provideService(HttpClient.HttpClient, httpClient),
     Effect.provideService(OAuthCredentialStore, store),
-    Effect.provideService(OAuthScheduler, scheduler),
     Effect.provideService(
       ConfigProvider.ConfigProvider,
       ConfigProvider.fromUnknown({ UMAIL_URL: ORIGIN }),
@@ -142,7 +141,6 @@ describe("OAuth device login", () => {
   it.effect("uses the static CLI client, polls deterministically, and writes under the lock", () =>
     Effect.gen(function* () {
       const store = memoryStore();
-      const scheduler = controlledScheduler();
       const responses = [
         json(METADATA),
         json(DEVICE),
@@ -157,15 +155,16 @@ describe("OAuth device login", () => {
         }),
       ];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-      yield* withAuth(login, http.httpClient, store.service, scheduler.service);
-      expect(scheduler.sleeps).toEqual([2_000, 2_000, 7_000]);
+      yield* whileTimePasses(withAuth(login, http.httpClient, store.service));
+      // Every 2 s, 5 s more after slow_down.
+      expect(http.requests.map((request) => request.at)).toEqual([0, 0, 2_000, 4_000, 11_000]);
       expect(store.changes).toEqual([{ kind: "write", locked: true }]);
       expect(store.current()).toEqual({
         origin: ORIGIN,
         scope: "umail:access offline_access",
         accessToken: "approved",
         refreshToken: "refresh",
-        expiresAt: 1_000 + 11_000 + 300_000,
+        expiresAt: 11_000 + 300_000,
       });
       expect(http.requests.map((request) => new URL(request.url).pathname)).toEqual([
         "/.well-known/oauth-authorization-server/api/auth",
@@ -184,9 +183,7 @@ describe("OAuth device login", () => {
       const http = captureHttp(() =>
         json({ ...METADATA, device_authorization_endpoint: "https://attacker.invalid/device" }),
       );
-      const error = yield* Effect.flip(
-        withAuth(login, http.httpClient, store.service, controlledScheduler().service),
-      );
+      const error = yield* Effect.flip(withAuth(login, http.httpClient, store.service));
       expect(error.message).toBe(
         `OAuth discovery failed: endpoint https://attacker.invalid/device is not on ${ORIGIN}. Try again; if it keeps failing, check UMAIL_URL.`,
       );
@@ -205,7 +202,7 @@ describe("OAuth device login", () => {
       ];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
       const error = yield* Effect.flip(
-        withAuth(login, http.httpClient, store.service, controlledScheduler().service),
+        whileTimePasses(withAuth(login, http.httpClient, store.service)),
       );
       expect(error.message).toBe("Device authorization was denied in the browser.");
       expect(store.current()).toBeNull();
@@ -218,12 +215,7 @@ describe("OAuth refresh and logout", () => {
     Effect.gen(function* () {
       const store = memoryStore(validCredentials({ expiresAt: 1_000_000 }));
       const http = captureHttp(() => json({}, 500));
-      const token = yield* withAuth(
-        accessToken,
-        http.httpClient,
-        store.service,
-        controlledScheduler(10_000).service,
-      );
+      const token = yield* withAuth(accessToken, http.httpClient, store.service);
       expect(Redacted.value(token)).toBe("initial-access-token");
       expect(http.requests).toEqual([]);
     }),
@@ -233,12 +225,7 @@ describe("OAuth refresh and logout", () => {
     Effect.gen(function* () {
       const store = memoryStore(validCredentials({ origin: "https://other.example.test" }));
       const error = yield* Effect.flip(
-        withAuth(
-          accessToken,
-          captureHttp(() => json({}, 500)).httpClient,
-          store.service,
-          controlledScheduler().service,
-        ),
+        withAuth(accessToken, captureHttp(() => json({}, 500)).httpClient, store.service),
       );
       expect(error.message).toBe(
         `Stored credentials are for https://other.example.test, not ${ORIGIN}. Run: umail login`,
@@ -265,9 +252,7 @@ describe("OAuth refresh and logout", () => {
       const store = memoryStore(validCredentials({ expiresAt: 1_001 }));
       const responses = [json(METADATA), json({ error }, 400)];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-      const failure = yield* Effect.flip(
-        withAuth(accessToken, http.httpClient, store.service, controlledScheduler(1_000).service),
-      );
+      const failure = yield* Effect.flip(withAuth(accessToken, http.httpClient, store.service));
       expect(failure.message).toBe(message);
       expect(store.changes).toEqual([]);
     }),
@@ -286,12 +271,7 @@ describe("OAuth refresh and logout", () => {
         }),
       ];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-      const token = yield* withAuth(
-        accessToken,
-        http.httpClient,
-        store.service,
-        controlledScheduler(1_000).service,
-      );
+      const token = yield* withAuth(accessToken, http.httpClient, store.service);
       expect(Redacted.value(token)).toBe("rotated");
       expect(store.current()).toMatchObject({ refreshToken: "rotated-refresh" });
       expect(store.changes).toEqual([{ kind: "write", locked: true }]);
@@ -321,9 +301,7 @@ describe("OAuth refresh and logout", () => {
         }),
       ];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-      const error = yield* Effect.flip(
-        withAuth(accessToken, http.httpClient, store, controlledScheduler(1_000).service),
-      );
+      const error = yield* Effect.flip(withAuth(accessToken, http.httpClient, store));
       expect(error.message).toBe("/state/oauth.json cannot be written: disk full");
     }),
   );
@@ -333,9 +311,7 @@ describe("OAuth refresh and logout", () => {
       const store = memoryStore(validCredentials());
       const responses = [json(METADATA), json({ error: "server_error" }, 500)];
       const http = captureHttp((_request, index) => responses[index] ?? json({}, 500));
-      const error = yield* Effect.flip(
-        withAuth(logout, http.httpClient, store.service, controlledScheduler().service),
-      );
+      const error = yield* Effect.flip(withAuth(logout, http.httpClient, store.service));
       expect(error.message).toBe(
         "Could not revoke access on the server; local OAuth credentials were kept. OAuth revocation failed: HTTP 500 server_error. Try again; if it keeps failing, check UMAIL_URL.",
       );
@@ -354,7 +330,7 @@ describe("OAuth refresh and logout", () => {
         }
         return new Response(null, { status: 200 });
       });
-      yield* withAuth(logout, http.httpClient, store.service, controlledScheduler().service);
+      yield* withAuth(logout, http.httpClient, store.service);
       expect(store.current()).toBeNull();
       expect(store.changes).toEqual([{ kind: "remove", locked: true }]);
       expect(http.requests.map((request) => new URL(request.url).pathname)).toEqual([
