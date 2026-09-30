@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import type { MailHtmlPolicy, MailHtmlPolicyError, StoredMailHtml } from "./html-policy.ts";
+import type { MailHtmlPolicy, MailHtmlPolicyError } from "./html-policy.ts";
 import type { CompleteAttemptOutcome } from "../account/domain.ts";
 
 export type NamedMailboxSender = {
@@ -20,30 +20,14 @@ export type OutboundMail = {
   readonly cc: ReadonlyArray<string>;
   readonly subject: string;
   readonly text: string | null;
-  readonly html: StoredMailHtml | null;
+  readonly html: string | null;
   readonly inReplyTo: string | null;
   readonly references: string | null;
 };
 
-// The mail exactly as the provider receives it: stored HTML already materialized.
-export type ProviderOutboundMail = Omit<OutboundMail, "html"> & {
-  readonly html: string | null;
-};
-
 export interface EmailSender {
-  send(mail: ProviderOutboundMail): Effect.Effect<CompleteAttemptOutcome>;
+  send(mail: OutboundMail): Effect.Effect<CompleteAttemptOutcome>;
 }
-
-type ProviderSendMessage = {
-  from: { email: string; name: string };
-  replyTo: { email: string; name: string };
-  to: Array<string>;
-  subject: string;
-  cc?: Array<string>;
-  text?: string;
-  html?: string;
-  headers?: Record<string, string>;
-};
 
 // Codes that prove the provider did not deliver the mail. Anything else may have been sent, so it
 // settles `unknown` and is never retried. E_DELIVERY_FAILED is a rejection by a recipient's server,
@@ -77,21 +61,22 @@ const ProviderErrorFields = Schema.Struct({
 
 const ERROR_CODE_PATTERN = /E_[A-Z0-9_]+/;
 
+// Stored HTML keeps remote images inert; the provider gets them as live sources.
 export function materializeProviderMail(
   htmlPolicy: MailHtmlPolicy,
   applicationUrl: URL,
   mail: OutboundMail,
-): Effect.Effect<ProviderOutboundMail, MailHtmlPolicyError> {
+): Effect.Effect<OutboundMail, MailHtmlPolicyError> {
   if (mail.html === null) {
-    return Effect.succeed({ ...mail, html: null });
+    return Effect.succeed(mail);
   }
   return htmlPolicy
-    .materializeRemoteImages({ body: mail.html.body, applicationUrl })
+    .materializeRemoteImages({ body: mail.html, applicationUrl })
     .pipe(Effect.map((html) => ({ ...mail, html })));
 }
 
-export function toSendEmailMessage(mail: ProviderOutboundMail): ProviderSendMessage {
-  const message: ProviderSendMessage = {
+export function toSendEmailMessage(mail: OutboundMail): Cloudflare.Email.SendEmailMessage {
+  const message: Cloudflare.Email.SendEmailMessage = {
     from: namedAddress(mail.from),
     replyTo: namedAddress(mail.replyTo),
     to: [...mail.to],
@@ -175,21 +160,23 @@ function providerErrorCode(cause: unknown): string | null {
   return null;
 }
 
+// Each send resolves the binding in the runtime context the sender was built in.
 export const cloudflareEmailSender = Effect.fn("cloudflareEmailSender")(function* (
   client: Cloudflare.Email.SendClient,
 ): Effect.fn.Return<EmailSender, never, Alchemy.RuntimeContext> {
-  const binding = yield* client.raw;
+  const context = yield* Effect.context<Alchemy.RuntimeContext>();
   return {
     send: (mail) =>
-      Effect.promise(() =>
-        binding.send(toSendEmailMessage(mail)).then(
-          (result): CompleteAttemptOutcome => ({
+      client.send(toSendEmailMessage(mail)).pipe(
+        Effect.match({
+          onFailure: (error) => classifyProviderFailure(error.cause),
+          onSuccess: (result): CompleteAttemptOutcome => ({
             kind: "accepted",
             providerMessageId: result.messageId,
             rfcMessageId: normalizeRfcMessageId(result.messageId),
           }),
-          classifyProviderFailure,
-        ),
+        }),
+        Effect.provideContext(context),
       ),
   } satisfies EmailSender;
 });

@@ -572,7 +572,6 @@ export type OutboundDispatch = {
   readonly subject: string;
   readonly textBody: string | null;
   readonly htmlBody: string | null;
-  readonly hasRemoteImages: boolean;
   readonly from: AccountMailContact | null;
   readonly replyTo: AccountMailContact | null;
   readonly to: ReadonlyArray<AccountMailContact>;

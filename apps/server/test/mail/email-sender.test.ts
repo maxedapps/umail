@@ -9,7 +9,7 @@ import {
   materializeProviderMail,
   toSendEmailMessage,
 } from "../../src/mail/email-sender.ts";
-import type { OutboundMail, ProviderOutboundMail } from "../../src/mail/email-sender.ts";
+import type { OutboundMail } from "../../src/mail/email-sender.ts";
 import { FakeMailHtmlPolicy } from "./fakes.ts";
 
 const STORED =
@@ -29,7 +29,7 @@ describe("provider mail mapping", () => {
           cc: [],
           subject: "Hello",
           text: "plain",
-          html: { body: STORED, hasRemoteImages: true },
+          html: STORED,
           inReplyTo: null,
           references: null,
         };
@@ -41,7 +41,7 @@ describe("provider mail mapping", () => {
   );
 
   it("serializes named From and Reply-To, string To/CC, and threading headers", () => {
-    const mail: ProviderOutboundMail = {
+    const mail: OutboundMail = {
       from: { email: "inbox@umail.example.com", name: "Inbox" },
       replyTo: { email: "inbox@umail.example.com", name: "Inbox" },
       to: ["alice@example.com"],
@@ -68,7 +68,7 @@ describe("provider mail mapping", () => {
   });
 
   it("omits empty CC and threading headers", () => {
-    const mail: ProviderOutboundMail = {
+    const mail: OutboundMail = {
       from: { email: "inbox@umail.example.com", name: null },
       replyTo: { email: "inbox@umail.example.com", name: null },
       to: ["alice@example.com"],
@@ -99,7 +99,7 @@ const MAIL = {
   html: null,
   inReplyTo: null,
   references: null,
-} satisfies ProviderOutboundMail;
+} satisfies OutboundMail;
 
 describe("Cloudflare email sender", () => {
   it.effect("captures each event's native binding and preserves its method receiver", () =>
@@ -121,7 +121,6 @@ describe("Cloudflare email sender", () => {
 
       const firstSender = yield* constructSender(client, testRuntimeContext("first-event"));
       const secondSender = yield* constructSender(client, testRuntimeContext("second-event"));
-      expect(client.resolvedContexts).toEqual(["first-event", "second-event"]);
 
       expect(yield* firstSender.send(MAIL)).toEqual({
         kind: "accepted",
@@ -183,6 +182,16 @@ describe("Cloudflare email sender", () => {
           failureDetail: "E_DELIVERY_FAILED: 550 mailbox unavailable",
         });
 
+        // A binding that throws instead of rejecting is classified the same way.
+        binding.next = {
+          kind: "throws",
+          error: { code: "E_FIELD_MISSING", message: "missing subject" },
+        };
+        expect(yield* sender.send(MAIL)).toEqual({
+          kind: "rejected",
+          failureDetail: "E_FIELD_MISSING: missing subject",
+        });
+
         // An unrecognized failure keeps its message, bounded and without the stack.
         binding.next = { kind: "failed", error: new Error(`connection lost ${"x".repeat(400)}`) };
         const unknown = yield* sender.send(MAIL);
@@ -197,10 +206,10 @@ describe("Cloudflare email sender", () => {
 
 type NativeSendBehavior =
   | { readonly kind: "accepted"; readonly messageId: string }
-  | {
-      readonly kind: "failed";
-      readonly error: Error | { readonly code: string; readonly message: string };
-    };
+  | { readonly kind: "failed"; readonly error: NativeSendError }
+  | { readonly kind: "throws"; readonly error: NativeSendError };
+
+type NativeSendError = Error | { readonly code: string; readonly message: string };
 
 class RecordingSendEmail implements Runtime.SendEmail {
   readonly messages: Array<Runtime.EmailMessage | Runtime.EmailMessageBuilder> = [];
@@ -216,6 +225,9 @@ class RecordingSendEmail implements Runtime.SendEmail {
     message: Runtime.EmailMessage | Runtime.EmailMessageBuilder,
   ): Promise<Runtime.EmailSendResult> {
     this.messages.push(message);
+    if (this.next.kind === "throws") {
+      throw this.next.error;
+    }
     if (this.next.kind === "failed") {
       return Promise.reject(this.next.error);
     }
@@ -242,12 +254,21 @@ class ContextualSendClient implements Cloudflare.Email.SendClient {
     this.bindings = bindings;
   }
 
+  // Fails like alchemy's binding client: a rejection or a throw becomes a SendEmailError.
   send(message: Cloudflare.Email.SendEmailMessage) {
-    return this.raw.pipe(Effect.flatMap((binding) => Effect.promise(() => binding.send(message))));
+    return this.raw.pipe(
+      Effect.flatMap((binding) =>
+        Effect.tryPromise({
+          try: () => binding.send(message),
+          catch: (error) =>
+            new Cloudflare.Email.SendEmailError({ message: String(error), cause: error }),
+        }),
+      ),
+    );
   }
 
-  sendRaw(message: Runtime.EmailMessage) {
-    return this.raw.pipe(Effect.flatMap((binding) => Effect.promise(() => binding.send(message))));
+  sendRaw(_message: Runtime.EmailMessage) {
+    return Effect.die(new Error("the sender never sends raw messages"));
   }
 }
 

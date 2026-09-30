@@ -33,7 +33,7 @@ import {
 } from "../../src/auth/options.ts";
 import { provisionAuth } from "../../src/auth/provisioning.ts";
 import { WebCrypto, webCrypto } from "../../src/crypto.ts";
-import type { ProviderOutboundMail } from "../../src/mail/email-sender.ts";
+import type { OutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
 import { FaithfulMailHtmlPolicy, MemoryArchive, MemoryDestinations } from "./fakes.ts";
 import { createMemoryAccount, type MemoryAccountSqliteStorage } from "./memory-account-store.ts";
@@ -319,7 +319,7 @@ export const runDueWorkPass = Effect.fn("runDueWorkPass")(function* (
     readonly mcpPolicy?: PrincipalPolicy;
   } = {},
 ) {
-  const mails: Array<ProviderOutboundMail> = [];
+  const mails: Array<OutboundMail> = [];
   const nowMs =
     options.at === undefined
       ? yield* world.clock.currentTimeMillis

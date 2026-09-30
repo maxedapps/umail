@@ -7,12 +7,7 @@ import type { MailHtmlPolicy } from "./html-policy.ts";
 import type { OutboundDispatch, OutboundRequester } from "../account/domain.ts";
 import { claimJob, completeAttempt, readDispatch, rejectUndispatched } from "../account/jobs.ts";
 import type { AccountSqliteStorage } from "../account/sqlite.ts";
-import {
-  materializeProviderMail,
-  type EmailSender,
-  type OutboundMail,
-  type ProviderOutboundMail,
-} from "./email-sender.ts";
+import { materializeProviderMail, type EmailSender, type OutboundMail } from "./email-sender.ts";
 import {
   approvalNotificationMail,
   approvalReviewUrl,
@@ -89,7 +84,7 @@ export const dispatchJob = Effect.fn("dispatchJob")(function* (
 });
 
 type PreparedMail =
-  | { readonly kind: "ready"; readonly mail: ProviderOutboundMail }
+  | { readonly kind: "ready"; readonly mail: OutboundMail }
   | { readonly kind: "reject"; readonly detail: string };
 
 // Builds the exact provider mail before the claim, so mail that can never be sent is rejected
@@ -135,10 +130,6 @@ function messageMailFromDispatch(dispatch: OutboundDispatch): OutboundMail | nul
     return null;
   }
   const replyTo = dispatch.replyTo ?? from;
-  const html =
-    dispatch.htmlBody === null
-      ? null
-      : { body: dispatch.htmlBody, hasRemoteImages: dispatch.hasRemoteImages };
   return {
     from: { email: from.address, name: from.displayName },
     replyTo: { email: replyTo.address, name: replyTo.displayName },
@@ -146,7 +137,7 @@ function messageMailFromDispatch(dispatch: OutboundDispatch): OutboundMail | nul
     cc: dispatch.cc.map((contact) => contact.address),
     subject: dispatch.subject,
     text: dispatch.textBody,
-    html,
+    html: dispatch.htmlBody,
     inReplyTo: dispatch.inReplyToHeader,
     references: dispatch.referencesHeader,
   };

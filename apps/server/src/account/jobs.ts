@@ -415,7 +415,6 @@ export function readDispatch(
       subject: content.subject ?? "",
       textBody: content.text_body,
       htmlBody: content.html_body,
-      hasRemoteImages: content.has_remote_images === 1,
       from: firstContact(participants.from),
       replyTo: firstContact(participants.replyTo),
       to: participants.to,
@@ -832,7 +831,6 @@ const DispatchContentRow = Schema.Struct({
   subject: Schema.NullOr(Schema.String),
   text_body: Schema.NullOr(Schema.String),
   html_body: Schema.NullOr(Schema.String),
-  has_remote_images: Schema.Finite,
   in_reply_to_rfc_message_id: Schema.NullOr(Schema.String),
 });
 
@@ -844,7 +842,7 @@ function readDispatchContent(
     Schema.decodeUnknownSync(DispatchContentRow),
     storage.sql
       .exec(
-        `SELECT subject, text_body, html_body, has_remote_images, in_reply_to_rfc_message_id
+        `SELECT subject, text_body, html_body, in_reply_to_rfc_message_id
          FROM messages
          WHERE id = ?`,
         messageId,

@@ -19,7 +19,7 @@ import type { CompleteAttemptOutcome, OutboundRequester } from "../../src/accoun
 import { FAILED_STEP_RETRY_MS, runDueWork, type DueWorkPorts } from "../../src/account/due-work.ts";
 import { claimJob } from "../../src/account/jobs.ts";
 import { WebCrypto, randomId } from "../../src/crypto.ts";
-import type { EmailSender, ProviderOutboundMail } from "../../src/mail/email-sender.ts";
+import type { EmailSender, OutboundMail } from "../../src/mail/email-sender.ts";
 import {
   APPROVAL_NOTIFICATION_SUBJECT,
   deriveApprovalToken,
@@ -419,14 +419,14 @@ const createWorld = Effect.fn("createWorld")(function* (
 class QueueUnavailable extends Data.TaggedError("QueueUnavailable") {}
 
 class FakeSender implements EmailSender {
-  readonly mails: Array<ProviderOutboundMail> = [];
+  readonly mails: Array<OutboundMail> = [];
   next: CompleteAttemptOutcome = {
     kind: "accepted",
     providerMessageId: "prov-1",
     rfcMessageId: null,
   };
 
-  send(mail: ProviderOutboundMail): Effect.Effect<CompleteAttemptOutcome> {
+  send(mail: OutboundMail): Effect.Effect<CompleteAttemptOutcome> {
     return Effect.sync(() => {
       this.mails.push(mail);
       return this.next;
