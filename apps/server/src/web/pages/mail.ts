@@ -80,7 +80,7 @@ function threadRow(thread: MailThreadSummary, showMailboxes: boolean): Html {
   </li>`;
 }
 
-export function mailListPage(
+function mailListPage(
   addresses: ReadonlyArray<Address>,
   mailbox: Address | undefined,
   threads: ReadonlyArray<MailThreadSummary>,

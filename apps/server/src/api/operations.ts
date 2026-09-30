@@ -64,7 +64,7 @@ type StoreHttpError = NotFound | NotPermitted | Conflict;
 // Expected store errors cross the DO RPC boundary as plain `{ _tag, ... }` objects, so they are
 // classified by tag only. Anything else (a DO defect or transport failure arrives as alchemy's
 // `RpcCallError`) is a defect: alchemy logs it and answers 500.
-export const storeCall = <A, R>(
+const storeCall = <A, R>(
   effect: Effect.Effect<A, AccountStoreError, R>,
 ): Effect.Effect<A, StoreHttpError, R> =>
   Effect.catch(effect, (error: unknown): Effect.Effect<never, StoreHttpError> => {
