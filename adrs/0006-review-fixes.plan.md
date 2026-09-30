@@ -1,6 +1,6 @@
 # Plan for 0006: Fix the code review of main b47d065
 
-- **Status:** Implemented; in code review
+- **Status:** Done (code review: one finding, fixed)
 - **Source:** `~/agent-reports/umail-code-review.md` (bugs 1–3, simplifications 4–7, item 8 in touched modules)
 - **ADR:** none. Every task follows an existing ADR decision; none makes a new design choice.
 
@@ -70,8 +70,12 @@
 ### 8. Module-local exports (item 8)
 
 - Drop `export` from symbols used only in their own module, in modules touched above.
-- **Done:** yes: `storeCall` (`operations.ts`) and `mailListPage` (`web/pages/mail.ts`). The stale comment in `app-runtime.ts` is in a module this plan does not touch.
+- **Done:** yes: `storeCall` (`operations.ts`), `mailListPage` and `threadPage` (`web/pages/mail.ts`). The stale comment in `app-runtime.ts` is in a module this plan does not touch.
 
 ## Open questions
 
 None.
+
+## Code review
+
+Codex reviewed `b47d065..17359aa`: no bug or security findings. It re-ran the three repros independently (REST deactivate, reply replay before and after acceptance, a 405-message conversation in agent-browser) and checked alchemy, effect and oauth-provider source. One simplification, fixed: `threadPage` was still exported although only `threadRoute` uses it.

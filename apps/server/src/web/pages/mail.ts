@@ -258,7 +258,7 @@ function deliveryBadge(message: MailMessageSummary | ThreadMessage): Html | null
     : null;
 }
 
-export function threadPage(
+function threadPage(
   addresses: ReadonlyArray<Address>,
   threadId: string,
   messages: ReadonlyArray<MailMessageSummary>,
