@@ -9,7 +9,7 @@ overrides:
   '@cloudflare/workers-types': 5.20260901.1
 
 patchedDependencies:
-  '@better-auth/oauth-provider@1.7.2': 055bc68747c10af80168750c4471f4f3c9c3aa7dc6ec98f02eb01939f0a0fd23
+  '@better-auth/oauth-provider@1.7.2': d7840b02a49782c46d0c657fe9da8e592e1ddf52885d12ee2c6b6867ee0d3448
   alchemy@2.0.0-beta.77: 49c6cf1b40eb215ef829b2b99874ff54dff8798bfd66959859eee595ed4ff6b8
   postal-mime@3.0.0: 253b0e029f0c030fc545435cbbb8d134e748ef6accaa7553c4fd322a274479d0
 
@@ -100,7 +100,7 @@ importers:
         version: 1.7.2(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
       '@better-auth/oauth-provider':
         specifier: 1.7.2
-        version: 1.7.2(patch_hash=055bc68747c10af80168750c4471f4f3c9c3aa7dc6ec98f02eb01939f0a0fd23)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
+        version: 1.7.2(patch_hash=d7840b02a49782c46d0c657fe9da8e592e1ddf52885d12ee2c6b6867ee0d3448)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
       '@distilled.cloud/cloudflare':
         specifier: 1.0.0-rc.9
         version: 1.0.0-rc.9(effect@4.0.0-rc.112)
@@ -3759,7 +3759,7 @@ snapshots:
   '@better-auth/mcp@1.7.2(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))':
     dependencies:
       '@better-auth/core': 1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2)
-      '@better-auth/oauth-provider': 1.7.2(patch_hash=055bc68747c10af80168750c4471f4f3c9c3aa7dc6ec98f02eb01939f0a0fd23)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
+      '@better-auth/oauth-provider': 1.7.2(patch_hash=d7840b02a49782c46d0c657fe9da8e592e1ddf52885d12ee2c6b6867ee0d3448)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))
       better-auth: 1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10)
       better-call: 1.4.0(zod@4.4.3)
       jose: 6.2.8
@@ -3777,7 +3777,7 @@ snapshots:
       '@better-auth/core': 1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2)
       '@better-auth/utils': 0.4.2
 
-  '@better-auth/oauth-provider@1.7.2(patch_hash=055bc68747c10af80168750c4471f4f3c9c3aa7dc6ec98f02eb01939f0a0fd23)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))':
+  '@better-auth/oauth-provider@1.7.2(patch_hash=d7840b02a49782c46d0c657fe9da8e592e1ddf52885d12ee2c6b6867ee0d3448)(@better-auth/core@1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.2(@cloudflare/workers-types@5.20260901.1)(react@19.2.8)(vitest@4.1.10))(better-call@1.4.0(zod@4.4.3))':
     dependencies:
       '@better-auth/core': 1.7.2(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260901.1)(better-call@1.4.0(zod@4.4.3))(jose@6.2.8)(kysely@0.29.5)(nanostores@1.5.2)
       '@better-auth/utils': 0.4.2

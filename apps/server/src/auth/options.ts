@@ -315,26 +315,25 @@ function normalizedRegistration(ctx: GenericEndpointContext, mcpResource: string
   return { context: { body: normalized } };
 }
 
+// Cursor's MCP profile registers as a native client; better-auth, patched for exactly this, then
+// admits its private-use callback.
 function normalizeDynamicRegistration(registration: DynamicRegistration): NormalizedRegistration {
   const grantTypes = registration.grant_types ?? [AUTHORIZATION_CODE_GRANT_TYPE];
-  const resolved = { ...registration, grant_types: grantTypes };
+  const resolved: NormalizedRegistration = isCursorMcpPublicClientRegistration(registration)
+    ? { ...registration, grant_types: grantTypes, application_type: "native" }
+    : { ...registration, grant_types: grantTypes };
   const filtered =
-    registration.redirect_uris === undefined
+    resolved.redirect_uris === undefined
       ? resolved
       : {
           ...resolved,
-          redirect_uris: registration.redirect_uris.filter((uri) =>
-            isSupportedRedirectUri(uri, effectiveApplicationType(registration)),
+          redirect_uris: resolved.redirect_uris.filter((uri) =>
+            isSupportedRedirectUri(uri, resolved.application_type),
           ),
         };
   if (registration.response_types !== undefined) return filtered;
   if (!grantTypes.includes(AUTHORIZATION_CODE_GRANT_TYPE)) return filtered;
   return { ...filtered, response_types: ["code"] };
-}
-
-function effectiveApplicationType(registration: DynamicRegistration): string | undefined {
-  if (isCursorMcpPublicClientRegistration(registration)) return "native";
-  return registration.application_type;
 }
 
 function isCursorMcpPublicClientRegistration(registration: DynamicRegistration): boolean {
