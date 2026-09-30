@@ -93,17 +93,6 @@ export function submitOutbound(
         addresses: authorization.addresses,
       });
     }
-    const fingerprint = outboundIntentFingerprint({
-      mailboxId: identity.id,
-      fromAddress: fromAddress.address,
-      to,
-      cc,
-      subject: input.subject,
-      textBody: input.textBody,
-      htmlBody: input.htmlBody,
-      inReplyToHeader: input.inReplyToHeader,
-      referencesHeader: input.referencesHeader,
-    });
     const existing = readJob(
       storage,
       "j.requester_kind = ? AND j.requester_client_id = ? AND j.idempotency_key = ?",
@@ -112,7 +101,7 @@ export function submitOutbound(
       input.requestId,
     );
     if (existing !== null) {
-      if (existing.intent_fingerprint !== fingerprint) {
+      if (existing.intent_fingerprint !== input.intentFingerprint) {
         throw new SubmissionConflictError({
           requestId: input.requestId,
           requesterClientId: input.requester.clientId,
@@ -155,7 +144,7 @@ export function submitOutbound(
       jobId,
       input.requester,
       input.requestId,
-      fingerprint,
+      input.intentFingerprint,
       messageId,
       identity.id,
       "message",
@@ -168,7 +157,7 @@ export function submitOutbound(
         notificationJobId,
         input.requester,
         approvalNotificationIdempotencyKey(input.requestId),
-        fingerprint,
+        input.intentFingerprint,
         messageId,
         identity.id,
         "approval_notification",
@@ -294,12 +283,16 @@ export function claimJob(storage: AccountSqliteStorage, input: ClaimJobInput): C
   });
 }
 
-// Rechecks the requester's current policy; the job may have waited for approval since submit.
+// Rechecks the mailbox and the requester's current policy; the job may have waited for approval
+// since submit.
 function claimRejection(
   storage: AccountSqliteStorage,
   job: OutboundJobRow,
   policy: PrincipalPolicy | null,
-): JobAuthorizationReason | "approval_required" | null {
+): JobAuthorizationReason | "mailbox_inactive" | "approval_required" | null {
+  if (resolveSendingIdentity(storage, job.mailbox_id) === null) {
+    return "mailbox_inactive";
+  }
   const participants =
     loadParticipantsByMessageIds(storage, [job.message_id]).get(job.message_id) ??
     emptyParticipants();
@@ -714,30 +707,6 @@ function recipientsOutside(
   return recipients
     .filter((recipient) => !allowed.has(comparisonKey(recipient.address)))
     .map((recipient) => recipient.address);
-}
-
-function outboundIntentFingerprint(input: {
-  readonly mailboxId: string;
-  readonly fromAddress: string;
-  readonly to: ReadonlyArray<AccountMailContact>;
-  readonly cc: ReadonlyArray<AccountMailContact>;
-  readonly subject: string;
-  readonly textBody: string | null;
-  readonly htmlBody: string | null;
-  readonly inReplyToHeader: string | null;
-  readonly referencesHeader: string | null;
-}): string {
-  return JSON.stringify([
-    input.mailboxId,
-    input.fromAddress,
-    input.to.map((contact) => [contact.address, contact.displayName]),
-    input.cc.map((contact) => [contact.address, contact.displayName]),
-    input.subject,
-    input.textBody,
-    input.htmlBody,
-    input.inReplyToHeader,
-    input.referencesHeader,
-  ]);
 }
 
 function dedupeAccountMailContacts(

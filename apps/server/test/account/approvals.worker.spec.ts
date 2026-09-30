@@ -507,6 +507,7 @@ const seedPending = Effect.fn("seedPending")(function* (
   const submitted = yield* Effect.promise(() =>
     store.submitOutbound({
       requestId: decodedRequestId,
+      intentFingerprint: "fingerprint",
       requester: { kind: "mcp", clientId: "agent", label: "Client agent" },
       policy: AGENT_POLICY,
       mailboxId: mailbox.id,
@@ -534,6 +535,7 @@ const seedPending = Effect.fn("seedPending")(function* (
 function readyInput(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    intentFingerprint: "fingerprint",
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     policy: OPERATOR_POLICY,
     mailboxId,

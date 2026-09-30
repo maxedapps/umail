@@ -135,6 +135,34 @@ describe("mail pages", () => {
     }),
   );
 
+  it.effect("shows every message of a conversation longer than one store page", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const inbox = yield* seedMailbox(world, "inbox");
+      const first = yield* seedInboundMessage(world, inbox.id, {
+        id: "m-1",
+        subject: "Long",
+        textBody: "Body 1",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+      });
+      for (let index = 2; index <= 201; index += 1) {
+        yield* seedInboundMessage(world, inbox.id, {
+          id: `m-${index}`,
+          subject: "Re: Long",
+          textBody: `Body ${index}`,
+          inReplyToHeader: `<m-${index - 1}@example.com>`,
+          occurredAt: `2026-01-01T00:00:00.${String(index).padStart(3, "0")}Z`,
+        });
+      }
+      const threadPath = `/mail/threads/${first.threadId}`;
+
+      const opened = yield* page(world, threadPath);
+      expect(opened.response.status).toBe(200);
+      expect(opened.body).toContain("Body 201");
+      expect((yield* page(world, `${threadPath}?open=m-201`)).response.status).toBe(200);
+    }),
+  );
+
   it.effect("shows a rejected reply as not sent and a failed forward with its destination", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();

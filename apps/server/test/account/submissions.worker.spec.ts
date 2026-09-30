@@ -284,6 +284,7 @@ function composeInput(
   const [firstTo, ...restTo] = options.to ?? ["recipient@example.com"];
   return {
     requestId,
+    intentFingerprint: JSON.stringify(options),
     requester: options.requester ?? operatorRequester(),
     policy: options.policy ?? OPERATOR_POLICY,
     mailboxId,

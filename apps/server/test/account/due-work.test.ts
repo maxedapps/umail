@@ -229,6 +229,35 @@ describe("store due-work pass", () => {
       }),
   );
 
+  it.live("sends nothing from a mailbox deactivated after the mail was queued or approved", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const approved = yield* world.submit({ requester: AGENT, policy: NEEDS_APPROVAL });
+      const approvalTokenHash = world.lastTokenHash;
+      yield* world.runAt(NOW_MS);
+      expect(world.sender.mails.map((mail) => mail.subject)).toEqual([
+        APPROVAL_NOTIFICATION_SUBJECT,
+      ]);
+      const queued = yield* world.submit({ requester: OPERATOR, policy: OPERATOR_POLICY });
+
+      yield* world.account.patchAddress(world.mailboxId, { active: false }, NOW);
+      yield* world.account.decideApproval({
+        tokenHash: approvalTokenHash,
+        decision: "approved",
+        nowIso: NOW,
+      });
+      yield* world.runAt(NOW_MS + MINUTE);
+      expect(world.sender.mails).toHaveLength(1);
+      for (const jobId of [queued.jobId, approved.jobId]) {
+        expect(yield* world.job(jobId)).toMatchObject({
+          state: "rejected",
+          failureClass: "policy",
+          failureDetail: "mailbox_inactive",
+        });
+      }
+    }),
+  );
+
   it.effect("gives up on the message when Cloudflare rejects its notification", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();
@@ -303,6 +332,7 @@ const createWorld = Effect.fn("createWorld")(function* (
     account,
     sender,
     key,
+    mailboxId: address.id,
     indexed: [] as Array<string>,
     failIndex: false,
     policyFor: (requester: OutboundRequester): Effect.Effect<PrincipalPolicy | null> =>
@@ -322,6 +352,7 @@ const createWorld = Effect.fn("createWorld")(function* (
       const requestId = yield* Schema.decodeEffect(SubmissionRequestId)(yield* randomId);
       const submitted = yield* account.submitOutbound({
         requestId,
+        intentFingerprint: requestId,
         requester: input.requester,
         policy: input.policy,
         mailboxId: address.id,

@@ -426,6 +426,7 @@ describe("account-store job execution", () => {
 function operatorSubmit(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    intentFingerprint: "fingerprint",
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     policy: OPERATOR_POLICY,
     mailboxId,
@@ -454,6 +455,7 @@ function mcpSubmit(
 ) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    intentFingerprint: "fingerprint",
     requester: { kind: "mcp" as const, clientId, label: `Client ${clientId}` },
     policy,
     mailboxId,

@@ -737,6 +737,59 @@ describe("root mailbox API", () => {
     }),
   );
 
+  it.effect("replays an identical reply once its parent is accepted", () =>
+    Effect.gen(function* () {
+      const world = yield* createWorld();
+      const mailbox = yield* seedMailbox(world);
+      const submit = (body: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          const response = yield* world.request("http://umail.test/submissions", {
+            method: "POST",
+            headers: jsonHeaders(authorized(world).headers),
+            body: yield* jsonText(body),
+          });
+          return { status: response.status, body: yield* readJson(response) };
+        });
+      const parent = yield* submit({
+        intent: "compose",
+        requestId: REQUEST_ID,
+        fromAddressId: mailbox.id,
+        to: [{ address: "recipient@example.com" }],
+        subject: "Hello",
+        text: "outbound body",
+      });
+      const parentJob = yield* Schema.decodeUnknownEffect(OutboundJobStatus)(parent.body);
+      const reply = {
+        intent: "reply",
+        requestId: REPLY_REQUEST_ID,
+        fromAddressId: mailbox.id,
+        subject: "Re: Hello",
+        text: "reply body",
+        replyToMessageId: parentJob.messageId,
+        replyMode: "reply",
+      };
+      const first = yield* submit(reply);
+      expect(first.status).toBe(200);
+
+      yield* runDueWorkPass(world, {
+        outcome: { kind: "accepted", providerMessageId: "prov-1", rfcMessageId: PROVIDER_RFC_ID },
+      });
+      const replay = yield* submit(reply);
+      expect(replay.status).toBe(200);
+      expect(replay.body).toMatchObject({ jobId: (first.body as { jobId: string }).jobId });
+      const jobs = yield* world.account.listOutboundJobs({ viewer: { kind: "operator" } });
+      expect(jobs.items).toHaveLength(2);
+
+      for (const changed of [
+        { text: "changed body" },
+        { replyMode: "reply-all" },
+        { replyToMessageId: (first.body as { messageId: string }).messageId },
+      ]) {
+        expect((yield* submit({ ...reply, ...changed })).status).toBe(409);
+      }
+    }),
+  );
+
   it.effect("returns reply errors without creating a job", () =>
     Effect.gen(function* () {
       const world = yield* createWorld();

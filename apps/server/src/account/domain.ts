@@ -455,6 +455,8 @@ export type ApprovalCapabilityWrite = {
 
 export type SubmitOutboundInput = {
   readonly requestId: SubmissionRequestId;
+  // What the caller sent; a replay with the same requestId must match it.
+  readonly intentFingerprint: string;
   readonly requester: OutboundRequester;
   // The requester's current policy; the store checks the send against it.
   readonly policy: PrincipalPolicy;

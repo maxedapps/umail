@@ -362,14 +362,13 @@ export const threadRoute = Effect.fn("threadRoute")(function* (
   principal: Principal,
 ) {
   const params = yield* HttpRouter.schemaParams(ThreadParams);
-  // The store's largest page, so the newest message of any but a huge conversation is on it.
-  let thread = yield* getThread(deps, principal, params.threadId, { limit: 200 });
-  if (thread.messages.some((message) => message.direction === "inbound" && !message.isRead)) {
+  let messages = yield* conversation(deps, principal, params.threadId);
+  if (messages.some((message) => message.direction === "inbound" && !message.isRead)) {
     yield* setThreadReadState(deps, principal, params.threadId, true);
-    thread = yield* getThread(deps, principal, params.threadId, { limit: 200 });
+    messages = yield* conversation(deps, principal, params.threadId);
   }
-  const openId = params.open ?? thread.messages.at(-1)?.id;
-  if (openId === undefined || !thread.messages.some((message) => message.id === openId)) {
+  const openId = params.open ?? messages.at(-1)?.id;
+  if (openId === undefined || !messages.some((message) => message.id === openId)) {
     return yield* new NotFound({
       code: "message_not_found",
       message: `Message ${openId ?? ""} is not in this conversation.`,
@@ -378,8 +377,23 @@ export const threadRoute = Effect.fn("threadRoute")(function* (
   const open = yield* getMessage(deps, principal, openId);
   return yield* htmlResponse(
     200,
-    threadPage(yield* listAddresses(deps), params.threadId, thread.messages, open),
+    threadPage(yield* listAddresses(deps), params.threadId, messages, open),
   );
+});
+
+// Every message of a conversation, oldest first: the console shows it whole, not in pages.
+const conversation = Effect.fn("conversation")(function* (
+  deps: ApiDeps,
+  principal: Principal,
+  threadId: string,
+) {
+  let page = yield* getThread(deps, principal, threadId, { limit: 200 });
+  const messages = [...page.messages];
+  while (page.nextCursor !== null) {
+    page = yield* getThread(deps, principal, threadId, { limit: 200, cursor: page.nextCursor });
+    messages.push(...page.messages);
+  }
+  return messages;
 });
 
 const ThreadIdParams = Schema.Struct({ threadId: Schema.String });

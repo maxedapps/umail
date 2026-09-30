@@ -32,7 +32,6 @@ import {
   NotPermitted,
   parseUtcInstant,
   Unavailable,
-  type SubmissionRequestId,
   type ListJobsQuery,
   type ListMessagesQuery,
   type ListThreadMessagesQuery,
@@ -371,7 +370,7 @@ export const submitMessage = Effect.fn("submitMessage")(function* (
   yield* requireSend(principal);
   const prepared = yield* prepareOutbound(deps, principal, payload);
   const now = yield* currentIso;
-  const submitted = yield* submitPrepared(deps, prepared, principal, payload.requestId, now);
+  const submitted = yield* submitPrepared(deps, prepared, principal, payload, now);
   return projectJobStatus(submitted.job);
 });
 
@@ -573,13 +572,14 @@ const submitPrepared = Effect.fn("submitPrepared")(function* (
   deps: ApiDeps,
   prepared: PreparedOutbound,
   principal: Principal,
-  requestId: SubmissionRequestId,
+  payload: SubmitMessagePayload,
   nowIso: string,
 ): Effect.fn.Return<SubmitOutboundResult, StoreHttpError, Crypto.Crypto | Alchemy.RuntimeContext> {
   const approval = yield* newApprovalCapability(yield* deps.notificationKey, nowIso);
   return yield* deps.account
     .submitOutbound({
-      requestId,
+      requestId: payload.requestId,
+      intentFingerprint: submissionFingerprint(payload),
       requester: outboundRequester(principal),
       policy: principal.policy,
       mailboxId: prepared.mailboxId,
@@ -617,6 +617,22 @@ function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {
             }),
       ),
     );
+}
+
+// What the caller sent, never what is derived from it: a reply's headers change once its parent is
+// accepted, and a retry must still match.
+function submissionFingerprint(payload: SubmitMessagePayload): string {
+  const contacts = (list: ReadonlyArray<MailContact> = []) =>
+    list.map((contact) => [contact.address, contact.displayName ?? null]);
+  return JSON.stringify([
+    payload.fromAddressId,
+    payload.subject,
+    payload.text ?? null,
+    payload.html ?? null,
+    payload.intent === "compose"
+      ? [payload.intent, contacts(payload.to), contacts(payload.cc)]
+      : [payload.intent, payload.replyToMessageId, payload.replyMode],
+  ]);
 }
 
 function outboundRequester(principal: Principal): OutboundRequester {

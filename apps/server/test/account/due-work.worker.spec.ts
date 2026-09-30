@@ -56,6 +56,7 @@ describe("account-store alarm", () => {
       const submitted = yield* Effect.promise(() =>
         store.submitOutbound({
           requestId: REQUEST_ID,
+          intentFingerprint: "fingerprint",
           requester: { kind: "operator", clientId: "cli", label: "AgentMail CLI" },
           policy: OPERATOR_POLICY,
           mailboxId: mailbox.id,

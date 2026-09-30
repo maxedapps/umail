@@ -300,6 +300,7 @@ const thread = Effect.fn("thread")(function* (store: Store, messageId: string) {
 function operatorSubmit(mailboxId: string, requestId: string) {
   return {
     requestId: Schema.decodeSync(SubmissionRequestId)(requestId),
+    intentFingerprint: "fingerprint",
     requester: { kind: "operator" as const, clientId: "cli", label: "AgentMail CLI" },
     policy: OPERATOR_POLICY,
     mailboxId,
