@@ -4,7 +4,6 @@ import {
   MailHtmlPolicyError,
   type MailHtmlMaterialization,
   type MailHtmlPolicy,
-  type MailHtmlSanitization,
   type StoredMailHtml,
 } from "../../src/mail/html-policy.ts";
 import * as Data from "effect/Data";
@@ -12,13 +11,7 @@ import * as Effect from "effect/Effect";
 
 import type { InboundMessage } from "../../src/mail/inbound.ts";
 
-export type MailHtmlSanitizeCall = {
-  readonly html: string;
-  readonly sanitization: MailHtmlSanitization;
-};
-
 export class FakeMailHtmlPolicy implements MailHtmlPolicy {
-  readonly calls: MailHtmlSanitizeCall[] = [];
   private output: StoredMailHtml | null = null;
   private failureReason: MailHtmlPolicyError["reason"] | null = null;
 
@@ -34,11 +27,7 @@ export class FakeMailHtmlPolicy implements MailHtmlPolicy {
     this.failureReason = null;
   }
 
-  sanitizeForStorage(
-    html: string,
-    sanitization: MailHtmlSanitization,
-  ): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
-    this.calls.push({ html, sanitization });
+  sanitizeForStorage(html: string): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
     return this.result(html);
   }
 

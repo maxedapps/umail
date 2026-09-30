@@ -5,7 +5,6 @@ import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 
 import {
   createMailHtmlPolicy,
-  type MailHtmlAttachment,
   type MailHtmlPolicyError,
   type StoredMailHtml,
 } from "../../src/mail/html-policy.ts";
@@ -15,7 +14,6 @@ import {
   parseBoundedMailHtmlFragment,
 } from "../../src/mail/html-parser.ts";
 
-const MESSAGE_ID = "in_worker_corpus";
 const APPLICATION_URL = new URL("https://mail.umail.test/inbox");
 
 type MailHtmlElement = DefaultTreeAdapterMap["element"];
@@ -354,34 +352,14 @@ describe("MailHtmlPolicy storage sanitizer", () => {
       }),
   );
 
-  it.effect("rewrites only unique safe-image CIDs to exact authenticated attachment paths", () =>
+  it.effect("drops cid: image sources and keeps their alt text", () =>
     Effect.gen(function* () {
-      const valid = attachment("att logo/1", "<Logo@UMail>", "IMAGE/PNG");
-      const unsafe = attachment("unsafe", "vector@umail", "image/svg+xml");
-      const result = yield* sanitize(
-        '<img alt="valid" src="CID:logo@umail"><img alt="unsafe" src="cid:vector@umail"><img alt="unknown" src="cid:missing@umail">',
-        [valid, unsafe],
-        "message/with space",
-      );
-      const images = descendantElements(result.body, "img");
-      expect(attribute(images[0], "src")).toBe(
-        "/messages/message%2Fwith%20space/attachments/att%20logo%2F1",
-      );
-      expect(attribute(images[1], "src")).toBeUndefined();
-      expect(attribute(images[2], "src")).toBeUndefined();
-    }),
-  );
-
-  it.effect("drops ambiguous duplicate and empty CIDs", () =>
-    Effect.gen(function* () {
-      const result = yield* sanitize('<img src="cid:LOGO@UMAIL"><img src="cid:">', [
-        attachment("first", "<Logo@UMail>", "image/png"),
-        attachment("second", "logo@umail", "image/jpeg"),
-        attachment("empty", "<>", "image/png"),
-      ]);
+      const result = yield* sanitize('<img alt="logo" src="cid:logo@umail"><img src="CID:x">');
       const images = descendantElements(result.body, "img");
       expect(images).toHaveLength(2);
+      expect(attribute(images[0], "alt")).toBe("logo");
       expect(images.every((element) => attribute(element, "src") === undefined)).toBe(true);
+      expect(result.hasRemoteImages).toBe(false);
     }),
   );
 });
@@ -405,16 +383,8 @@ describe("MailHtmlPolicy parser resource budgets", () => {
       const policy = createMailHtmlPolicy();
       yield* sanitize("<br>".repeat(atLimit - 1));
       yield* sanitize("<br>".repeat(atLimit));
-      yield* expectResourceExhaustion(
-        policy.sanitizeForStorage("<br>".repeat(atLimit + 1), {
-          messageId: MESSAGE_ID,
-          attachments: [],
-        }),
-      );
-      const stored = yield* policy.sanitizeForStorage("<p>next parse</p>", {
-        messageId: MESSAGE_ID,
-        attachments: [],
-      });
+      yield* expectResourceExhaustion(policy.sanitizeForStorage("<br>".repeat(atLimit + 1)));
+      const stored = yield* policy.sanitizeForStorage("<p>next parse</p>");
       expect(stored.body).toBe("<p>next parse</p>");
     }),
   );
@@ -660,12 +630,8 @@ describe("MailHtmlPolicy remote image materializer", () => {
   );
 });
 
-function sanitize(
-  html: string,
-  attachments: ReadonlyArray<MailHtmlAttachment> = [],
-  messageId = MESSAGE_ID,
-) {
-  return createMailHtmlPolicy().sanitizeForStorage(html, { messageId, attachments });
+function sanitize(html: string) {
+  return createMailHtmlPolicy().sanitizeForStorage(html);
 }
 
 function materialize(body: string) {
@@ -709,10 +675,6 @@ function attributes(count: number): string {
 
 function resourceExpandingAnchor(pathPrefix = ""): string {
   return `<a href="https://example.test/${pathPrefix}open" title="x" aria-hidden="true" aria-label="x" dir="ltr" lang="en" role="link">open</a>`;
-}
-
-function attachment(id: string, contentId: string, mimeType: string): MailHtmlAttachment {
-  return { id, contentId, mimeType };
 }
 
 function isMailHtmlElement(node: MailHtmlNode): node is MailHtmlElement {

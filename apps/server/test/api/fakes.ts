@@ -5,7 +5,6 @@ import {
   MailHtmlPolicyError,
   type MailHtmlMaterialization,
   type MailHtmlPolicy,
-  type MailHtmlSanitization,
   type StoredMailHtml,
 } from "../../src/mail/html-policy.ts";
 import type { MailHtmlResourceLimit } from "../../src/mail/html-parser.ts";
@@ -81,13 +80,7 @@ function storedMailHtml(body: string): StoredMailHtml {
   return { body, hasRemoteImages: true };
 }
 
-export type MailHtmlPolicySanitizeCall = {
-  readonly html: string;
-  readonly sanitization: MailHtmlSanitization;
-};
-
 export class FaithfulMailHtmlPolicy implements MailHtmlPolicy {
-  readonly sanitizeCalls: MailHtmlPolicySanitizeCall[] = [];
   readonly materializeCalls: MailHtmlMaterialization[] = [];
   private sanitizerFailure: MailHtmlPolicyError | null = null;
   private materializerFails = false;
@@ -104,12 +97,8 @@ export class FaithfulMailHtmlPolicy implements MailHtmlPolicy {
     this.materializerFails = true;
   }
 
-  sanitizeForStorage(
-    html: string,
-    sanitization: MailHtmlSanitization,
-  ): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
+  sanitizeForStorage(html: string): Effect.Effect<StoredMailHtml, MailHtmlPolicyError> {
     return Effect.suspend(() => {
-      this.sanitizeCalls.push({ html, sanitization });
       if (this.sanitizerFailure !== null) {
         return Effect.fail(this.sanitizerFailure);
       }

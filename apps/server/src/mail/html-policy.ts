@@ -14,17 +14,6 @@ import {
   parseBoundedMailHtmlFragment,
 } from "./html-parser.ts";
 
-export type MailHtmlAttachment = {
-  readonly id: string;
-  readonly contentId: string | null;
-  readonly mimeType: string;
-};
-
-export type MailHtmlSanitization = {
-  readonly messageId: string;
-  readonly attachments: ReadonlyArray<MailHtmlAttachment>;
-};
-
 export type MailHtmlMaterialization = {
   readonly body: string;
   readonly applicationUrl: URL;
@@ -44,10 +33,7 @@ export class MailHtmlPolicyError extends Schema.TaggedError<MailHtmlPolicyError>
 ) {}
 
 export interface MailHtmlPolicy {
-  sanitizeForStorage(
-    html: string,
-    sanitization: MailHtmlSanitization,
-  ): Effect.Effect<StoredMailHtml, MailHtmlPolicyError>;
+  sanitizeForStorage(html: string): Effect.Effect<StoredMailHtml, MailHtmlPolicyError>;
   materializeRemoteImages(
     materialization: MailHtmlMaterialization,
   ): Effect.Effect<string, MailHtmlPolicyError>;
@@ -60,12 +46,7 @@ const LINK_REL_TOKENS = ["noopener", "noreferrer", "nofollow"] as const;
 // `store` sanitizes untrusted input; `activate` re-sanitizes stored HTML and turns its inert
 // remote-image metadata into live cross-origin sources.
 type MailHtmlCleanContext =
-  | {
-      readonly mode: "store";
-      readonly messageId: string;
-      readonly cidResolutions: ReadonlyMap<string, CidResolution>;
-      hasRemoteImages: boolean;
-    }
+  | { readonly mode: "store"; hasRemoteImages: boolean }
   | { readonly mode: "activate"; readonly applicationOrigin: string };
 
 // Kept, with only the attributes allowed below.
@@ -175,8 +156,6 @@ const ELEMENT_PROPERTIES = new Map<string, ReadonlySet<string>>([
   ["th", new Set(["colSpan", "headers", "rowSpan", "scope"])],
   ["time", new Set(["dateTime"])],
 ]);
-
-const SAFE_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 const COLOR_PROPERTIES = new Set([
   "color",
@@ -312,15 +291,11 @@ const VERTICAL_ALIGNMENTS = new Set([
   "bottom",
 ]);
 
-type CidResolution =
-  | { readonly kind: "valid"; readonly attachmentId: string }
-  | { readonly kind: "invalid" };
-
 export function createMailHtmlPolicy(): MailHtmlPolicy {
   return {
-    sanitizeForStorage(html, sanitization) {
+    sanitizeForStorage(html) {
       return Effect.try({
-        try: () => sanitizeHtmlForStorage(html, sanitization),
+        try: () => sanitizeHtmlForStorage(html),
         catch: mailHtmlPolicyErrorFromCause,
       });
     },
@@ -339,13 +314,8 @@ export function createMailHtmlPolicy(): MailHtmlPolicy {
   };
 }
 
-function sanitizeHtmlForStorage(html: string, sanitization: MailHtmlSanitization): StoredMailHtml {
-  const context: MailHtmlCleanContext = {
-    mode: "store",
-    messageId: sanitization.messageId,
-    cidResolutions: cidMap(sanitization.attachments),
-    hasRemoteImages: false,
-  };
+function sanitizeHtmlForStorage(html: string): StoredMailHtml {
+  const context: MailHtmlCleanContext = { mode: "store", hasRemoteImages: false };
   const body = toHtml(cleanMailHtml(parseMailHtmlFragment(html), context));
   // Stored HTML is parsed again when it is materialized, so it must fit the same parse budgets.
   parseBoundedMailHtmlFragment(body);
@@ -433,15 +403,9 @@ function cleanImage(
     properties.referrerPolicy = "no-referrer";
     return;
   }
-  const src = propertyText(source.src)?.trim();
-  if (src === undefined) return;
-  if (src.toLowerCase().startsWith("cid:")) {
-    const resolution = context.cidResolutions.get(normalizeCid(src.slice(4)));
-    if (resolution?.kind !== "valid") return;
-    properties.src = `/messages/${encodeURIComponent(context.messageId)}/attachments/${encodeURIComponent(resolution.attachmentId)}`;
-    return;
-  }
-  const remote = canonicalHttpsUrl(src);
+  // Anything but an https source is dropped, `cid:` included: inline images are listed as
+  // attachments.
+  const remote = canonicalHttpsUrl(propertyText(source.src)?.trim() ?? null);
   if (remote === null) return;
   properties[REMOTE_SOURCE_PROPERTY] = remote.href;
   context.hasRemoteImages = true;
@@ -470,34 +434,6 @@ function canonicalHttpsUrl(source: string | null): URL | null {
   } catch {
     return null;
   }
-}
-
-function cidMap(
-  attachments: ReadonlyArray<MailHtmlAttachment>,
-): ReadonlyMap<string, CidResolution> {
-  const resolutions = new Map<string, CidResolution>();
-  for (const attachment of attachments) {
-    if (attachment.contentId === null) continue;
-    const contentId = normalizeCid(attachment.contentId);
-    if (contentId === "" || resolutions.has(contentId)) {
-      if (contentId !== "") resolutions.set(contentId, { kind: "invalid" });
-      continue;
-    }
-    if (!SAFE_IMAGE_TYPES.has(attachment.mimeType.trim().toLowerCase())) {
-      resolutions.set(contentId, { kind: "invalid" });
-      continue;
-    }
-    resolutions.set(contentId, { kind: "valid", attachmentId: attachment.id });
-  }
-  return resolutions;
-}
-
-function normalizeCid(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
-    return trimmed.slice(1, -1).toLowerCase();
-  }
-  return trimmed.toLowerCase();
 }
 
 function sanitizeInlineStyle(source: string | null): string | null {

@@ -597,26 +597,23 @@ const submitPrepared = Effect.fn("submitPrepared")(function* (
     .pipe(storeCall);
 });
 
-// Outbound mail has no attachments, so no `cid:` image resolves and the message id is never used.
 function sanitizeOutboundHtml(deps: ApiDeps, suppliedHtml: string | null) {
   if (suppliedHtml === null) {
     return Effect.succeed(null);
   }
-  return deps.htmlPolicy
-    .sanitizeForStorage(suppliedHtml, { messageId: "outbound", attachments: [] })
-    .pipe(
-      Effect.mapError((error) =>
-        error.limit === undefined
-          ? new InvalidRequest({
-              code: "html_unsafe",
-              message: "The HTML body could not be sanitized. Send text only.",
-            })
-          : new InvalidRequest({
-              code: "html_too_complex",
-              message: `The HTML body exceeds the ${describeMailHtmlLimit(error.limit)} limit. Simplify it or send text only.`,
-            }),
-      ),
-    );
+  return deps.htmlPolicy.sanitizeForStorage(suppliedHtml).pipe(
+    Effect.mapError((error) =>
+      error.limit === undefined
+        ? new InvalidRequest({
+            code: "html_unsafe",
+            message: "The HTML body could not be sanitized. Send text only.",
+          })
+        : new InvalidRequest({
+            code: "html_too_complex",
+            message: `The HTML body exceeds the ${describeMailHtmlLimit(error.limit)} limit. Simplify it or send text only.`,
+          }),
+    ),
+  );
 }
 
 // What the caller sent, never what is derived from it: a reply's headers change once its parent is

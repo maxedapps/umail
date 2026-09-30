@@ -418,8 +418,7 @@ export const deleteThreadRoute = Effect.fn("deleteThreadRoute")(function* (
 
 const MessageParams = Schema.Struct({ messageId: Schema.String });
 
-// The stored HTML, framed in a sandbox that loads nothing. Inline (`cid:`) images stay blocked like
-// remote ones, since the sandboxed frame's requests carry no session; they are listed as attachments.
+// The stored HTML, framed in a sandbox that loads nothing. Inline images are listed as attachments.
 export const messageBodyRoute = Effect.fn("messageBodyRoute")(function* (
   deps: ApiDeps,
   principal: Principal,

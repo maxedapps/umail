@@ -155,7 +155,7 @@ export const prepareInbound = (
 
     const messageId = target.messageId as InboundMessageId;
     const attachments = normalizeAttachments(messageId, email.attachments);
-    const html = yield* sanitizeHtml(email.html, messageId, attachments, htmlPolicy);
+    const html = yield* sanitizeHtml(email.html, messageId, htmlPolicy);
     const text = email.text ?? "";
     const input = {
       messageId,
@@ -191,23 +191,14 @@ type StoredHtml = StoredMailHtml | { readonly body: null; readonly hasRemoteImag
 function sanitizeHtml(
   html: string | undefined,
   messageId: InboundMessageId,
-  attachments: ReadonlyArray<PreparedAttachment>,
   htmlPolicy: MailHtmlPolicy,
 ): Effect.Effect<StoredHtml> {
   const textOnly = { body: null, hasRemoteImages: false } as const;
   if (html === undefined || html.length === 0) {
     return Effect.succeed(textOnly);
   }
-  const sanitization = {
-    messageId,
-    attachments: attachments.map((attachment) => ({
-      id: attachment.id,
-      contentId: attachment.contentId,
-      mimeType: attachment.mimeType,
-    })),
-  };
   return htmlPolicy
-    .sanitizeForStorage(html, sanitization)
+    .sanitizeForStorage(html)
     .pipe(
       Effect.catch((error) =>
         Effect.logWarning("HTML sanitizer failed; indexing the message as text only").pipe(

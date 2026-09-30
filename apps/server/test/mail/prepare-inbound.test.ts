@@ -57,7 +57,7 @@ describe("prepareInbound", () => {
     }),
   );
 
-  it.effect("passes deterministic attachment metadata to the sanitizer", () =>
+  it.effect("stores an inline image as an attachment next to the sanitized body", () =>
     Effect.gen(function* () {
       const htmlPolicy = new FakeMailHtmlPolicy();
       htmlPolicy.setOutput("<p>sanitized CID body</p>", true);
@@ -75,12 +75,6 @@ describe("prepareInbound", () => {
       expect(prepared.attachments.map((upload) => upload.r2Key)).toEqual([attachment?.r2Key]);
       expect(prepared.input.htmlBody).toBe("<p>sanitized CID body</p>");
       expect(prepared.input.hasRemoteImages).toBe(true);
-      expect(htmlPolicy.calls.map((call) => call.sanitization)).toEqual([
-        {
-          messageId: RECEIPT_ID,
-          attachments: [{ id: attachment?.id, contentId: "logo@umail", mimeType: "image/png" }],
-        },
-      ]);
     }),
   );
 
