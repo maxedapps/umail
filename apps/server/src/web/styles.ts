@@ -1690,6 +1690,7 @@ export const styles = String.raw`
       align-items: center;
       gap: 0.625rem;
       color: var(--text-2);
+      overflow-wrap: anywhere;
 
       b {
         color: var(--text);
