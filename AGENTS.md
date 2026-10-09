@@ -16,6 +16,20 @@ env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile msch
 - For Cloudflare API calls, use the profile's OAuth token (`values.access` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`) and a browser-like User-Agent: Cloudflare answers Python's default urllib one with 403.
 - A full reset ([Stages and removal](docs/operations.md#stages-and-removal)): dry-run both destroy and deploy, and delete the retained D1 and R2 by exact id through the API. Afterwards run `pnpm umail login` again and re-authorize the umail MCP client (`/mcp` in Claude Code).
 
+## Checks
+
+The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)). It runs the fast checks whole: `oxfmt --check .`, lint, types and the Node tests (`vitest run`, about 20 s, including the client build and CLI process tests). Of the slow suites it runs only the specs the change against `main` reaches (merge base plus uncommitted and untracked files), through Vitest's `--changed`. `pnpm gate --list` prints that selection without running anything. `pnpm test` runs every suite; use it only when Max asks for a full run.
+
+A slow spec runs when it or a file it imports changed. A suite runs whole when a change hits one of its `forceRerunTriggers`, the paths it reaches at runtime. Every suite has its own config and the shared triggers in `tests/rerun-triggers.ts` (the root, server and contract `package.json` and `tsconfig.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `patches/**`, `packages/api-contract/src/**` and the helper itself), plus:
+
+| Suite (config)                                                                      | Specs                                            | Also runs whole for                                                                      |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| root worker, workerd, App worker bundle (`vitest.worker.config.ts`)                 | `tests/runtime-startup.worker.spec.ts`           | `alchemy.run.ts`, `apps/server/src/**`, `tests/{stack-fixture,worker-bundle}.ts`         |
+| server worker, workerd, Durable Object host (`apps/server/vitest.worker.config.ts`) | `apps/server/test/**/*.worker.spec.ts`           | `apps/server/src/**` except `api/` and `web/`, `apps/server/test/account/worker-host.ts` |
+| browser, Chromium (`apps/server/vitest.browser.config.ts`)                          | `web-pages`, `html-semantics` `.browser.spec.ts` | `apps/server/src/**`, `test/web/web-pages-browser-*.ts`, `test/api/` helpers             |
+
+When a suite starts to reach a file at runtime that its specs don't import (a new host import, fixture plugin or bundled asset outside these paths), add the file to that config's `rerunTriggers(...)` and to this table.
+
 ## Server code runs in Node
 
 `alchemy deploy` and the root worker tests evaluate `alchemy.run.ts`, `apps/server/src/app.ts` and all their imports in Node through Alchemy's Oxc loader, not the Worker bundler.
@@ -26,7 +40,7 @@ env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile msch
 
 ## Formatting
 
-`pnpm fmt` runs `oxfmt .` over the whole repo, Markdown included, and rewrites ADRs and plans you didn't touch. Run `pnpm exec oxfmt <paths you changed>` instead.
+`pnpm fmt` formats the whole repo, Markdown included; the gate fails on any unformatted file.
 
 ## Live checks on a preview
 

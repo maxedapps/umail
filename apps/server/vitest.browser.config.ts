@@ -1,6 +1,8 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
+import { rerunTriggers } from "../../tests/rerun-triggers.ts";
+
 import {
   webPageBrowserCommands,
   webPageBrowserFixture,
@@ -13,6 +15,13 @@ export default defineConfig({
   test: {
     include: ["test/web/web-pages.browser.spec.ts", "test/mail/html-semantics.browser.spec.ts"],
     fileParallelism: false,
+    // The pages come from the fixture plugin's in-memory app, which the specs don't import.
+    forceRerunTriggers: rerunTriggers(
+      "apps/server/vitest.browser.config.ts",
+      "apps/server/src/**",
+      "apps/server/test/web/web-pages-browser-*.ts",
+      "apps/server/test/api/!(*.test).ts",
+    ),
     browser: {
       enabled: true,
       headless: true,

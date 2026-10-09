@@ -24,12 +24,14 @@
 ### 1. One Worker, and the store drives its own work
 
 **Change:**
+
 - **Worker.** Collapse the five Workers into one `App` Worker class in `apps/server/src/app.ts`, wired from `alchemy.run.ts`:
   - `fetch` (the HttpApi app), plus `Cloudflare.email().subscribe` (from `mail/inbound.ts`);
   - `consumeQueueMessages(MailIndex, {batchSize: 1, maxConcurrency: 1})` (from `mail/indexing.ts`);
   - a locally hosted `AccountStore`.
 
   Delete the Worker classes and `make` blocks from `api/worker.ts`, `inbound.ts`, `indexing.ts`, `send.ts` and `recovery.ts`, along with every `AccountStore.from(Api)`. Mail modules become plain Effect functions with no `Api` import.
+
 - **Store alarm.** Add `alarm` to the AccountStore shape. `runDueWork` runs four independent steps, each capturing its own `Exit`:
   1. Expire approvals that are due. This is the only expiry writer; it rejects both unsent jobs via `rejectUndispatched`.
   2. Send ready jobs, at most 10 per pass: prepare, claim, send, complete.
@@ -39,6 +41,7 @@
   After the steps, set the alarm to the earliest step due time. A failed step's own due time is floored at `now + 60 s`, and any other step with work left gets `now`. A job that fails counts as its step failing, so a stuck `ready` job cannot cause a tight alarm loop.
 
   Arm the alarm on submit, approve, receipt registration and DO start. Remove every expiry write outside the alarm: a POST past `expires_at` returns "gone" and writes nothing.
+
 - **Policy as an argument.** `submitOutbound` and the claim take the requester policy as an argument. The pass gets it from `policyFor(requester)`, which task 1 backs with the existing store table; task 2 only repoints it at D1.
 - **Deletions.**
   - Infrastructure: `mail/recovery.ts`, SendConsumer, the `MailSend` queue, the cron.
@@ -48,12 +51,12 @@
 - **Failure classes.** Rejections before the send get `policy` plus a detail, never `provider`. One `rejectUndispatched(messageId, class, detail)` replaces `rejectJob`, `cancelApprovalOfFailedNotification` and `cancelUndispatchedJobsForMessages`. A notification rejected by a policy re-check rejects both jobs as `policy`.
 - **Approval page** (`human-pages/approvals.ts`):
 
-  | Job state | Page says |
-  |---|---|
-  | `ready` / `in_flight` | "sending" |
-  | `rejected` + provider | "Cloudflare rejected (code)" |
-  | `rejected` + any class except provider | "not sent (class: detail)" |
-  | `unknown` | "unconfirmed" |
+  | Job state                              | Page says                    |
+  | -------------------------------------- | ---------------------------- |
+  | `ready` / `in_flight`                  | "sending"                    |
+  | `rejected` + provider                  | "Cloudflare rejected (code)" |
+  | `rejected` + any class except provider | "not sent (class: detail)"   |
+  | `unknown`                              | "unconfirmed"                |
 
 - **Missing outbound record.** It throws like inbound: `MessageIntegrityError` with `job_missing`. Delete `UNKNOWN_OUTBOUND_JOB`, and move the test-only `acceptOutbound` into the test host.
 - **Idioms.** The store reads the site through `currentSite` in its outer init; drop the `UMAIL_MAIL_DOMAIN` and `UMAIL_PREVIEW_MAILBOXES` env copies. Keep the raw send binding, because `SendClient` wraps provider codes and would change classification.
@@ -61,11 +64,13 @@
 **Starts at:** `apps/server/src/api/worker.ts`, `account/worker.ts`, `account/jobs.ts`, `mail/send.ts`, `mail/recovery.ts`, `alchemy.run.ts`, `tests/stack.test.ts`.
 
 **Verify:**
+
 - **Stack wiring, first.** TypeScript can't catch DO layer miswiring. `tests/stack.test.ts` must assert:
   - the one Worker has `send_email`, the MailIndex producer and consumer, D1, R2, the DO and the domain;
   - there is no MailSend queue, no cron, and no other Worker.
 
   `pnpm test:worker` builds the single entrypoint, and `runtime-startup.worker.spec.ts` boots it, including the email, queue and alarm registration. Add the MailIndex producer and consumer bindings and `send_email` to the miniflare configs.
+
 - **New account alarm spec**, using a fake sender and a fake index:
   - submit arms the alarm, and one pass sends once while a second pass is a no-op;
   - notify → approve → message;
@@ -82,6 +87,7 @@
 - **Deleted tests:** `recovery.worker.spec.ts` and `send-consumer.worker.spec.ts`. Their surviving cases move to the alarm spec.
 
 **Done:** yes (2026-09-24).
+
 - One `App` Worker in `apps/server/src/app.ts`; the stateful resources live in `src/resources.ts`, so the mail and account modules import no Alchemy runtime code. The store is bound as the local `AccountStore` (`.from(App)` added a duplicate self-binding).
 - The pass is `account/due-work.ts` (`runDueWork`, `armDueWork`), and sending is `mail/dispatch.ts`. Arming computes the next due time from SQL and sets or deletes the alarm in the same turn.
 - The alarm cases are mostly a node test (`test/account/due-work.test.ts`, 12 cases on the real store over node:sqlite), plus one `runDurableObjectAlarm` worker spec. The runtime spec checks that the real bundle arms the alarm on start. `SELF.queue` fails with DATA_CLONE_ERR in the test pool, so queue wiring is asserted in the stack test instead.
@@ -91,6 +97,7 @@
 ### 2. Access in D1, scope chosen at consent
 
 **Change:**
+
 - **D1 table.** Provisioning creates `mcpPolicy(consentId TEXT PRIMARY KEY REFERENCES oauthConsent(id) ON DELETE CASCADE, policy TEXT NOT NULL)`.
 - **`auth/access.ts`.** An Effect service over Alchemy's D1 `QueryDatabase` with `mcpAccess(clientId)`, `list()`, `setPolicy(consentId, policy)` and `revoke(clientId)`. `revoke` deletes the consent and refresh tokens in one batch, and the cascade removes the policy. Access checks fail closed: no consent, no policy, or an undecodable policy all mean no access.
 - **Consent screen.**
@@ -118,6 +125,7 @@
 **Starts at:** `apps/server/src/auth/*`, `api/mcp/route.ts`, `api/human-pages/{auth,oauth-management}.ts`, `account/administration.ts`, `account/jobs.ts`, `packages/api-contract/src/principal-authorization.ts`, `apps/cli/src/{auth,credential-store}.ts`.
 
 **Verify:**
+
 - **Worker spec (D1 in miniflare, with a better-auth schema fixture):** revoking cascades and deletes the policy row. This proves the local engine; production D1 enforcing foreign keys is documented platform behaviour, and step 7 checks it live.
 - **Consent tests:**
   - accepting with a chosen scope creates consent plus policy through the hook, and the client is listed immediately;
@@ -132,6 +140,7 @@
 - **Owner's manual browser check:** the consent form and the `/clients` list.
 
 **Done:** yes (2026-09-24).
+
 - `mcpPolicy` is a better-auth plugin model (`auth/options.ts`, `mcpPolicyPlugin`). Better Auth's own migration creates it, and its reference to `oauthConsent` cascades by default. So provisioning needs no extra SQL and the hooks write through the adapter; no policy port.
 - A `before` hook rejects an invalid policy before the consent exists. The `after` hook writes it, finding the consent by `client_id` (from `getOAuthProviderState`) and the operator id.
 - `auth/access.ts` holds `mcpPolicy`, `list`, `setPolicy` and `revoke` over the raw D1 binding (the same type better-auth and the node fake use). The Durable Object reads `AUTH_OPERATOR_ID` at runtime for its `policyFor`.
@@ -142,6 +151,7 @@
 ### 3. Forwarding: Cloudflare is the only source of truth
 
 **Change:**
+
 - **Schema.** `addresses.forward_to TEXT NULL`. Delete the `forwarding_destinations` table and the destination functions and RPCs.
 - **`api/destinations.ts`.** Rewrite it on `@distilled.cloud/cloudflare/email-routing`, pinned exactly as a direct dependency. `ensureDestination(email)` exhausts `listAddresses.pages`, matches case-insensitively, creates one only if missing, and returns `{email, verified}`.
 - **Routes.** `PUT /addresses/:id/forwarding {email}`:
@@ -150,6 +160,7 @@
   - Cloudflare failures return `ApiProblem` with Cloudflare's message.
 
   `DELETE /addresses/:id/forwarding` nulls the column and never touches Cloudflare. Delete the four `/forwarding-destinations` routes.
+
 - **Inbound.** Forward whenever `forward_to` is set, record the outcome, and drop the verified gate.
 - **CLI.** `forwarding set --address-id --email` and `forwarding remove`. Delete the `destinations` commands.
 - **Kept:** the manual `CF_EMAIL_ROUTING_TOKEN`.
@@ -157,6 +168,7 @@
 **Starts at:** `apps/server/src/api/destinations.ts`, `api/app.ts`, `account/administration.ts`, `mail/inbound.ts`, `packages/api-contract/src/api-spec.ts`, `apps/cli/src/commands/index.ts`.
 
 **Verify:**
+
 - **Client tests:**
   - an address listed with a different case is adopted with no create call;
   - a missing address is created;
@@ -168,6 +180,7 @@
 - **Receipts spec:** an unverified forward records `failure` and still accepts the mail.
 
 **Done:** yes (2026-09-24).
+
 - `api/destinations.ts` uses the SDK's `listAddresses.items` (every page, stopping at the first match) and `createAddress`, with the SDK's `fromApiToken` plus `FetchHttpClient`. Errors surface Cloudflare's own message.
 - Tests pass a fake `Fetch` per call, because the default fetch reference is captured once.
 - The SDK dependency came in with task 4 (pinned `1.0.0-rc.9`, as alchemy resolves it).
@@ -175,6 +188,7 @@
 ### 4. Routing provider on the Cloudflare API client
 
 **Change:**
+
 - **Rewrite `mail/routing.ts` + `routing-api.ts`** on the SDK's `createDns` and `getDns` calls, keeping adopt, retain and the readiness wait:
   - readiness is `getDns({zoneId, subdomain})` returning no errors (null, missing or empty);
   - reconcile calls `createDns({zoneId, name})` only when that check isn't ready;
@@ -185,11 +199,13 @@
 **Starts at:** `apps/server/src/mail/routing.ts`, `routing-api.ts`, `test/mail/routing.test.ts`.
 
 **Verify:**
+
 - Unit tests pass on the fake layer.
 - In step 7, the real deploy adopts the existing `mail.schwarzmueller.sh` registration cleanly.
 - **Fallback:** the SDK's routing settings type has no `subdomains` field. If adoption needs to see an existing registration, or `createDns` on a registered-but-not-ready name misbehaves, keep one small raw settings read and note it here.
 
 **Done:** yes (2026-09-24), by a delegated agent; patch reviewed and integrated.
+
 - `getEmailRouting` detects the apex case, `getDns({zoneId, subdomain})` decides readiness, and `createDns` runs only when not ready. Attributes are `{zoneId, name}`, and `routing-api.ts` is deleted. There are 6 behaviour tests on a fake SDK layer.
 - No raw fallback was needed.
 - Live-only unknowns for step 7: what `getDns` returns for a name that isn't registered, and whether a disabled registration with DNS still reads as ready.
@@ -197,6 +213,7 @@
 ### 5. CLI config, plus dead files
 
 **Change:**
+
 - **CLI config.** The CLI reads `UMAIL_URL` through Effect `Config`. Delete `CliEnvironment`, the env types in `packages/api-contract/src/client.ts`, and the `env` parameters threaded through login, logout, accessToken and decideApproval. Tests use `ConfigProvider.fromUnknown`.
 - **Dead files** (the owner's cleanup request, not the ADR). Delete `scripts/generate-agentmail-icon.mjs` and `apps/server/src/api/brand/icon.png`, and keep `icon-bytes.ts`. In `mcp.test.ts`, keep the PNG-signature check and drop the byte-for-byte comparison to the file.
 - **Sweep.** After tasks 1–4, grep for exports that are no longer used and for files nothing imports, then delete them.
@@ -204,6 +221,7 @@
 **Verify:** the gates pass; the `--help` output is byte-identical apart from intended command changes; and `rg` finds no references to the deleted symbols or files.
 
 **Done:** yes (2026-09-24).
+
 - The CLI `Config` part was done in task 2. `UMAIL_URL` is read by `umailBaseUrl` in `@umail/api-contract/client`.
 - Deleted the icon generator, `icon.png`, and the `scripts/` directory; `mcp.test.ts` keeps only the PNG signature check.
 - Cleanup items the owner approved alongside the plan:
@@ -217,6 +235,7 @@
 ### 6. Docs
 
 **Change:** update `README.md` and `docs/operations.md` for:
+
 - the single Worker, the alarm-driven sending, and the removal of Recovery and the cron;
 - access and consent scoping, `/clients` and revoke;
 - the static CLI client and logout behaviour;
@@ -229,6 +248,7 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 **Verify:** every documented CLI command exists in `--help`, and `rg` finds no stale names (Recovery, SendConsumer, MailSend, destinations, `canAdmin`).
 
 **Done:** yes (2026-09-24).
+
 - README covers sending, forwarding, logout, and consent-scoped MCP access.
 - `docs/operations.md` has new "Sending and due work" and "Client access" sections, updated troubleshooting and log lines, backup ownership, and the ADR 0001 reset note.
 - `forwarding set/remove`, `login` and `logout` are in `--help`, and no stale names remain.
@@ -237,6 +257,7 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 ### 7. Commit, push, full teardown and redeploy
 
 **Change:**
+
 1. Commit and push `cleanup/codebase-refactor`.
 2. Inventory the account: only `uMail/prod` exists.
 3. Destroy with `--dry-run` first, then for real.
@@ -245,6 +266,7 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 6. Deploy with `--dry-run` first, then for real.
 
 **Verify (live):**
+
 - `/login` returns 200, and `/mcp` returns 401 with `WWW-Authenticate`.
 - The catch-all points to the new Worker.
 - Routing adopted `mail.schwarzmueller.sh`.
@@ -253,6 +275,7 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 - **Owner steps:** sign in; `pnpm umail login`; re-connect MCP clients, choosing their scope on the consent screen; recreate the addresses and forwarding; `pnpm build:clients`.
 
 **Done:** yes, apart from the checks that need the owner's login (2026-09-24).
+
 - Committed `72d3cdf` on `cleanup/codebase-refactor` and pushed it.
 - Only `uMail/prod` existed. The destroy dry-run, then the real destroy (17 operations), removed the 5 Workers, both queues, the catch-all, `MailSending` and the secret. The shared zone routing and the routing-domain registration were kept.
 - Deleted the retained D1 `uMail-AuthDb-prod-z5xvon3emio7gww4` and R2 `umail-mailarchive-prod-xmyhxxlukcmpqkw2` (already empty) by exact id. Re-inventory: no uMail Workers, queues, D1 or R2 left.
@@ -270,6 +293,7 @@ Also tell the owner about the four `.env` keys nothing reads, but don't edit `.e
 ## Review
 
 An independent adversarial review (2026-09-24) checked the three invariants this plan protects:
+
 - **At-most-once sending:** clear.
 - **Alarm re-arming:** clear.
 - **Fail-closed access:** clear, provided task 7 recreates AuthDb. REST access is limited to `umail-cli` by resource links and the registration rules, so a surviving AuthDb would keep old dynamically registered REST clients.
@@ -279,6 +303,7 @@ Nothing needed changing.
 ## Open questions
 
 None. The owner decided:
+
 - forwarding to any email per address;
 - scope chosen on the consent screen;
 - one Worker;

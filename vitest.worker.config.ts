@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import { defineConfig } from "vitest/config";
+import { rerunTriggers } from "./tests/rerun-triggers.ts";
 import { evaluateApplication, requireWorker, resolveGraphValue } from "./tests/stack-fixture.ts";
 import { bundleWorker } from "./tests/worker-bundle.ts";
 
@@ -42,7 +43,16 @@ const workerConfig = Effect.gen(function* () {
         },
       }),
     ],
-    test: { include: ["tests/**/*.worker.spec.ts"] },
+    test: {
+      include: ["tests/**/*.worker.spec.ts"],
+      // The spec runs against the App worker this config bundles, so its imports miss the app.
+      forceRerunTriggers: rerunTriggers(
+        "vitest.worker.config.ts",
+        "alchemy.run.ts",
+        "apps/server/src/**",
+        "tests/{stack-fixture,worker-bundle}.ts",
+      ),
+    },
   };
 }).pipe(Effect.provide(NodeServices.layer));
 

@@ -26,6 +26,7 @@ A four-surface audit on 2026-09-25 found 61 error-message defects. It covered th
    - config errors print raw `SchemaError` trees.
 
 The docs research on the installed versions (effect 4.0.0-rc.112, alchemy 2.0.0-beta.77, better-auth 1.7.2, @modelcontextprotocol/server 2.0.0) settled the mechanisms:
+
 - Built-in `HttpApiError` classes cannot carry a message.
 - One error class cannot serve several statuses.
 - `HttpApiMiddleware.layerSchemaErrorTransform` is the supported hook for decode failures.
@@ -57,14 +58,14 @@ We are in early development: breaking wire and CLI changes are fine.
 
 ## Alternatives
 
-| Option | Why not |
-| --- | --- |
+| Option                                                                                              | Why not                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Simplest: add messages to the few places users hit, keep `HttpApiError` and per-surface wording** | The built-ins cannot carry a message, so the CLI and MCP would keep inventing their own text from `_tag`, three translations of one fact. This fixes symptoms and grows the code. |
-| One `ApiError` class with a `status` field | HttpApi encodes an error class with the first status declared for it, so one class cannot serve several statuses. This was tested on rc.112. |
-| RFC 9457 `application/problem+json` | The only consumer is our own `HttpApiClient`, which needs `_tag`. `type`/`title`/`detail` add fields for no reader. |
-| Migrate MCP to Effect's `McpServer` | Its HTTP layer keeps sessions in an in-memory map, and stateless mode is a TODO. That breaks across Worker isolates. We copy its error model instead. |
-| Keep `requestId` optional and document retries | A lost first response still cannot be retried safely, which is the case that matters. |
-| Keep `E_DELIVERY_FAILED` as "not sent" | It may follow partial delivery, and calling it "not sent" invites a duplicate. |
+| One `ApiError` class with a `status` field                                                          | HttpApi encodes an error class with the first status declared for it, so one class cannot serve several statuses. This was tested on rc.112.                                      |
+| RFC 9457 `application/problem+json`                                                                 | The only consumer is our own `HttpApiClient`, which needs `_tag`. `type`/`title`/`detail` add fields for no reader.                                                               |
+| Migrate MCP to Effect's `McpServer`                                                                 | Its HTTP layer keeps sessions in an in-memory map, and stateless mode is a TODO. That breaks across Worker isolates. We copy its error model instead.                             |
+| Keep `requestId` optional and document retries                                                      | A lost first response still cannot be retried safely, which is the case that matters.                                                                                             |
+| Keep `E_DELIVERY_FAILED` as "not sent"                                                              | It may follow partial delivery, and calling it "not sent" invites a duplicate.                                                                                                    |
 
 ## Consequences
 

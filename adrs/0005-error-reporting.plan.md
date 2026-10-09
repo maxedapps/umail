@@ -37,34 +37,34 @@
 
 ## Mechanisms (from docs research on the installed versions)
 
-| Need | Mechanism | Source |
-| --- | --- | --- |
-| Error with status and message | `Schema.TaggedError<Self>()(tag, fields, { httpApiStatus })`, one class per status. A second status on the same class is ignored when encoding. | effect `Schema.ts:15207`, `HttpApiBuilder.ts:1130` |
-| Errors on every endpoint | Declare them on an API middleware (`error:`), and call `.middleware(...)` after the last `.add`. The client decodes them typed. | `HttpApiEndpoint.ts:283`, `HttpApi.ts:100` |
-| Request decode failure to a readable 400 | `HttpApiMiddleware.layerSchemaErrorTransform` with `SchemaIssue.makeFormatterStandardSchemaV1()`, first issue, `path.join(".")`. Kinds `Body`/`ResponseHeaders` stay `Effect.die` (500). | `HttpApiMiddleware.ts:466`, `SchemaIssue.ts:1026` |
-| Client: an undeclared status | `HttpApiClient` reports it as `HttpClientError` with reason `DecodeError`. Map it once by `response.status`. Never add `filterStatusOk`. | `HttpApiClient.ts:1034` |
-| CLI network cause | undici's `TransportError.cause.code`, or `cause.errors[0].code` for an `AggregateError` (ECONNREFUSED, ENOTFOUND, UND_ERR_CONNECT_TIMEOUT). | `NodeHttpClient.ts:146` |
-| CLI rendering | Keep `disableErrorReporting: true`. `Command.provide(AppLive)` on the root command. `tapCause`: `Cause.findErrorOption` for one line, `Cause.hasDies` for `Cause.pretty`. `CliError` is already rendered by `runWith`. | `Command.ts:2272`, `:3095` |
-| Error message from fields | Override the `message` getter on `Data.TaggedError`. | effect `Data.ts:1111` |
-| Bounded retry | `retryTransient({ schedule: Schedule.exponential(…), times: n })`. Without both options it spins forever. | `HttpClient.ts:1111` |
-| Deploy errors as one line | Mark the error class with `[UserFacingError] = true` (`alchemy/UserFacingError`). Map `ConfigError` into it, because alchemy's own `ConfigError` match fails on rc.112. | alchemy `Cli/commands/errors.ts:112-150` |
-| Structured Worker logs | `Telemetry.layer(Logger.layer([Logger.consoleStructured]))` in both `App.make` and `AccountStoreLive`, plus `Effect.annotateLogs`. | alchemy `Telemetry.ts:425`, effect `Logger.ts:655` |
-| MCP tool errors | `isError: true` with plain text. No `structuredContent` on errors. Unknown causes get a fixed text and a log (Effect `McpServer`'s model). | MCP spec 2025-11-25; SDK `mcp-*.mjs:1398` |
-| MCP authorization | A revoked grant gets 401 `WWW-Authenticate: Bearer error="invalid_token", resource_metadata=…`. A grant without a policy gets 403. | MCP authorization spec, RFC 6750 §3.1 |
-| Better Auth errors | OAuth routes: `{error, error_description}`. Core routes: `{message, code}`. Rate limit: 429 `{message}` with `X-Retry-After`. Sign-in is limited to 3 per 10 s. | better-auth `rate-limiter/index.mjs:64,302` |
+| Need                                     | Mechanism                                                                                                                                                                                                              | Source                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Error with status and message            | `Schema.TaggedError<Self>()(tag, fields, { httpApiStatus })`, one class per status. A second status on the same class is ignored when encoding.                                                                        | effect `Schema.ts:15207`, `HttpApiBuilder.ts:1130` |
+| Errors on every endpoint                 | Declare them on an API middleware (`error:`), and call `.middleware(...)` after the last `.add`. The client decodes them typed.                                                                                        | `HttpApiEndpoint.ts:283`, `HttpApi.ts:100`         |
+| Request decode failure to a readable 400 | `HttpApiMiddleware.layerSchemaErrorTransform` with `SchemaIssue.makeFormatterStandardSchemaV1()`, first issue, `path.join(".")`. Kinds `Body`/`ResponseHeaders` stay `Effect.die` (500).                               | `HttpApiMiddleware.ts:466`, `SchemaIssue.ts:1026`  |
+| Client: an undeclared status             | `HttpApiClient` reports it as `HttpClientError` with reason `DecodeError`. Map it once by `response.status`. Never add `filterStatusOk`.                                                                               | `HttpApiClient.ts:1034`                            |
+| CLI network cause                        | undici's `TransportError.cause.code`, or `cause.errors[0].code` for an `AggregateError` (ECONNREFUSED, ENOTFOUND, UND_ERR_CONNECT_TIMEOUT).                                                                            | `NodeHttpClient.ts:146`                            |
+| CLI rendering                            | Keep `disableErrorReporting: true`. `Command.provide(AppLive)` on the root command. `tapCause`: `Cause.findErrorOption` for one line, `Cause.hasDies` for `Cause.pretty`. `CliError` is already rendered by `runWith`. | `Command.ts:2272`, `:3095`                         |
+| Error message from fields                | Override the `message` getter on `Data.TaggedError`.                                                                                                                                                                   | effect `Data.ts:1111`                              |
+| Bounded retry                            | `retryTransient({ schedule: Schedule.exponential(…), times: n })`. Without both options it spins forever.                                                                                                              | `HttpClient.ts:1111`                               |
+| Deploy errors as one line                | Mark the error class with `[UserFacingError] = true` (`alchemy/UserFacingError`). Map `ConfigError` into it, because alchemy's own `ConfigError` match fails on rc.112.                                                | alchemy `Cli/commands/errors.ts:112-150`           |
+| Structured Worker logs                   | `Telemetry.layer(Logger.layer([Logger.consoleStructured]))` in both `App.make` and `AccountStoreLive`, plus `Effect.annotateLogs`.                                                                                     | alchemy `Telemetry.ts:425`, effect `Logger.ts:655` |
+| MCP tool errors                          | `isError: true` with plain text. No `structuredContent` on errors. Unknown causes get a fixed text and a log (Effect `McpServer`'s model).                                                                             | MCP spec 2025-11-25; SDK `mcp-*.mjs:1398`          |
+| MCP authorization                        | A revoked grant gets 401 `WWW-Authenticate: Bearer error="invalid_token", resource_metadata=…`. A grant without a policy gets 403.                                                                                     | MCP authorization spec, RFC 6750 §3.1              |
+| Better Auth errors                       | OAuth routes: `{error, error_description}`. Core routes: `{message, code}`. Rate limit: 429 `{message}` with `X-Retry-After`. Sign-in is limited to 3 per 10 s.                                                        | better-auth `rate-limiter/index.mjs:64,302`        |
 
 ## The API error family (task 1)
 
 `packages/api-contract/src/errors.ts` holds six classes. They share the fields `{ code: Schema.String, message: Schema.String }` and the union type `ApiError`.
 
-| Class (`_tag`) | Status | Codes used |
-| --- | --- | --- |
-| `InvalidRequest` | 400 | `invalid_request` (decode), `invalid_cursor`, `address_invalid`, `address_reserved`, `from_address_unknown`, `from_address_inactive`, `too_many_recipients`, `html_too_complex`, `html_unsafe`, `no_external_recipients`, `forwarding_rejected` |
-| `Unauthenticated` | 401 | `token_invalid` |
-| `NotPermitted` | 403 | `read_denied`, `send_denied`, `mailbox_forbidden`, `recipient_not_allowed`, `client_inactive`, `insufficient_scope` |
-| `NotFound` | 404 | `thread_not_found`, `message_not_found`, `job_not_found`, `attachment_not_found`, `mailbox_not_found`, `source_not_found`, `client_not_found` (console only) |
-| `Conflict` | 409 | `address_exists`, `request_id_reused`, `no_archived_source` |
-| `Unavailable` | 502 | `archive_unavailable`, `cloudflare_unavailable`, `cloudflare_misconfigured` |
+| Class (`_tag`)    | Status | Codes used                                                                                                                                                                                                                                      |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `InvalidRequest`  | 400    | `invalid_request` (decode), `invalid_cursor`, `address_invalid`, `address_reserved`, `from_address_unknown`, `from_address_inactive`, `too_many_recipients`, `html_too_complex`, `html_unsafe`, `no_external_recipients`, `forwarding_rejected` |
+| `Unauthenticated` | 401    | `token_invalid`                                                                                                                                                                                                                                 |
+| `NotPermitted`    | 403    | `read_denied`, `send_denied`, `mailbox_forbidden`, `recipient_not_allowed`, `client_inactive`, `insufficient_scope`                                                                                                                             |
+| `NotFound`        | 404    | `thread_not_found`, `message_not_found`, `job_not_found`, `attachment_not_found`, `mailbox_not_found`, `source_not_found`, `client_not_found` (console only)                                                                                    |
+| `Conflict`        | 409    | `address_exists`, `request_id_reused`, `no_archived_source`                                                                                                                                                                                     |
+| `Unavailable`     | 502    | `archive_unavailable`, `cloudflare_unavailable`, `cloudflare_misconfigured`                                                                                                                                                                     |
 
 **Rules for `code` and `message`:**
 
@@ -73,19 +73,19 @@
 
 ## Deletions
 
-| What | Where | Replaced by |
-| --- | --- | --- |
-| Every use of `HttpApiError.*`, and the `businessErrors`/`scopedErrors` arrays | `api-contract/src/api-spec.ts`, `principal-authorization.ts`, `apps/server/src/api/*`, `web/*` | the six classes |
-| `ApiProblem`, `ArchiveTransportProblem`, `OutboundMessageHasNoSource` | `api-spec.ts` and their users | `InvalidRequest`, `Unavailable`, `Conflict` |
-| Server-generated `requestId` fallback (`payload.requestId ?? …`) | `api/operations.ts:345` | required `requestId` |
-| `failureMessage`'s tag switch, `GENERIC_FAILURE` variants, and the `{"error": …}` JSON wrapper | `api/mcp/tools.ts:69-89` | `ApiError` message pass-through, one `toolError` |
-| `failureResponse`'s tag switch and the fixed "Request failed / could not be completed" copy | `web/session.ts:45-74` | status-headed page using the error's message |
-| `JOB_STATES`, `jobExplanation`, and the approval page's duplicate state wording | `web/pages/compose.ts:150`, `web/pages/approval.ts:62-111` | `web/send-state.ts` |
-| `"That address is not valid or already exists."` mapping | `web/pages/mailboxes.ts:240-250` | the API error's message |
-| `OAuthProtocolError`, the closed `OAuthError` literal list, and `OAuthEndpointError` swallowing | `apps/cli/src/auth.ts` | step-aware OAuth errors |
-| `formatCliError`'s `_tag` fallback | `apps/cli/src/main.ts` | the renderer in task 6 |
-| The single "missing or insecure" credential error | `apps/cli/src/credential-store.ts` | an error with path and problem |
-| "Could not complete the approval request." catch-all | `apps/cli/src/approvals.ts:75-97` | status-specific errors |
+| What                                                                                            | Where                                                                                          | Replaced by                                      |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Every use of `HttpApiError.*`, and the `businessErrors`/`scopedErrors` arrays                   | `api-contract/src/api-spec.ts`, `principal-authorization.ts`, `apps/server/src/api/*`, `web/*` | the six classes                                  |
+| `ApiProblem`, `ArchiveTransportProblem`, `OutboundMessageHasNoSource`                           | `api-spec.ts` and their users                                                                  | `InvalidRequest`, `Unavailable`, `Conflict`      |
+| Server-generated `requestId` fallback (`payload.requestId ?? …`)                                | `api/operations.ts:345`                                                                        | required `requestId`                             |
+| `failureMessage`'s tag switch, `GENERIC_FAILURE` variants, and the `{"error": …}` JSON wrapper  | `api/mcp/tools.ts:69-89`                                                                       | `ApiError` message pass-through, one `toolError` |
+| `failureResponse`'s tag switch and the fixed "Request failed / could not be completed" copy     | `web/session.ts:45-74`                                                                         | status-headed page using the error's message     |
+| `JOB_STATES`, `jobExplanation`, and the approval page's duplicate state wording                 | `web/pages/compose.ts:150`, `web/pages/approval.ts:62-111`                                     | `web/send-state.ts`                              |
+| `"That address is not valid or already exists."` mapping                                        | `web/pages/mailboxes.ts:240-250`                                                               | the API error's message                          |
+| `OAuthProtocolError`, the closed `OAuthError` literal list, and `OAuthEndpointError` swallowing | `apps/cli/src/auth.ts`                                                                         | step-aware OAuth errors                          |
+| `formatCliError`'s `_tag` fallback                                                              | `apps/cli/src/main.ts`                                                                         | the renderer in task 6                           |
+| The single "missing or insecure" credential error                                               | `apps/cli/src/credential-store.ts`                                                             | an error with path and problem                   |
+| "Could not complete the approval request." catch-all                                            | `apps/cli/src/approvals.ts:75-97`                                                              | status-specific errors                           |
 
 After the last task, `rg "HttpApiError|ApiProblem|ArchiveTransportProblem|OAuthProtocolError|JOB_STATES|GENERIC_FAILURE" apps packages` returns nothing.
 
@@ -473,66 +473,66 @@ The owner approved the plan with both recommendations on 2026-09-26:
 
 The IDs are the audit's. "Free" means the shared error family fixes it without extra code.
 
-| ID | Finding | Decision |
-| --- | --- | --- |
-| CLI-1 | `OAuthProtocolError` covers 13 causes | Task 6 |
-| CLI-2 | API errors print as bare tags | Tasks 1–2 (messages), task 6 (renderer) |
-| CLI-3 | Undeclared 5xx prints "Decode error" | Task 6 |
-| CLI-4 | Credential-file errors merged | Task 6 |
-| CLI-5 | Local scope check blamed on the server | Task 6 |
-| CLI-6 | Transport errors drop the cause | Task 6 |
-| CLI-7 | Raw schema parse tree printed | Task 6 |
-| CLI-8 | Approvals: one message for everything | Task 6 |
-| CLI-9 | Setup failures exit silently | Task 6 |
-| CLI-10 | Lock timeout has no path | **Skip:** it needs two concurrent CLI refreshes, and the message already says what happened |
-| CLI-11 | Revocation failure drops the reason | Task 6 (the OAuth detail carries it) |
-| CLI-12 | `UMAIL_URL` error doesn't echo the value | Task 6 |
-| CLI-13 | Credentials for another origin not explained | Task 6 |
-| CLI-14 | `--output` write errors show internal names | **Skip:** rare, and the path is already shown |
-| API-1 | Policy denials merged | Task 2 |
-| API-2 | Empty 400 on validation | Task 1 |
-| API-3 | Address create: bare BadRequest/Conflict | Task 2 |
-| API-4 | Unknown provider failure dropped | Task 4 |
-| API-5 | HTML limits merged | Task 2 |
-| API-6 | Forwarding: Cloudflare faults as 400 | Task 2 |
-| API-7 | From address unknown vs inactive | Task 2 |
-| API-8 | `sendError` drops the detail | Task 4 |
-| API-9 | Bare 401 | Task 2 |
-| API-10 | MCP 403 for revoked or no policy | Task 3 |
-| API-11 | Bare 409 on reused `requestId` | Task 2 |
-| API-12 | Bad cursor is a bare 400 | Task 2 |
-| API-13 | MCP drops the archive message | Free (task 3 pass-through) |
-| API-14 | Reply-parent 404 is ambiguous | Task 2 |
-| API-15 | Out-of-scope `addressId` returns an empty page | Task 2 (decided: `NotFound`, same wording for unknown ids) |
-| API-16 | Approval gone page is vague | Task 5 |
-| API-17 | Archive-missing 404 is ambiguous | Free (task 2 `source_not_found` message) |
-| API-18 | Recipient cap doesn't give the count | **Skip:** the cap is stated, and counting is trivial for the caller |
-| MCP-1 | Policy denials merged | Task 2 |
-| MCP-2 | Not-found without id or scope hint | Task 2 |
-| MCP-3 | Email-shaped `addressId` returns an empty page | Task 2 |
-| MCP-4 | Send defect gives no retry guidance | Tasks 1 and 3 (`requestId` required plus fallback text) |
-| MCP-5 | `/mcp` 403 for two causes | Task 3 |
-| MCP-6 | Bad cursor gives generic text | Free (task 2 plus the task 3 pass-through) |
-| MCP-7 | Archive outage gives generic text | Free |
-| MCP-8 | Unknown `fromAddressId` has no next step | Task 2 |
-| MCP-9 | Misleading "no recipients" | Task 2 |
-| MCP-10 | Address validation message is vague | Task 1 |
-| MCP-11 | `requestId` pattern is case-strict | Task 1 |
-| MCP-12 | Sending identities listed to deny-mode clients | **Skip:** the send attempt now gets a precise `send_denied` |
-| MCP-13 | `approval_required` rejection reads as waiting | **Skip:** `send-state.ts` renders `rejected` as "Not sent", and the MCP job state is already `rejected` |
-| WEB-1 | Conversation hides send state and forward failures | Task 4 |
-| WEB-2 | Bad Cloudflare token shown as a field error | Tasks 2 and 5 |
-| WEB-3 | Login blames the password on a 429 | Task 5 |
-| WEB-4 | Mailbox create merges causes | Tasks 2 and 5 |
-| WEB-5 | Generic error page; blank 500 | Task 5 |
-| WEB-6 | Approval gone page misstates the outcome | Task 5 |
-| WEB-7 | Consent drops `error_description` | Task 5 |
-| WEB-8 | Device pages merge causes | Task 5 |
-| WEB-9 | Signed in as a non-operator | **Out of scope:** a separate identity-lifecycle change (old operator account removal) |
-| MAIL-1 | Unknown send outcome keeps no cause | Task 4 |
-| MAIL-2 | Failure reasons shown as raw codes | Task 4 |
-| MAIL-3 | Inbound content rejections logged without context | Task 7 |
-| MAIL-4 | HTML rejection reason dropped | Task 2 (same as API-5) |
-| DEPLOY-1 | Routing not-ready drops the DNS diagnosis | Task 7 |
-| DEPLOY-2 | `UMAIL_DOMAIN` accepts a scheme or path | Task 7 |
-| DEPLOY-3 | Password length checked late, as a defect | Task 7 |
+| ID       | Finding                                            | Decision                                                                                                |
+| -------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| CLI-1    | `OAuthProtocolError` covers 13 causes              | Task 6                                                                                                  |
+| CLI-2    | API errors print as bare tags                      | Tasks 1–2 (messages), task 6 (renderer)                                                                 |
+| CLI-3    | Undeclared 5xx prints "Decode error"               | Task 6                                                                                                  |
+| CLI-4    | Credential-file errors merged                      | Task 6                                                                                                  |
+| CLI-5    | Local scope check blamed on the server             | Task 6                                                                                                  |
+| CLI-6    | Transport errors drop the cause                    | Task 6                                                                                                  |
+| CLI-7    | Raw schema parse tree printed                      | Task 6                                                                                                  |
+| CLI-8    | Approvals: one message for everything              | Task 6                                                                                                  |
+| CLI-9    | Setup failures exit silently                       | Task 6                                                                                                  |
+| CLI-10   | Lock timeout has no path                           | **Skip:** it needs two concurrent CLI refreshes, and the message already says what happened             |
+| CLI-11   | Revocation failure drops the reason                | Task 6 (the OAuth detail carries it)                                                                    |
+| CLI-12   | `UMAIL_URL` error doesn't echo the value           | Task 6                                                                                                  |
+| CLI-13   | Credentials for another origin not explained       | Task 6                                                                                                  |
+| CLI-14   | `--output` write errors show internal names        | **Skip:** rare, and the path is already shown                                                           |
+| API-1    | Policy denials merged                              | Task 2                                                                                                  |
+| API-2    | Empty 400 on validation                            | Task 1                                                                                                  |
+| API-3    | Address create: bare BadRequest/Conflict           | Task 2                                                                                                  |
+| API-4    | Unknown provider failure dropped                   | Task 4                                                                                                  |
+| API-5    | HTML limits merged                                 | Task 2                                                                                                  |
+| API-6    | Forwarding: Cloudflare faults as 400               | Task 2                                                                                                  |
+| API-7    | From address unknown vs inactive                   | Task 2                                                                                                  |
+| API-8    | `sendError` drops the detail                       | Task 4                                                                                                  |
+| API-9    | Bare 401                                           | Task 2                                                                                                  |
+| API-10   | MCP 403 for revoked or no policy                   | Task 3                                                                                                  |
+| API-11   | Bare 409 on reused `requestId`                     | Task 2                                                                                                  |
+| API-12   | Bad cursor is a bare 400                           | Task 2                                                                                                  |
+| API-13   | MCP drops the archive message                      | Free (task 3 pass-through)                                                                              |
+| API-14   | Reply-parent 404 is ambiguous                      | Task 2                                                                                                  |
+| API-15   | Out-of-scope `addressId` returns an empty page     | Task 2 (decided: `NotFound`, same wording for unknown ids)                                              |
+| API-16   | Approval gone page is vague                        | Task 5                                                                                                  |
+| API-17   | Archive-missing 404 is ambiguous                   | Free (task 2 `source_not_found` message)                                                                |
+| API-18   | Recipient cap doesn't give the count               | **Skip:** the cap is stated, and counting is trivial for the caller                                     |
+| MCP-1    | Policy denials merged                              | Task 2                                                                                                  |
+| MCP-2    | Not-found without id or scope hint                 | Task 2                                                                                                  |
+| MCP-3    | Email-shaped `addressId` returns an empty page     | Task 2                                                                                                  |
+| MCP-4    | Send defect gives no retry guidance                | Tasks 1 and 3 (`requestId` required plus fallback text)                                                 |
+| MCP-5    | `/mcp` 403 for two causes                          | Task 3                                                                                                  |
+| MCP-6    | Bad cursor gives generic text                      | Free (task 2 plus the task 3 pass-through)                                                              |
+| MCP-7    | Archive outage gives generic text                  | Free                                                                                                    |
+| MCP-8    | Unknown `fromAddressId` has no next step           | Task 2                                                                                                  |
+| MCP-9    | Misleading "no recipients"                         | Task 2                                                                                                  |
+| MCP-10   | Address validation message is vague                | Task 1                                                                                                  |
+| MCP-11   | `requestId` pattern is case-strict                 | Task 1                                                                                                  |
+| MCP-12   | Sending identities listed to deny-mode clients     | **Skip:** the send attempt now gets a precise `send_denied`                                             |
+| MCP-13   | `approval_required` rejection reads as waiting     | **Skip:** `send-state.ts` renders `rejected` as "Not sent", and the MCP job state is already `rejected` |
+| WEB-1    | Conversation hides send state and forward failures | Task 4                                                                                                  |
+| WEB-2    | Bad Cloudflare token shown as a field error        | Tasks 2 and 5                                                                                           |
+| WEB-3    | Login blames the password on a 429                 | Task 5                                                                                                  |
+| WEB-4    | Mailbox create merges causes                       | Tasks 2 and 5                                                                                           |
+| WEB-5    | Generic error page; blank 500                      | Task 5                                                                                                  |
+| WEB-6    | Approval gone page misstates the outcome           | Task 5                                                                                                  |
+| WEB-7    | Consent drops `error_description`                  | Task 5                                                                                                  |
+| WEB-8    | Device pages merge causes                          | Task 5                                                                                                  |
+| WEB-9    | Signed in as a non-operator                        | **Out of scope:** a separate identity-lifecycle change (old operator account removal)                   |
+| MAIL-1   | Unknown send outcome keeps no cause                | Task 4                                                                                                  |
+| MAIL-2   | Failure reasons shown as raw codes                 | Task 4                                                                                                  |
+| MAIL-3   | Inbound content rejections logged without context  | Task 7                                                                                                  |
+| MAIL-4   | HTML rejection reason dropped                      | Task 2 (same as API-5)                                                                                  |
+| DEPLOY-1 | Routing not-ready drops the DNS diagnosis          | Task 7                                                                                                  |
+| DEPLOY-2 | `UMAIL_DOMAIN` accepts a scheme or path            | Task 7                                                                                                  |
+| DEPLOY-3 | Password length checked late, as a defect          | Task 7                                                                                                  |

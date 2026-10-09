@@ -49,13 +49,13 @@ The owner wants a slick, minimal, clean look across every user-facing page, buil
 
 ## Alternatives
 
-| Option                                                                  | Why not                                                                                                                                                                                                      |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Simplest: change the colours and fonts in `styles.ts`, keep the markup** | Leaves the double navigation, the bordered lists and the heavy buttons, which are most of what looks dated. The page markup would still need most of the same changes.                                        |
-| Serve one variable web font (Inter or Geist) and allow `font-src 'self'` | Sharper on Linux and Windows. It costs a font route, a CSP change and about 100 KB per first load. The owner approved the mockup with system fonts.                                                            |
-| A new accent colour                                                     | The icon would need redrawing too; the burgundy already ties the pages to the brand.                                                                                                                          |
-| A CSS framework or utility classes                                      | ADR 0003 chose plain modern CSS, and one hand-written stylesheet of this size needs no framework.                                                                                                             |
-| An approval decision bar pinned to the bottom of the screen (as in the mockup) | The reviewer could reach Approve without scrolling past the body. The browser spec checks that the decision sits after the body.                                                                              |
+| Option                                                                         | Why not                                                                                                                                                                |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Simplest: change the colours and fonts in `styles.ts`, keep the markup**     | Leaves the double navigation, the bordered lists and the heavy buttons, which are most of what looks dated. The page markup would still need most of the same changes. |
+| Serve one variable web font (Inter or Geist) and allow `font-src 'self'`       | Sharper on Linux and Windows. It costs a font route, a CSP change and about 100 KB per first load. The owner approved the mockup with system fonts.                    |
+| A new accent colour                                                            | The icon would need redrawing too; the burgundy already ties the pages to the brand.                                                                                   |
+| A CSS framework or utility classes                                             | ADR 0003 chose plain modern CSS, and one hand-written stylesheet of this size needs no framework.                                                                      |
+| An approval decision bar pinned to the bottom of the screen (as in the mockup) | The reviewer could reach Approve without scrolling past the body. The browser spec checks that the decision sits after the body.                                       |
 
 ## Consequences
 
