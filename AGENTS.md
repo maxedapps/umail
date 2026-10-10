@@ -10,7 +10,7 @@ Max's stages deploy from the repo root; there is no CI deploy. Dry-run first (`-
 env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile mschwarzmueller --no-input --yes
 ```
 
-- The `mschwarzmueller` profile targets the account of the commented `CLOUDFLARE_ACCOUNT_ID` in `.env`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
+- The `mschwarzmueller` profile stores its target account itself (`values.accountId` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`, Max's `18e364…`); `.env` sets no `CLOUDFLARE_ACCOUNT_ID`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
 - `App/AUTH_OPERATOR_ID` plans as "update" on every deploy (`AuthProvision` runs each time). That is harmless.
 - Cloudflare allows one worker consumer per queue, and Alchemy creates the new consumer before deleting the old one. Before a deploy that moves a queue consumer to another worker, detach the old one (`DELETE accounts/{id}/queues/{qid}/consumers/{cid}`), then deploy.
 - For Cloudflare API calls, use the profile's OAuth token (`values.access` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`) and a browser-like User-Agent: Cloudflare answers Python's default urllib one with 403.
