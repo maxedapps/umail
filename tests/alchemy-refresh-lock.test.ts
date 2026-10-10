@@ -75,10 +75,10 @@ const FakeRotatingAuth = AuthProviderLayer<RotatingConfig, string>()(PROVIDER, {
 
 const expired: RotatingConfig = { method: "oauth", refresh: "r0", expires: 0 };
 
-// Alchemy's profiles and locks in a scratch ALCHEMY_HOME, with an expired login stored.
-const withExpiredProfile = <A, E>(
-  effect: Effect.Effect<A, E, ProfileStore | AuthProviders | FileSystem.FileSystem>,
-) =>
+// Alchemy's profiles and locks in a scratch ALCHEMY_HOME, with an expired login stored. The
+// profile store is built only after ALCHEMY_HOME points there, since building it creates the
+// home's directories.
+const withExpiredProfile = <A, E>(effect: Effect.Effect<A, E, ProfileStore | AuthProviders>) =>
   Effect.gen(function* () {
     endpoint.refreshes = 0;
     endpoint.spent.clear();
@@ -89,22 +89,24 @@ const withExpiredProfile = <A, E>(
       Effect.sync(() => vi.stubEnv("ALCHEMY_HOME", home)),
       () => Effect.sync(() => vi.unstubAllEnvs()),
     );
-    yield* ProfileStore.use((profiles) => profiles.setProviderConfig("default", PROVIDER, expired));
-    return yield* effect;
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(
-      Layer.mergeAll(ProfileStoreLive, FakeRotatingAuth).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            Layer.succeed(AuthProviders, {}),
-            ConfigProvider.layer(ConfigProvider.fromUnknown({})),
-            NodeServices.layer,
+    return yield* Effect.gen(function* () {
+      yield* ProfileStore.use((profiles) =>
+        profiles.setProviderConfig("default", PROVIDER, expired),
+      );
+      return yield* effect;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(ProfileStoreLive, FakeRotatingAuth).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              Layer.succeed(AuthProviders, {}),
+              ConfigProvider.layer(ConfigProvider.fromUnknown({})),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 it.live("concurrent resolves of an expired login refresh it once", () =>
   withExpiredProfile(

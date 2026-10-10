@@ -11,7 +11,7 @@ overrides:
 patchedDependencies:
   '@better-auth/oauth-provider@1.7.7': ea4bd0468949edc6be36edd90f51455af900a2b36c82fa38ce6a612b8d32bb3f
   alchemy@2.0.0-beta.81: 133a4d996d45ef25b61c503d55b16cf7790ba504069ef43cbd73e99ff45049be
-  postal-mime@4.0.5: 4c02f7dbaa52cf78dbf380a818465541d5e2a253b5a35d85d9eb62b6f335b9a2
+  postal-mime@4.0.5: d0d7c840780acdd859b2ed841ace444f0dd7e4754c6eb086263b6857f631c174
 
 importers:
 
@@ -133,7 +133,7 @@ importers:
         version: 8.0.1
       postal-mime:
         specifier: 4.0.5
-        version: 4.0.5(patch_hash=4c02f7dbaa52cf78dbf380a818465541d5e2a253b5a35d85d9eb62b6f335b9a2)
+        version: 4.0.5(patch_hash=d0d7c840780acdd859b2ed841ace444f0dd7e4754c6eb086263b6857f631c174)
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: 1.4.0
@@ -5245,7 +5245,7 @@ snapshots:
 
   pngjs@7.0.0: {}
 
-  postal-mime@4.0.5(patch_hash=4c02f7dbaa52cf78dbf380a818465541d5e2a253b5a35d85d9eb62b6f335b9a2): {}
+  postal-mime@4.0.5(patch_hash=d0d7c840780acdd859b2ed841ace444f0dd7e4754c6eb086263b6857f631c174): {}
 
   postcss@8.5.26:
     dependencies:

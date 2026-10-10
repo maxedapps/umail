@@ -110,6 +110,30 @@ describe.each(PARSERS)("PostalMime $label decoded chunk concatenation", ({ parse
   );
 });
 
+describe.each(PARSERS)("PostalMime $label part budget", ({ parser }) => {
+  // The outer multipart, then each inline message/rfc822 part and the nested message's root.
+  const nestedMessages = 3;
+  const partCount = 1 + 2 * nestedMessages;
+
+  it.effect("counts the parts of nested messages, their roots included, toward maxPartCount", () =>
+    Effect.gen(function* () {
+      const raw = nestedMessagesEml(nestedMessages);
+      const parse = (maxPartCount: number) =>
+        Effect.promise(() =>
+          parser.parse(raw.slice().buffer, { ...INBOUND_MIME_LIMITS, maxPartCount }).then(
+            () => "accepted",
+            (error: Error) => error.message,
+          ),
+        );
+
+      expect(yield* parse(partCount)).toBe("accepted");
+      expect(yield* parse(partCount - 1)).toBe(
+        `Maximum MIME part count of ${partCount - 1} parts exceeded`,
+      );
+    }),
+  );
+});
+
 const parseAttachment = Effect.fn("parseAttachment")(function* (
   parser: typeof PostalMime,
   raw: Uint8Array,
@@ -148,6 +172,31 @@ function attachmentEml(
     ...bodyLines,
   ].join(lineEnding);
   return messageBytes(finalLineEnding ? `${message}${lineEnding}` : message);
+}
+
+function nestedMessagesEml(count: number): Uint8Array {
+  const lines = [
+    "From: outer@example.com",
+    "To: inbox@example.com",
+    "Subject: Outer",
+    "MIME-Version: 1.0",
+    'Content-Type: multipart/mixed; boundary="outer"',
+    "",
+  ];
+  for (let index = 0; index < count; index++) {
+    lines.push(
+      "--outer",
+      "Content-Type: message/rfc822",
+      "Content-Disposition: inline",
+      "",
+      `Subject: Nested ${index}`,
+      "Content-Type: text/plain",
+      "",
+      `nested ${index}`,
+    );
+  }
+  lines.push("--outer--", "");
+  return messageBytes(lines.join("\r\n"));
 }
 
 function messageBytes(message: string): Uint8Array {
