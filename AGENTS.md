@@ -18,7 +18,7 @@ env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile msch
 
 ## Checks
 
-The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)). It runs the fast checks whole: `oxfmt --check .`, lint, types and the Node tests (`vitest run`, about 20 s, including the client build and CLI process tests). Of the slow suites it runs only the specs the change against `main` reaches (merge base plus uncommitted and untracked files), through Vitest's `--changed`. `pnpm gate --list` prints that selection without running anything. `pnpm test` runs every suite; use it only when Max asks for a full run.
+The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)). It runs the fast checks whole: `oxfmt --check .`, lint, types and the Node tests (`vitest run`, about 20 s, including the client build and CLI process tests). Of the slow suites it runs only the specs the change against `main` reaches (merge base plus uncommitted and untracked files), through Vitest's `--changed`, and installs the Chromium build of the pinned Playwright before the browser suite (a no-op once it is there). `pnpm gate --list` prints that selection without running anything. `pnpm test` runs every suite; use it only when Max asks for a full run.
 
 A slow spec runs when it or a file it imports changed. A suite runs whole when a change hits one of its `forceRerunTriggers`, the paths it reaches at runtime. Every suite has its own config and the shared triggers in `tests/rerun-triggers.ts` (the root, server and contract `package.json` and `tsconfig.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `patches/**`, `packages/api-contract/src/**` and the helper itself), plus:
 

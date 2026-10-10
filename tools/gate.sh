@@ -21,4 +21,8 @@ fi
 run vitest "${mode[@]}" --config vitest.worker.config.ts --changed main
 run cd apps/server
 run vitest "${mode[@]}" --config vitest.worker.config.ts --changed main
+if [[ "${mode[0]}" == run ]]; then
+  # The browser suite needs the Chromium build of the pinned Playwright; once it is there this is a no-op.
+  run playwright install --only-shell chromium
+fi
 run vitest "${mode[@]}" --config vitest.browser.config.ts --changed main
