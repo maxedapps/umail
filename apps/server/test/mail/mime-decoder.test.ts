@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { promisify } from "node:util";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import PostalMime from "postal-mime";
@@ -7,14 +9,56 @@ import PostalMime from "postal-mime";
 import { INBOUND_MIME_LIMITS } from "../../src/mail/policy.ts";
 
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 const PostalMimeCommonJs = require("postal-mime") as typeof PostalMime;
 
 const PARSERS = [
-  { label: "ESM", parser: PostalMime },
-  { label: "CommonJS", parser: PostalMimeCommonJs },
+  { label: "ESM", parser: PostalMime, load: `(await import("postal-mime")).default` },
+  {
+    label: "CommonJS",
+    parser: PostalMimeCommonJs,
+    load: `(await import("node:module")).createRequire(process.cwd() + "/")("postal-mime")`,
+  },
 ] as const;
 
-describe.each(PARSERS)("PostalMime $label decoded chunk concatenation", ({ parser }) => {
+describe.each(PARSERS)("PostalMime $label decoded chunk concatenation", ({ parser, load }) => {
+  // A Worker isolate has 128 MB. A buffer kept per padded unit costs about 100 bytes of heap,
+  // so 2 Mi units of one byte, on 512 lines within the line budget, would need over 200 MB.
+  it.effect("decodes a padded unit per byte within a Worker's memory", () =>
+    Effect.gen(function* () {
+      const script = `
+        const PostalMime = ${load};
+        const line = "YQ==".repeat(4096);
+        const raw = [
+          "Content-Type: application/octet-stream",
+          "Content-Transfer-Encoding: base64",
+          "Content-Disposition: attachment",
+          "",
+          ...Array.from({ length: 512 }, () => line),
+          "",
+        ].join("\\r\\n");
+        const parsed = await PostalMime.parse(raw, JSON.parse(process.argv[1]));
+        const bytes = new Uint8Array(parsed.attachments[0].content);
+        console.log(bytes.length, bytes.every((byte) => byte === 0x61));
+      `;
+      const { stdout } = yield* Effect.promise(() =>
+        execFileAsync(
+          process.execPath,
+          [
+            "--max-old-space-size=128",
+            "--input-type=module",
+            "--eval",
+            script,
+            JSON.stringify({ attachmentEncoding: "arraybuffer", ...INBOUND_MIME_LIMITS }),
+          ],
+          { cwd: import.meta.dirname, timeout: 60_000 },
+        ),
+      );
+
+      expect(stdout.trim()).toBe(`${2 * 1024 * 1024} true`);
+    }),
+  );
+
   it.effect.each(["\n", "\r\n"] as const)(
     "keeps the %j line endings of pass-through input, empty and final lines included",
     (lineEnding) =>

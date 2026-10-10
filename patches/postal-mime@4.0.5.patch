@@ -1,12 +1,50 @@
 diff --git a/dist/cjs/base64-decoder.js b/dist/cjs/base64-decoder.js
-index 8e06d691a6e37acefab16a307d6a96716e4527b5..0920c6ab78afa189e0cab1b9bc8d023b73f603ff 100644
+index 8e06d691a6e37acefab16a307d6a96716e4527b5..b8edb616c683ac7ed234d535359dd2f9efdafc2f 100644
 --- a/dist/cjs/base64-decoder.js
 +++ b/dist/cjs/base64-decoder.js
-@@ -39,7 +39,7 @@ class Base64Decoder {
+@@ -6,12 +6,35 @@ class Base64Decoder {
+         opts = opts || {};
+         this.decoder = opts.decoder || new TextDecoder();
+         this.maxChunkSize = 100 * 1024;
++        // Decoded bytes are copied into a buffer, as QPDecoder does, rather than kept in a
++        // chunk per decoded piece: a part that pads every unit decodes a few bytes at a time,
++        // and a chunk of a few bytes costs about a hundred
++        this.buffer = new Uint8Array(this.maxChunkSize);
++        this.bufferPos = 0;
+         this.chunks = [];
+         this.remainder = '';
+     }
+     pushChunk(base64Str) {
+         if (base64Str.length) {
+-            this.chunks.push((0, decode_strings_js_1.decodeBase64)(base64Str));
++            this.writeBytes(new Uint8Array((0, decode_strings_js_1.decodeBase64)(base64Str)));
++        }
++    }
++    writeBytes(bytes) {
++        let start = 0;
++        while (start < bytes.length) {
++            if (this.bufferPos >= this.buffer.length) {
++                this.flushBuffer();
++            }
++            const count = Math.min(bytes.length - start, this.buffer.length - this.bufferPos);
++            this.buffer.set(bytes.subarray(start, start + count), this.bufferPos);
++            this.bufferPos += count;
++            start += count;
++        }
++    }
++    flushBuffer() {
++        if (this.bufferPos) {
++            this.chunks.push(this.buffer.slice(0, this.bufferPos));
++            this.bufferPos = 0;
+         }
+     }
+     flushRemainder() {
+@@ -39,7 +62,8 @@ class Base64Decoder {
      }
      finalize() {
          this.flushRemainder();
 -        return (0, decode_strings_js_1.blobToArrayBuffer)(new Blob(this.chunks, { type: 'application/octet-stream' }));
++        this.flushBuffer();
 +        return (0, decode_strings_js_1.concatChunks)(this.chunks);
      }
  }
@@ -73,13 +111,14 @@ index a81dc7e3982b7e29576b7e3456d6efc67b18cc9c..0c25fb01c26c745bb917b952c5cba96f
                  }
                  break;
 diff --git a/dist/cjs/pass-through-decoder.js b/dist/cjs/pass-through-decoder.js
-index 755a1a713eedabc521e9dc50da76f4f469db3e69..d7f4ebc1d677e6a5cb780d90439fd23d09ab8275 100644
+index 755a1a713eedabc521e9dc50da76f4f469db3e69..ed78326fc4f3c693a5782e44d43ac530b6d4c60a 100644
 --- a/dist/cjs/pass-through-decoder.js
 +++ b/dist/cjs/pass-through-decoder.js
-@@ -68,7 +68,7 @@ class PassThroughDecoder {
+@@ -67,8 +67,7 @@ class PassThroughDecoder {
+             }
          }
          this.flushRun();
-         // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
 -        return (0, decode_strings_js_1.blobToArrayBuffer)(new Blob(this.chunks, { type: 'application/octet-stream' }));
 +        return (0, decode_strings_js_1.concatChunks)(this.chunks);
      }
@@ -244,13 +283,14 @@ index 70bea8556fb00344aa4a93cddbed515d2d0e85df..e812259fdcd004e0bf0854562f6a6e64
          }
          this.forceRfc822Attachments = Boolean(this.options.forceRfc822Attachments) || this.hasReportParts();
 diff --git a/dist/cjs/qp-decoder.js b/dist/cjs/qp-decoder.js
-index 875af469f0837f258efdbf7433216ba7986e852e..66dc90929de40dd0f4125aeb76f3661a04a9b3f4 100644
+index 875af469f0837f258efdbf7433216ba7986e852e..2e24cc47bb49dc1f322342cb86a044fdf2949437 100644
 --- a/dist/cjs/qp-decoder.js
 +++ b/dist/cjs/qp-decoder.js
-@@ -88,7 +88,7 @@ class QPDecoder {
+@@ -87,8 +87,7 @@ class QPDecoder {
+             this.writeLineBreak();
          }
          this.flushBuffer();
-         // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
 -        return (0, decode_strings_js_1.blobToArrayBuffer)(new Blob(this.chunks, { type: 'application/octet-stream' }));
 +        return (0, decode_strings_js_1.concatChunks)(this.chunks);
      }
@@ -282,20 +322,56 @@ index eeb3f936fcd64e89933f7f670b1378eb4f0d464f..4d8ab567800a22bb5a01c9d9bc267dfc
  //# sourceMappingURL=types.d.ts.map
 \ No newline at end of file
 diff --git a/dist/esm/base64-decoder.js b/dist/esm/base64-decoder.js
-index e7fe5f80bb46067b855969e05994c19a7928b056..1fd4344b455f5263a06a8d99f392c48d36ec4740 100644
+index e7fe5f80bb46067b855969e05994c19a7928b056..11f3ec3a64b6b06a9d25e1675bef6ba7250dd9cb 100644
 --- a/dist/esm/base64-decoder.js
 +++ b/dist/esm/base64-decoder.js
-@@ -1,4 +1,4 @@
+@@ -1,15 +1,38 @@
 -import { decodeBase64, blobToArrayBuffer } from './decode-strings.js';
 +import { decodeBase64, concatChunks } from './decode-strings.js';
  export default class Base64Decoder {
      constructor(opts) {
          opts = opts || {};
-@@ -37,7 +37,7 @@ export default class Base64Decoder {
+         this.decoder = opts.decoder || new TextDecoder();
+         this.maxChunkSize = 100 * 1024;
++        // Decoded bytes are copied into a buffer, as QPDecoder does, rather than kept in a
++        // chunk per decoded piece: a part that pads every unit decodes a few bytes at a time,
++        // and a chunk of a few bytes costs about a hundred
++        this.buffer = new Uint8Array(this.maxChunkSize);
++        this.bufferPos = 0;
+         this.chunks = [];
+         this.remainder = '';
+     }
+     pushChunk(base64Str) {
+         if (base64Str.length) {
+-            this.chunks.push(decodeBase64(base64Str));
++            this.writeBytes(new Uint8Array(decodeBase64(base64Str)));
++        }
++    }
++    writeBytes(bytes) {
++        let start = 0;
++        while (start < bytes.length) {
++            if (this.bufferPos >= this.buffer.length) {
++                this.flushBuffer();
++            }
++            const count = Math.min(bytes.length - start, this.buffer.length - this.bufferPos);
++            this.buffer.set(bytes.subarray(start, start + count), this.bufferPos);
++            this.bufferPos += count;
++            start += count;
++        }
++    }
++    flushBuffer() {
++        if (this.bufferPos) {
++            this.chunks.push(this.buffer.slice(0, this.bufferPos));
++            this.bufferPos = 0;
+         }
+     }
+     flushRemainder() {
+@@ -37,7 +60,8 @@ export default class Base64Decoder {
      }
      finalize() {
          this.flushRemainder();
 -        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
++        this.flushBuffer();
 +        return concatChunks(this.chunks);
      }
  }
@@ -355,7 +431,7 @@ index 6775c6c31d50c01e0451a145738eaabc5c363762..9922f5c1f51421727d79e2fc98f3a36c
                  }
                  break;
 diff --git a/dist/esm/pass-through-decoder.js b/dist/esm/pass-through-decoder.js
-index 4d493af67ed6aecf6c6d306f012099d58c7a5944..39e6ad53403cd02fdf365fd6560a5a2e5ee07bac 100644
+index 4d493af67ed6aecf6c6d306f012099d58c7a5944..be213d9d5816913ff5aa62f9eec022a065d27b01 100644
 --- a/dist/esm/pass-through-decoder.js
 +++ b/dist/esm/pass-through-decoder.js
 @@ -1,4 +1,4 @@
@@ -364,10 +440,11 @@ index 4d493af67ed6aecf6c6d306f012099d58c7a5944..39e6ad53403cd02fdf365fd6560a5a2e
  // Hands the body through as it is, the line endings included.
  //
  // The line break is written when the next line arrives, not after each line. The CRLF in
-@@ -66,7 +66,7 @@ export default class PassThroughDecoder {
+@@ -65,8 +65,7 @@ export default class PassThroughDecoder {
+             }
          }
          this.flushRun();
-         // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
 -        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
 +        return concatChunks(this.chunks);
      }
@@ -533,7 +610,7 @@ index 79ae0cf76ad31d4d615685e2bb4e263aaa04ecbf..e94afa16a62671d8cb57b0c9d6885588
          }
          this.forceRfc822Attachments = Boolean(this.options.forceRfc822Attachments) || this.hasReportParts();
 diff --git a/dist/esm/qp-decoder.js b/dist/esm/qp-decoder.js
-index 626f359439e541dc80eed588d373cf93ca7ac0da..061399c1ed3091df9d730b6d4c4f304ccaa210e5 100644
+index 626f359439e541dc80eed588d373cf93ca7ac0da..d142e4c839210f384a90a4187b7c8b028f40b326 100644
 --- a/dist/esm/qp-decoder.js
 +++ b/dist/esm/qp-decoder.js
 @@ -1,4 +1,4 @@
@@ -542,10 +619,11 @@ index 626f359439e541dc80eed588d373cf93ca7ac0da..061399c1ed3091df9d730b6d4c4f304c
  const CHR_EQUALS = 0x3d;
  export default class QPDecoder {
      constructor() {
-@@ -86,7 +86,7 @@ export default class QPDecoder {
+@@ -85,8 +85,7 @@ export default class QPDecoder {
+             this.writeLineBreak();
          }
          this.flushBuffer();
-         // convert an array of arraybuffers into a blob and then back into a single arraybuffer
+-        // convert an array of arraybuffers into a blob and then back into a single arraybuffer
 -        return blobToArrayBuffer(new Blob(this.chunks, { type: 'application/octet-stream' }));
 +        return concatChunks(this.chunks);
      }
