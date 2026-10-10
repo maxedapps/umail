@@ -8,8 +8,6 @@ import { fileURLToPath, URL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const LEDGER = new URL("../flakes.md", import.meta.url);
-// More failures than this point at the change, not at flakes.
-const MAX_RERUNS = 5;
 
 type Report = {
   readonly testResults: ReadonlyArray<{
@@ -34,10 +32,6 @@ const failed = (JSON.parse(readFileSync(report, "utf8")) as Report).testResults.
       message: test.failureMessages[0],
     })),
 );
-if (failed.length > MAX_RERUNS) {
-  console.log(`\n${failed.length} tests failed: more than flakes, so none runs alone.`);
-  process.exit();
-}
 
 const branch = execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" });
 const task = /^task-\d+/.exec(branch)?.[0] ?? "task-?";

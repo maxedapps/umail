@@ -33,7 +33,7 @@ When a suite starts to reach a file at runtime that its specs don't import (a ne
 Tests follow [awesome-tests](https://github.com/academind/agent-setup/blob/main/skills/awesome-tests/SKILL.md) (`~/.agents/skills/awesome-tests`). In umail:
 
 - Every Vitest suite runs at most 4 workers (`maxWorkers: 4`; the browser suite runs one file at a time). The heavy scripts (`gate`, both `test:worker`, `test:browser`, `deploy:stage`) wait for headroom through `agents heavy`.
-- When a suite fails, the gate reruns each failing test alone once (`tools/rerun-alone.ts`; none when more than 5 failed), appends each that passes alone to the flake ledger [`flakes.md`](flakes.md) and stays red.
+- When a suite fails, the gate reruns each failing test alone once (`tools/rerun-alone.ts`), appends each that passes alone to the flake ledger [`flakes.md`](flakes.md) and stays red.
 - `tests/skips.test.ts` fails on a skip that isn't a `skipIf` marked `// flaky: task-<n> until <yyyy-mm-dd>` or that runs past 14 days.
 - No gate test reaches a live service: the Node tests evaluate the stack with an HTTP client that fails on any request, and the slow suites run on Miniflare and in-memory fixtures. Live checks stay manual ([Live checks on a preview](#live-checks-on-a-preview)).
 
