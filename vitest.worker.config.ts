@@ -45,6 +45,8 @@ const workerConfig = Effect.gen(function* () {
     ],
     test: {
       include: ["tests/**/*.worker.spec.ts"],
+      // Agents share the machine, and Vitest's default of a worker per core but one overloads it.
+      maxWorkers: 4,
       // The spec runs against the App worker this config bundles, so its imports miss the app.
       forceRerunTriggers: rerunTriggers(
         "vitest.worker.config.ts",

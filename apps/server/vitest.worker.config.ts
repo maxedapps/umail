@@ -22,6 +22,8 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.worker.spec.ts"],
+    // Agents share the machine, and Vitest's default of a worker per core but one overloads it.
+    maxWorkers: 4,
     // Some specs make hundreds of sequential Durable Object calls: well under 5 s alone, but not on
     // a busy machine.
     testTimeout: 30_000,

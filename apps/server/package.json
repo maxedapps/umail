@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
-    "test:worker": "vitest run --config vitest.worker.config.ts",
-    "test:browser": "vitest run --config vitest.browser.config.ts"
+    "test:worker": "agents heavy -- vitest run --config vitest.worker.config.ts",
+    "test:browser": "agents heavy -- vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "@alchemy.run/better-auth": "2.0.0-beta.81",

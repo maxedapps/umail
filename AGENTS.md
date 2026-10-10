@@ -4,10 +4,10 @@ Setup, deploy and update steps are in [README.md](README.md). Stages, previews a
 
 ## Deploy
 
-Max's stages deploy from the repo root; there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
+Max's stages deploy from the repo root through `pnpm deploy:stage` (`alchemy deploy` once the machine has headroom); there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
 
 ```sh
-env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile mschwarzmueller --no-input --yes
+env -u CLOUDFLARE_API_TOKEN pnpm deploy:stage --stage prod --profile mschwarzmueller --no-input --yes
 ```
 
 - The `mschwarzmueller` profile stores its target account itself (`values.accountId` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`, Max's `18e364…`); `.env` sets no `CLOUDFLARE_ACCOUNT_ID`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
@@ -18,7 +18,7 @@ env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy --stage prod --profile msch
 
 ## Checks
 
-The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)). It runs the fast checks whole: `oxfmt --check .`, lint, types and the Node tests (`vitest run`, about 20 s, including the client build and CLI process tests). Of the slow suites it runs only the specs the change against `main` reaches (merge base plus uncommitted and untracked files), through Vitest's `--changed`, and installs the Chromium build of the pinned Playwright before the browser suite (a no-op once it is there). `pnpm gate --list` prints that selection without running anything. `pnpm test` runs every suite; use it only when Max asks for a full run.
+The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)). It runs the fast checks whole: `oxfmt --check .`, lint, types and the Node tests (`vitest run`, about 20 s, including the client build and CLI process tests). Of the slow suites it runs only the specs the change against `main` reaches (merge base plus uncommitted and untracked files), through Vitest's `--changed`, and installs the Chromium build of the pinned Playwright before the browser suite (a no-op once it is there). `pnpm gate --list` prints that selection without running anything. `pnpm test` runs every suite: run it now and then when you judge it worth it, such as after a broad change, not routinely. When it keeps timing out, run the suites one at a time (`pnpm test:worker`, `pnpm -C apps/server test:worker`, `pnpm -C apps/server test:browser`).
 
 A slow spec runs when it or a file it imports changed. A suite runs whole when a change hits one of its `forceRerunTriggers`, the paths it reaches at runtime. Every suite has its own config and the shared triggers in `tests/rerun-triggers.ts` (the root, server and contract `package.json` and `tsconfig.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `patches/**`, `packages/api-contract/src/**` and the helper itself), plus:
 
@@ -29,6 +29,13 @@ A slow spec runs when it or a file it imports changed. A suite runs whole when a
 | browser, Chromium (`apps/server/vitest.browser.config.ts`)                          | `web-pages`, `html-semantics` `.browser.spec.ts` | `apps/server/src/**`, `test/web/web-pages-browser-*.ts`, `test/api/` helpers             |
 
 When a suite starts to reach a file at runtime that its specs don't import (a new host import, fixture plugin or bundled asset outside these paths), add the file to that config's `rerunTriggers(...)` and to this table.
+
+Tests follow [awesome-tests](https://github.com/academind/agent-setup/blob/main/skills/awesome-tests/SKILL.md) (`~/.agents/skills/awesome-tests`). In umail:
+
+- Every Vitest suite runs at most 4 workers (`maxWorkers: 4`; the browser suite runs one file at a time). The heavy scripts (`gate`, both `test:worker`, `test:browser`, `deploy:stage`) wait for headroom through `agents heavy`.
+- When a suite fails, the gate reruns each failing test alone once (`tools/rerun-alone.ts`; none when more than 5 failed), appends each that passes alone to the flake ledger [`flakes.md`](flakes.md) and stays red.
+- `tests/skips.test.ts` fails on a skip that isn't a `skipIf` marked `// flaky: task-<n> until <yyyy-mm-dd>` or that runs past 14 days.
+- No gate test reaches a live service: the Node tests evaluate the stack with an HTTP client that fails on any request, and the slow suites run on Miniflare and in-memory fixtures. Live checks stay manual ([Live checks on a preview](#live-checks-on-a-preview)).
 
 ## Server code runs in Node
 

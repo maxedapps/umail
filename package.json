@@ -9,13 +9,12 @@
     "lint": "oxlint --type-aware",
     "fmt": "oxfmt .",
     "test": "vitest run && pnpm test:worker && pnpm -r --if-present test:worker && pnpm -r --if-present test:browser",
-    "test:worker": "vitest run --config vitest.worker.config.ts",
-    "gate": "tools/gate.sh",
+    "test:worker": "agents heavy -- vitest run --config vitest.worker.config.ts",
+    "gate": "agents heavy -- tools/gate.sh",
     "build:clients": "tsdown",
     "alchemy": "alchemy",
     "umail": "node apps/cli/src/bin.ts",
-    "deploy:dev": "alchemy deploy --stage dev",
-    "deploy:prod": "alchemy deploy --stage prod",
+    "deploy:stage": "agents heavy -- alchemy deploy",
     "prepare": "effect-tsgo patch --typescript-package @typescript/native --oxlint"
   },
   "devDependencies": {
