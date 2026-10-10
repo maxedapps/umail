@@ -59,9 +59,10 @@ export type MailCapacityFixtureFactory = {
 
 type MailCapacityTransferEncoding = "base64" | "quoted-printable";
 
-const MAX_RAW_ATTACHMENT_BYTES = 20_702_264;
+// The 7bit body as sent, CRLFs included, but for the last one, which belongs to the boundary.
+const MAX_RAW_ATTACHMENT_BYTES = 20_971_123;
 const MAX_RAW_ATTACHMENT_SHA256 =
-  "a4cdd3ce20feaf36f58d53f5a176432327f7b3ab438ae08424e05368a4dccf8d";
+  "0ba7e4de7ac188a11590e24d51121e7cae0f57182572ea2902ae21e294d591a8";
 const PADDED_LINES_UNIT_COUNT = INBOUND_MIME_LIMITS.maxLineCount - 16;
 const FOLDED_BASE64_TRIPLETS = 256 * 1024;
 const COMBINED_BASE64_TRIPLETS = 128 * 1024;
@@ -250,8 +251,9 @@ export function quotedPrintableFixture(): MailCapacityFixture {
         {
           filename: "quoted-printable.bin",
           mimeType: "application/octet-stream",
-          byteLength: QUOTED_PRINTABLE_UNITS * 13 + 5,
-          sha256: "873d49780a2fcb751d922ebea7e15f48ea3d3837b504b0d82b90878e7b028fc3",
+          // Each unit decodes to "capacity=unit"; the part ends with the message, so "done\r\n" keeps its break.
+          byteLength: QUOTED_PRINTABLE_UNITS * 13 + 6,
+          sha256: "413c0eedee642682ef6c327ae225868383b4a95057a89cd16c1a85507879ac6a",
         },
       ],
     },
