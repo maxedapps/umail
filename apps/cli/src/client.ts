@@ -5,8 +5,8 @@ import {
 } from "@umail/api-contract/client";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 
 import { accessToken } from "./auth.ts";
 import {

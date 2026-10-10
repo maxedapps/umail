@@ -1,4 +1,4 @@
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { AGENTMAIL_ICON_PNG } from "./icon-bytes.ts";
 

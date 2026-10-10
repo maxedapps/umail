@@ -1,6 +1,6 @@
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
 
 const APPROVAL_CAPABILITY_HEX = /^[0-9a-f]{64}$/;
@@ -20,7 +20,5 @@ export const hashApprovalToken = Effect.fn("hashApprovalToken")(function* (token
   const digest = yield* crypto
     .digest("SHA-256", new TextEncoder().encode(token))
     .pipe(Effect.orDie);
-  return yield* Schema.decodeEffect(ApprovalTokenHash)(Encoding.encodeHex(digest)).pipe(
-    Effect.orDie,
-  );
+  return yield* Schema.decodeEffect(ApprovalTokenHash)(Hex.encode(digest)).pipe(Effect.orDie);
 });

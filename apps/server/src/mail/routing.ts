@@ -11,6 +11,7 @@ import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { stageKeepsData, stageSendsMail, type StageSite } from "../site.ts";
@@ -46,6 +47,29 @@ export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDo
   } Check for conflicting MX/TXT records.`;
 }
 
+// A DNS record Email Routing still needs on a subdomain.
+const MissingRecord = Schema.Struct({
+  type: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  content: Schema.optional(Schema.NullOr(Schema.String)),
+  priority: Schema.optional(Schema.NullOr(Schema.Finite)),
+});
+
+// `getDns` with `subdomain` answers `{ errors, record }` rather than the zone's record list the SDK
+// types. Cloudflare deprecated the parameter but offers no other subdomain check, so it is decoded here.
+const SubdomainDns = Schema.Struct({
+  errors: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({
+          code: Schema.optional(Schema.NullOr(Schema.String)),
+          missing: Schema.optional(Schema.NullOr(MissingRecord)),
+        }),
+      ),
+    ),
+  ),
+});
+
 // The zone apex reports readiness in its routing settings. A subdomain is ready once Cloudflare
 // lists no missing DNS records for it; the ones it lists are what a stuck deploy reports.
 const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
@@ -56,7 +80,9 @@ const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
   if (settings.name === name) {
     return { apex: true, ready: settings.enabled && settings.status === "ready", missing: [] };
   }
-  const dns = yield* emailRouting.getDns({ zoneId, subdomain: name });
+  const dns = yield* Schema.decodeUnknownEffect(SubdomainDns)(
+    yield* emailRouting.getDns({ zoneId, subdomain: name }),
+  );
   const missing = (dns.errors ?? []).map(({ code, missing }) =>
     missing === null || missing === undefined ? (code ?? "unknown") : describeRecord(missing),
   );
@@ -64,12 +90,7 @@ const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
 });
 
 // "MX mail.example.com → route1.mx.cloudflare.net (priority 1)"
-function describeRecord(record: {
-  readonly type?: string | null;
-  readonly name?: string | null;
-  readonly content?: string | null;
-  readonly priority?: number | null;
-}): string {
+function describeRecord(record: typeof MissingRecord.Type): string {
   const priority =
     record.priority === null || record.priority === undefined
       ? ""

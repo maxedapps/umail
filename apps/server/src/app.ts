@@ -48,9 +48,9 @@ export default App.make(
     const archive = yield* Cloudflare.R2.ReadWriteBucket(MailArchive);
     const indexQueue = yield* MailIndex;
     const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
-    const routingToken = yield* Config.redacted("CF_EMAIL_ROUTING_TOKEN");
+    const routingToken = yield* Config.Redacted("CF_EMAIL_ROUTING_TOKEN");
     const accountId = globalThis.__ALCHEMY_RUNTIME__
-      ? yield* Config.string("CLOUDFLARE_ACCOUNT_ID")
+      ? yield* Config.String("CLOUDFLARE_ACCOUNT_ID")
       : "plan";
     const authInstance = yield* BetterAuth({
       ...makeAuthOptions(runtime.site, runtime.operatorId, { rateLimit: true }),

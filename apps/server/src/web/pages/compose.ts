@@ -8,8 +8,8 @@ import {
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import type { ApiDeps } from "../../api/app.ts";
 import {

@@ -44,7 +44,7 @@ import type * as Alchemy from "alchemy";
 import type * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 
 import type { ApiDeps } from "./app.ts";
@@ -673,7 +673,7 @@ const decodeCursor = Effect.fn("decodeCursor")(function* (cursor: string | undef
   if (cursor === undefined) {
     return undefined;
   }
-  const decoded = Encoding.decodeBase64UrlString(cursor);
+  const decoded = Base64Url.decodeString(cursor);
   if (Result.isFailure(decoded)) {
     return yield* invalidCursor;
   }
@@ -711,5 +711,5 @@ function archiveUnavailable() {
 }
 
 function encodeCursor(cursor: PageCursor | null): string | null {
-  return cursor === null ? null : Encoding.encodeBase64Url(`${cursor.at}\n${cursor.id}`);
+  return cursor === null ? null : Base64Url.encode(`${cursor.at}\n${cursor.id}`);
 }

@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 
 // One error class per status; each carries a stable `code` and a `message` written where the cause
 // is known, which every surface (REST, CLI, MCP, web) shows as is. `code` is a plain string on the

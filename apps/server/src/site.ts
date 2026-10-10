@@ -53,7 +53,12 @@ export function deployConfigError(error: Config.ConfigError): DeployConfigError 
 
 // A bare hostname, trimmed and lower-cased as `parseMailDomain` does.
 const ConfiguredMailDomain = Schema.String.pipe(
-  Schema.decode(SchemaTransformation.trim().compose(SchemaTransformation.toLowerCase())),
+  Schema.decode(
+    SchemaTransformation.composeTransformation(
+      SchemaTransformation.trim(),
+      SchemaTransformation.toLowerCase(),
+    ),
+  ),
   Schema.decodeTo(
     MailDomain.check(
       Schema.isPattern(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, {
@@ -94,7 +99,7 @@ export const operatorEmail = Config.all([
   rootDomain,
   Config.schema(ConfiguredMailAddress, "UMAIL_OPERATOR_EMAIL"),
 ]).pipe(
-  Config.mapOrFail(([root, address]) => {
+  Config.mapEffect(([root, address]) => {
     const domain = address.slice(address.lastIndexOf("@") + 1);
     return domain === root || domain.endsWith(`.${root}`)
       ? Effect.fail(

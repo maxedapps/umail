@@ -15,7 +15,7 @@ export const INBOUND_MIME_LIMITS = {
   maxRawBytes: DEFAULT_MAX_RAW_BYTES,
   maxLineCount: 400_000,
   maxLineLength: 16 * 1024,
-  maxParts: 128,
+  maxPartCount: 128,
   maxDecodedBytes: DEFAULT_MAX_RAW_BYTES,
   maxTextExpansionBytes: 8 * 1024 * 1024,
   maxHtmlBytes: 2 * 1024 * 1024,

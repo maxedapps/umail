@@ -25,7 +25,7 @@ export const appRuntime = Effect.gen(function* () {
   const keyText = yield* (yield* NotificationKey).text;
   // The provisioned operator id is only in the deployed Worker's env; planning uses a placeholder.
   const operatorId = globalThis.__ALCHEMY_RUNTIME__
-    ? yield* Config.string("AUTH_OPERATOR_ID")
+    ? yield* Config.String("AUTH_OPERATOR_ID")
     : "plan";
   return {
     site,

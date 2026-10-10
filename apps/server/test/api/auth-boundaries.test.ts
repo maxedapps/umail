@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { symmetricDecrypt } from "better-auth/crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
 
 import { ExternalMailAddress } from "@umail/api-contract";
@@ -505,7 +505,7 @@ const pendingAuthorizationCode = Effect.fn("pendingAuthorizationCode")(function*
   client: { readonly clientId: string; readonly redirectUri: string },
 ) {
   const verifier = "umail-test-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
-  const challenge = Encoding.encodeBase64Url(
+  const challenge = Base64Url.encode(
     yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
   );
   const authorize = yield* world.request(

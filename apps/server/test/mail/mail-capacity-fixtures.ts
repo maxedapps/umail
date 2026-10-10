@@ -340,7 +340,7 @@ export function overHeadersFixture(): MailCapacityFixture {
 export function overPartCountFixture(): MailCapacityFixture {
   return policyFailureFixture(
     "over-part-count",
-    partCountEml(INBOUND_MIME_LIMITS.maxParts + 1),
+    partCountEml(INBOUND_MIME_LIMITS.maxPartCount + 1),
     "mime_budget",
   );
 }

@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 // Forwarding destinations are account-wide Cloudflare resources, and Cloudflare alone knows whether
 // one is verified. AgentMail keeps no copy: it adopts the destination or creates it, and reads its

@@ -1,7 +1,7 @@
-diff --git a/dist/authorize-BmTe2VYG.mjs b/dist/authorize-BmTe2VYG.mjs
-index 42c943dd45aa3d297a14edcc056a14e7ddd54680..cbf64e782ed812b12cdcbdda7091e3840d4054c4 100644
---- a/dist/authorize-BmTe2VYG.mjs
-+++ b/dist/authorize-BmTe2VYG.mjs
+diff --git a/dist/authorize-K1WHCNih.mjs b/dist/authorize-K1WHCNih.mjs
+index 892e39ff5f37078ee30b8c950be5f12adf96262e..3933999ad42d4ece0276f06631dde525b2e6d6ee 100644
+--- a/dist/authorize-K1WHCNih.mjs
++++ b/dist/authorize-K1WHCNih.mjs
 @@ -1708,6 +1708,7 @@ function validateClientRedirectUri(redirectUri, applicationType) {
  		if (!isAllowedNativeHttpLoopback) invalidRedirectUri(`native clients may use http only on the exact loopback hosts localhost, 127.0.0.1, or [::1]: ${redirectUri}`);
  		return;

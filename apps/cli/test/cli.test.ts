@@ -14,11 +14,11 @@ import * as Result from "effect/Result";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
 import * as TestConsole from "effect/testing/TestConsole";
-import * as Command from "effect/unstable/cli/Command";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as Command from "effect/cli/Command";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import { OAuthCredentialStore, type OAuthCredentialStoreService } from "../src/credential-store.ts";
 import {

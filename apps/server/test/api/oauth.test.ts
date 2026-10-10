@@ -308,10 +308,11 @@ describe("OAuth-only operator and client lifecycle", () => {
           target,
         ).toBe("/consent");
       }
+      // RFC 8252 lets a loopback redirect change only its port, so the near miss changes the path.
       const nearMiss = yield* authorizeWith(
         world,
         client.client_id,
-        "http://localhost:9999/callback",
+        "http://localhost:8787/elsewhere",
       );
       expect(new URL(nearMiss.headers.get("location") ?? "", "http://umail.test").pathname).toBe(
         "/api/auth/error",

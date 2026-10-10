@@ -7,9 +7,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as HttpEffect from "effect/http/HttpEffect";
 import * as TestClock from "effect/testing/TestClock";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
+import * as Reactivity from "effect/reactivity/Reactivity";
 
 import {
   ExternalMailAddress,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Address } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { WebCrypto } from "../../src/crypto.ts";
 import {

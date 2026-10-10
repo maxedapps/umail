@@ -8,9 +8,9 @@ import type { StackSpec } from "alchemy/Stack";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import * as Redacted from "effect/Redacted";
 import { application } from "../alchemy.run.ts";
 import { EmailRoutingDomain } from "../apps/server/src/mail/routing.ts";
@@ -94,7 +94,7 @@ export const testOutputs = {
   AuthDb: { databaseId: "auth-test" },
   BetterAuthSecret: { text: Redacted.make("test-signing-secret-01234567890123456789") },
   NotificationKey: {
-    text: Redacted.make(Encoding.encodeHex(Uint8Array.from({ length: 32 }, (_, index) => index))),
+    text: Redacted.make(Hex.encode(Uint8Array.from({ length: 32 }, (_, index) => index))),
   },
   MailRouting: { zoneId: "test-zone" },
   MailRoutingDomain: { zoneId: "test-zone" },

@@ -10,29 +10,29 @@
     "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
-    "@alchemy.run/better-auth": "2.0.0-beta.77",
-    "@better-auth/mcp": "1.7.2",
-    "@better-auth/oauth-provider": "1.7.2",
-    "@distilled.cloud/cloudflare": "1.0.0-rc.9",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@alchemy.run/better-auth": "2.0.0-beta.81",
+    "@better-auth/mcp": "1.7.7",
+    "@better-auth/oauth-provider": "1.7.7",
+    "@distilled.cloud/cloudflare": "1.0.0-rc.13",
+    "@modelcontextprotocol/server": "2.3.1",
     "@types/hast": "3.0.5",
     "@umail/api-contract": "workspace:*",
-    "better-auth": "1.7.2",
+    "better-auth": "1.7.7",
     "css-tree": "3.2.1",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.2",
     "hast-util-from-parse5": "8.0.3",
     "hast-util-to-html": "9.0.5",
-    "parse5": "7.3.0",
-    "postal-mime": "3.0.0"
+    "parse5": "8.0.1",
+    "postal-mime": "4.0.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.1.7",
-    "@cloudflare/workers-types": "5.20260901.1",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@cloudflare/vitest-plugin": "1.4.0",
+    "@cloudflare/workers-types": "5.20261009.1",
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/css-tree": "3.2.0",
-    "@vitest/browser-playwright": "4.1.10",
-    "alchemy": "2.0.0-beta.77",
-    "playwright": "1.63.0",
-    "vitest": "4.1.10"
+    "@vitest/browser-playwright": "5.0.3",
+    "alchemy": "2.0.0-beta.81",
+    "playwright": "1.64.0",
+    "vitest": "5.0.3"
   }
 }

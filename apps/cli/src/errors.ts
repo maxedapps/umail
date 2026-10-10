@@ -3,8 +3,8 @@ import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import type * as HttpClientError from "effect/http/HttpClientError";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 // What the CLI says when the server cannot be reached or answers outside the API contract. Each
 // names the step, what came back, and what to do.

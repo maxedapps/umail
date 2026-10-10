@@ -11,7 +11,7 @@ import {
   type PrincipalPolicy,
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
 import type { BrowserContext, Frame, Locator, Page } from "playwright";
 import type { Plugin } from "vitest/config";
@@ -948,7 +948,7 @@ const expire = Effect.fn("expire")(function* (world: World, token: string) {
 const consentAuthorizePath = Effect.fn("consentAuthorizePath")(function* (world: World) {
   const registered = yield* registerMcpClient(world, { label: "Browser consent" });
   const verifier = "umail-browser-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
-  const challenge = Encoding.encodeBase64Url(
+  const challenge = Base64Url.encode(
     yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
   );
   const authorize = yield* world.request(

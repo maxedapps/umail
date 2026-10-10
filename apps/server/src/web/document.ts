@@ -5,8 +5,8 @@ import type {
 } from "@umail/api-contract";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Hex from "effect/encoding/Hex";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { PRODUCT_NAME, productPageTitle } from "../api/brand/identity.ts";
 import { html, htmlText, trustedHtml, type Html } from "./html.ts";
@@ -87,7 +87,7 @@ for (const time of document.querySelectorAll("time[datetime]")) {
 
 export const pageNonce = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  return Encoding.encodeHex(yield* crypto.randomBytes(16));
+  return Hex.encode(yield* crypto.randomBytes(16));
 }).pipe(Effect.orDie);
 
 export function renderDocument(view: PageView, nonce: string): string {
@@ -129,19 +129,21 @@ export function renderDocument(view: PageView, nonce: string): string {
             </main>
             ${scriptHtml}
           </body>`;
-  return htmlText(html`<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="robots" content="noindex,nofollow,noarchive" />
-        <title>${productPageTitle(view.title)}</title>
-        <style nonce="${nonce}">
-          ${trustedHtml(styles)}
-        </style>
-      </head>
-      ${body}
-    </html>`);
+  return htmlText(
+    html`<!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <meta name="robots" content="noindex,nofollow,noarchive" />
+          <title>${productPageTitle(view.title)}</title>
+          <style nonce="${nonce}">
+            ${trustedHtml(styles)}
+          </style>
+        </head>
+        ${body}
+      </html>`,
+  );
 }
 
 // On mail pages Mail is the section (stronger text) and the mailbox being read is the page (a fill).
@@ -260,18 +262,20 @@ export const BODY_FRAME_CSP =
   "default-src 'none'; sandbox; frame-ancestors 'self'; script-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; style-src-elem 'none'; style-src-attr 'unsafe-inline'";
 
 export function bodyDocument(storedHtml: string): string {
-  return htmlText(html`<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="robots" content="noindex,nofollow,noarchive" />
-        <title>Email body</title>
-      </head>
-      <body>
-        ${trustedHtml(storedHtml)}
-      </body>
-    </html>`);
+  return htmlText(
+    html`<!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <meta name="robots" content="noindex,nofollow,noarchive" />
+          <title>Email body</title>
+        </head>
+        <body>
+          ${trustedHtml(storedHtml)}
+        </body>
+      </html>`,
+  );
 }
 
 export function bodyFrameHeaders(csp: string): typeof ApprovalPreviewHeaders.Type {

@@ -4,10 +4,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import { PublicApprovalApi, UmailApi } from "./api-spec.ts";
 
@@ -56,7 +56,7 @@ function parseBaseUrl(value: string) {
 
 // The AgentMail origin, from UMAIL_URL.
 export const umailBaseUrl: Effect.Effect<string, UmailClientConfigurationError> = Config.option(
-  Config.string("UMAIL_URL"),
+  Config.String("UMAIL_URL"),
 ).pipe(
   Effect.mapError(
     () => new UmailClientConfigurationError({ message: "UMAIL_URL could not be read." }),

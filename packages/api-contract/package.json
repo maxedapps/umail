@@ -9,6 +9,6 @@
     "./client": "./src/client.ts"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.112"
+    "effect": "4.0.2"
   }
 }

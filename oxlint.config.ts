@@ -36,5 +36,7 @@ export default defineConfig({
     "anti-slop/no-unsafe-dictionary-type": "off",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "off",
+    // umail is built on Effect's HTTP, HttpApi, CLI and test modules, which are all unstable.
+    "effecttsgo/unstable-api-usage": "off",
   },
 });

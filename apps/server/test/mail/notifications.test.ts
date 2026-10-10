@@ -6,7 +6,7 @@ import {
   parseMailDomain,
 } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
 
 import { WebCrypto } from "../../src/crypto.ts";
@@ -27,7 +27,7 @@ const NOW = "2026-01-01T00:00:00.000Z";
 layer(WebCrypto)("approval tokens", (it) => {
   it.effect("derives the token as lowercase hex HMAC-SHA256 of the approval id", () =>
     Effect.gen(function* () {
-      const key = notificationKeyFromHex(Encoding.encodeHex(KEY_BYTES));
+      const key = notificationKeyFromHex(Hex.encode(KEY_BYTES));
       const token = yield* deriveApprovalToken(key, "approval-1");
 
       expect(token).toBe(APPROVAL_1_TOKEN);
@@ -68,8 +68,8 @@ describe("approval notifications", () => {
   });
 
   it("reads the key resource's 32 bytes of hex and rejects anything else", () => {
-    expect(notificationKeyFromHex(Encoding.encodeHex(KEY_BYTES))).toEqual(KEY_BYTES);
-    for (const secret of ["", Encoding.encodeHex(new Uint8Array(16)), "zz".repeat(32)]) {
+    expect(notificationKeyFromHex(Hex.encode(KEY_BYTES))).toEqual(KEY_BYTES);
+    for (const secret of ["", Hex.encode(new Uint8Array(16)), "zz".repeat(32)]) {
       expect(() => notificationKeyFromHex(secret)).toThrow(
         "The notification key is not 32 bytes of hex",
       );

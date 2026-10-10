@@ -31,7 +31,7 @@ export const UtcInstant = Schema.String.annotate({
   description: "An ISO 8601 instant, e.g. 2026-01-31T09:00:00Z.",
 }).pipe(
   Schema.decode({
-    decode: SchemaGetter.transformOrFail((raw: string) => {
+    decode: SchemaGetter.transformEffect((raw: string) => {
       const instant = parseUtcInstant(raw);
       if (instant === null) {
         return Effect.fail(new SchemaIssue.InvalidValue({ message: "Invalid UTC instant" }));

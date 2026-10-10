@@ -58,7 +58,7 @@ layer(WebCrypto)("MIME pre-allocation budgets", (it) => {
   it.effect("rejects nested/attachment amplification at the part budget", () =>
     Effect.gen(function* () {
       const allowed = yield* Effect.promise(() =>
-        PostalMime.parse(partCountEml(INBOUND_MIME_LIMITS.maxParts), {
+        PostalMime.parse(partCountEml(INBOUND_MIME_LIMITS.maxPartCount), {
           attachmentEncoding: "arraybuffer",
           ...INBOUND_MIME_LIMITS,
         }),

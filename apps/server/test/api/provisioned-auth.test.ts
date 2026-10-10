@@ -93,7 +93,7 @@ describe("provisioned operator authority", () => {
     }),
   );
 
-  it.effect("signs in a mixed-case operator email through the provisioned issuer mapping", () =>
+  it.effect("signs in a mixed-case operator email through the provisioned credential account", () =>
     Effect.gen(function* () {
       const mixedCaseEmail = yield* Schema.decodeEffect(ExternalMailAddress)("Admin@example.com");
       const world = yield* createWorld();

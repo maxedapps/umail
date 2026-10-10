@@ -6,7 +6,7 @@ import {
 } from "@umail/api-contract";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -24,7 +24,7 @@ export type NotificationKey = Uint8Array<ArrayBuffer>;
 
 // The `NotificationKey` resource holds 32 random bytes as hex.
 export function notificationKeyFromHex(secret: string): NotificationKey {
-  const decoded = Encoding.decodeHex(secret);
+  const decoded = Hex.decode(secret);
   if (Result.isFailure(decoded) || decoded.success.byteLength !== KEY_LENGTH) {
     throw new Error("The notification key is not 32 bytes of hex");
   }
@@ -45,7 +45,7 @@ export const deriveApprovalToken = Effect.fn("deriveApprovalToken")(function* (
   const mac = yield* Effect.promise(() =>
     crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(approvalId)),
   );
-  return yield* Schema.decodeEffect(ApprovalToken)(Encoding.encodeHex(new Uint8Array(mac))).pipe(
+  return yield* Schema.decodeEffect(ApprovalToken)(Hex.encode(new Uint8Array(mac))).pipe(
     Effect.orDie,
   );
 });

@@ -4,11 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as CliConfig from "effect/unstable/cli/CliConfig";
-import * as CliError from "effect/unstable/cli/CliError";
-import * as CliOutput from "effect/unstable/cli/CliOutput";
-import * as Command from "effect/unstable/cli/Command";
-import * as GlobalFlag from "effect/unstable/cli/GlobalFlag";
+import * as CliConfig from "effect/cli/CliConfig";
+import * as CliError from "effect/cli/CliError";
+import * as CliOutput from "effect/cli/CliOutput";
+import * as Command from "effect/cli/Command";
+import * as GlobalFlag from "effect/cli/GlobalFlag";
 
 const cliLayer = Layer.mergeAll(
   CliConfig.layer({ builtIns: [GlobalFlag.Help] }),

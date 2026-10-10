@@ -1,0 +1,175 @@
+diff --git a/lib/Alchemist/routes/profile.js b/lib/Alchemist/routes/profile.js
+index 91d3f0549499a6419a5bcbb83f4dd38e3f3fc8f7..22a07137f1e89d4a1b0dee5cd974e18545812829 100644
+--- a/lib/Alchemist/routes/profile.js
++++ b/lib/Alchemist/routes/profile.js
+@@ -67,7 +67,7 @@ export const get = Effect.fn("Alchemist.profile.get")(function* (input) {
+             ? inspectProvider(input.name, provider, config, registered, (updated) => profiles.setProviderConfig(input.name, provider, updated).pipe(Effect.mapError((cause) => new AuthError({
+                 message: `Could not persist repaired ${provider} credentials for profile '${input.name}'.`,
+                 cause,
+-            }))))
++            })))).pipe(Effect.provideService(ProfileStore, profiles))
+             : Effect.succeed({
+                 name: provider,
+                 method: config.method ?? "unknown",
+@@ -228,11 +228,19 @@ export const refresh = Effect.fn("Alchemist.profile.refresh")(function* (input)
+             }));
+         }
+         yield* report({ _tag: "provider.refresh.started", provider: name });
++        let persisted = false;
+         const refreshed = yield* provider.login(input.profile, yield* provider.decodeConfig(input.profile, config), (updated) => profiles.setProviderConfig(input.profile, name, updated).pipe(Effect.mapError((cause) => new AuthError({
+             message: `Could not persist refreshed ${name} credentials for profile '${input.profile}'.`,
+             cause,
+-        }))));
+-        if (refreshed !== undefined) {
++        })), Effect.tap(() => Effect.sync(() => {
++            persisted = true;
++        }))), profiles.loadProviderConfig(provider, input.profile).pipe(Effect.mapError((cause) => cause instanceof AuthError
++            ? cause
++            : new AuthError({
++                message: `Could not reload ${name} configuration for profile '${input.profile}'.`,
++                cause,
++            }))));
++        if (refreshed !== undefined && !persisted) {
+             yield* profiles.setProviderConfig(input.profile, name, refreshed);
+         }
+         yield* report({ _tag: "provider.refresh.completed", provider: name });
+diff --git a/lib/Auth/AuthProvider.js b/lib/Auth/AuthProvider.js
+index fbccf72f936b58d10c1ea1f5865d8768654a5135..fe93b0836be576470293b8bfafd70abf6978b92d 100644
+--- a/lib/Auth/AuthProvider.js
++++ b/lib/Auth/AuthProvider.js
+@@ -181,16 +181,16 @@ export const AuthProvider = () => (name, impl) => Effect.gen(function* () {
+         // a post-browser persist is a benign whole-file swap where the last
+         // grant wins.
+         configure: (profileName, currentConfig) => Semaphore.withPermits(interactiveMutex, 1)(service.configure(profileName, currentConfig).pipe(Effect.provideContext(ctx))),
+-        login: (profileName, config, updateConfig) => Semaphore.withPermits(interactiveMutex, 1)(service.login(profileName, config, updateConfig).pipe(Effect.provideContext(ctx))),
++        login: (profileName, config, updateConfig, reload) => Semaphore.withPermits(interactiveMutex, 1)(service.login(profileName, config, updateConfig, reload).pipe(Effect.provideContext(ctx))),
+         logout: (profileName, config) => withProfileCredentialsLock(profileName, service.logout(profileName, config)).pipe(Effect.provideContext(ctx)),
+-        details: (profileName, config, updateConfig) => withProfileCredentialsLock(profileName, service.details(profileName, config, updateConfig)).pipe(Effect.provideContext(ctx)),
++        details: (profileName, loadConfig, updateConfig) => withProfileCredentialsLock(profileName, Effect.flatMap(loadConfig, (config) => service.details(profileName, config, updateConfig))).pipe(Effect.provideContext(ctx)),
+         ...(service.configureWith === undefined
+             ? {}
+             : {
+                 configureWith: (profileName, input) => service.configureWith(profileName, input).pipe(Effect.provideContext(ctx)),
+                 configureMethods: service.configureMethods,
+             }),
+-        read: (profileName, config, updateConfig) => withProfileCredentialsLock(profileName, service.read(profileName, config, updateConfig)).pipe(Effect.provideContext(ctx)),
++        read: (profileName, loadConfig, updateConfig) => withProfileCredentialsLock(profileName, Effect.flatMap(loadConfig, (config) => service.read(profileName, config, updateConfig))).pipe(Effect.provideContext(ctx)),
+         readEnvironment: service.readEnvironment?.pipe(Effect.provideContext(ctx)),
+         environment,
+         configSchema: service.configSchema,
+diff --git a/lib/Auth/Inspect.js b/lib/Auth/Inspect.js
+index b8c749e90d7721b19082a48b40115fe7086f8f2a..a8e580e642c22d086453c485e0fc2d8c96fe2bd9 100644
+--- a/lib/Auth/Inspect.js
++++ b/lib/Auth/Inspect.js
+@@ -1,7 +1,8 @@
+ import * as Effect from "effect/Effect";
+ import * as Predicate from "effect/Predicate";
+ import * as Result from "effect/Result";
+-import { reconfigureHint, } from "./AuthProvider.js";
++import { AuthError, reconfigureHint, } from "./AuthProvider.js";
++import { ProfileStore } from "./Profile.js";
+ const broken = (name, method, severity, code, message) => ({
+     name,
+     method,
+@@ -50,7 +51,14 @@ export const inspectProvider = Effect.fn("inspectProvider")(function* (profile,
+     if (Result.isFailure(decoded)) {
+         return broken(name, method, "error", "provider.invalid-config", decoded.failure.message);
+     }
+-    const details = yield* Effect.result(provider.details(profile, decoded.success, updateConfig));
++    const profiles = yield* ProfileStore;
++    const loadConfig = profiles.loadProviderConfig(provider, profile).pipe(Effect.mapError((cause) => cause instanceof AuthError
++        ? cause
++        : new AuthError({
++            message: `Could not reload ${name} configuration for profile '${profile}'.`,
++            cause,
++        })));
++    const details = yield* Effect.result(provider.details(profile, loadConfig, updateConfig));
+     if (Result.isSuccess(details)) {
+         return {
+             name,
+diff --git a/lib/Auth/Resolve.js b/lib/Auth/Resolve.js
+index 55d4461a0439fd1f05316bb041be6503b00f38e7..254ba15d7844a2af2ec591d8f78d1611ce6622fa 100644
+--- a/lib/Auth/Resolve.js
++++ b/lib/Auth/Resolve.js
+@@ -68,11 +68,19 @@ export const resolveProviderConfig = (providerName) => Effect.gen(function* () {
+     const selection = yield* profile.current;
+     const profileName = selection.name;
+     const config = yield* profile.loadProviderConfig(auth, profileName);
++    const loadConfig = profile.loadProviderConfig(auth, profileName).pipe(Effect.mapError((cause) => cause instanceof AuthError
++        ? cause
++        : new AuthError({
++            message: `${providerName}: could not reload profile '${profileName}': ${cause.message}`,
++            cause,
++        })));
+     return {
+         auth,
+         profileName,
+         config,
+-        resolve: auth.read(profileName, config, (updated) => profile.setProviderConfig(profileName, providerName, updated).pipe(Effect.mapError((cause) => new AuthError({
++        // Reload under the credentials lock on every resolve: a refresh
++        // rotates the stored token, so `config` goes stale after the first one.
++        resolve: auth.read(profileName, loadConfig, (updated) => profile.setProviderConfig(profileName, providerName, updated).pipe(Effect.mapError((cause) => new AuthError({
+             message: `${providerName}: could not persist refreshed credentials for profile '${profileName}'.`,
+             cause,
+         })))),
+diff --git a/lib/Cloudflare/Auth/AuthProvider.js b/lib/Cloudflare/Auth/AuthProvider.js
+index fc96db1370097b82035a42d1304cbe03c9209e7f..51740d8ca41d6eca32d87ad81c1fbe023a5d7d4e 100644
+--- a/lib/Cloudflare/Auth/AuthProvider.js
++++ b/lib/Cloudflare/Auth/AuthProvider.js
+@@ -372,7 +372,7 @@ export const CloudflareAuth = AuthProviderLayer()(CLOUDFLARE_AUTH_PROVIDER_NAME,
+         // The cached state-store credentials are derived from the account we
+         // just logged out of, so drop them regardless of auth method.
+         .pipe(Effect.andThen(store.delete(profileName, STATE_STORE_CREDENTIALS_FILE).pipe(Effect.ignore)));
+-    const login = (profileName, config, updateConfig) => Match.value(config)
++    const login = (profileName, config, updateConfig, reload) => Match.value(config)
+         .pipe(Match.when({ method: "stored" }, (config) => Effect.succeed(config)), Match.when({ method: "oauth" }, (c) => "scopes" in c
+         ? Effect.gen(function* () {
+             const creds = {
+@@ -416,19 +416,35 @@ export const CloudflareAuth = AuthProviderLayer()(CLOUDFLARE_AUTH_PROVIDER_NAME,
+             // double-spend it. The lock is held only for this API
+             // round-trip, never across the browser wait below.
+             const outcome = creds.type === "oauth" && OAuthClient.usesCurrentClient(creds)
+-                ? yield* withProfileCredentialsLock(profileName, interaction.output
+-                    .info("Cloudflare: refreshing OAuth credentials...")
+-                    .pipe(Effect.andThen(OAuthClient.refresh(creds)), Effect.flatMap((credentials) => {
+-                    const config = {
+-                        ...c,
+-                        clientId: credentials.clientId,
+-                        access: Redacted.value(credentials.access),
+-                        refresh: Redacted.value(credentials.refresh),
+-                        expires: credentials.expires,
+-                        scopes: credentials.scopes,
++                ? yield* withProfileCredentialsLock(profileName, Effect.gen(function* () {
++                    const current = yield* reload ?? Effect.succeed(c);
++                    if (current.method !== "oauth" ||
++                        !("scopes" in current))
++                        return { type: "browser" };
++                    const freshCredentials = {
++                        type: "oauth",
++                        clientId: current.clientId,
++                        access: Redacted.make(current.access),
++                        refresh: Redacted.make(current.refresh),
++                        expires: current.expires,
++                        scopes: current.scopes,
+                     };
+-                    return (updateConfig?.(config) ?? Effect.void).pipe(Effect.as({ type: "refreshed", config }));
+-                }), Effect.tap(() => interaction.output.success("Cloudflare: OAuth credentials refreshed.")), Effect.catchTag("OAuthError", () => Effect.succeed({ type: "browser" }))))
++                    if (!OAuthClient.usesCurrentClient(freshCredentials))
++                        return { type: "browser" };
++                    return yield* interaction.output
++                        .info("Cloudflare: refreshing OAuth credentials...")
++                        .pipe(Effect.andThen(OAuthClient.refresh(freshCredentials)), Effect.flatMap((credentials) => {
++                        const config = {
++                            ...current,
++                            clientId: credentials.clientId,
++                            access: Redacted.value(credentials.access),
++                            refresh: Redacted.value(credentials.refresh),
++                            expires: credentials.expires,
++                            scopes: credentials.scopes,
++                        };
++                        return (updateConfig?.(config) ?? Effect.void).pipe(Effect.as({ type: "refreshed", config }));
++                    }), Effect.tap(() => interaction.output.success("Cloudflare: OAuth credentials refreshed.")), Effect.catchTag("OAuthError", () => Effect.succeed({ type: "browser" })));
++                }))
+                 : yield* Effect.gen(function* () {
+                     if (creds.type === "oauth") {
+                         yield* interaction.output.warning("Cloudflare: removed OAuth credentials issued to the previous client.");

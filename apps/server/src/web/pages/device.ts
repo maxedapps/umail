@@ -2,7 +2,7 @@ import { OFFLINE_ACCESS_SCOPE, UMAIL_OAUTH_SCOPE } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import type { ApiDeps } from "../../api/app.ts";
 import { htmlResponse, type PageView } from "../document.ts";

@@ -40,16 +40,9 @@ layer(WorkerServices)("auth provisioning", (it) => {
       const db = yield* provisionedDatabase;
       const operator = yield* query(db, "SELECT id, email FROM user");
       expect(operator).toEqual([{ id: expect.any(String), email: OPERATOR_EMAIL }]);
-      expect(yield* query(db, "SELECT issuer, providerId, accountId, userId FROM account")).toEqual(
-        [
-          {
-            issuer: "local:credential",
-            providerId: "credential",
-            accountId: operator[0]?.id,
-            userId: operator[0]?.id,
-          },
-        ],
-      );
+      expect(yield* query(db, "SELECT providerId, accountId, userId FROM account")).toEqual([
+        { providerId: "credential", accountId: operator[0]?.id, userId: operator[0]?.id },
+      ]);
       expect(
         yield* query(db, "SELECT identifier, disabled FROM oauthResource ORDER BY identifier"),
       ).toEqual([
@@ -126,6 +119,29 @@ layer(WorkerServices)("auth provisioning", (it) => {
     }),
   );
 
+  it.effect("drops the account issuer column and index of a Better Auth 1.7.2 database", () =>
+    Effect.gen(function* () {
+      const db = yield* provisionedDatabase;
+      yield* Effect.promise(() =>
+        db.exec(
+          `ALTER TABLE account ADD COLUMN issuer TEXT NOT NULL DEFAULT 'local:credential';
+           CREATE UNIQUE INDEX account_issuer_accountId_uidx ON account (issuer, accountId);`,
+        ),
+      );
+      yield* provision(db, provisionRequest("issuer-upgrade"));
+      expect(
+        yield* query(db, "SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'"),
+      ).toEqual([]);
+      expect(
+        yield* query(
+          db,
+          "SELECT name FROM sqlite_master WHERE name = 'account_issuer_accountId_uidx'",
+        ),
+      ).toEqual([]);
+      expect((yield* signIn(db, OPERATOR_EMAIL)).status).toBe(200);
+    }),
+  );
+
   it.effect("does not rewrite credentials when only the provisioning nonce changes", () =>
     Effect.gen(function* () {
       const db = new MemoryD1();
@@ -186,7 +202,7 @@ layer(WorkerServices)("auth provisioning", (it) => {
       }),
   );
 
-  it.effect("signs in through Better Auth using the credential issuer mapping", () =>
+  it.effect("signs in through Better Auth with the provisioned credential account", () =>
     Effect.gen(function* () {
       const db = yield* provisionedDatabase;
       const response = yield* signIn(db, OPERATOR_EMAIL);
@@ -196,7 +212,7 @@ layer(WorkerServices)("auth provisioning", (it) => {
   );
 
   it.effect(
-    "signs in a mixed-case operator email through Better Auth using the credential issuer mapping",
+    "signs in a mixed-case operator email through Better Auth with the provisioned credential account",
     () =>
       Effect.gen(function* () {
         const mixedCaseEmail = yield* Schema.decodeEffect(ExternalMailAddress)("Admin@example.com");

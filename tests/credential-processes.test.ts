@@ -15,10 +15,10 @@ import * as Schedule from "effect/Schedule";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as ChildProcess from "effect/process/ChildProcess";
 
 import { makeCredentialStore, OAuthCredentials } from "../apps/cli/src/credential-store.ts";
 
@@ -197,7 +197,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
           yield* fs.writeFileString(lockPath, "", { mode: 0o600 });
           yield* fs.chmod(lockPath, 0o600);
           const workers = [yield* spawnLockWorker(stateHome), yield* spawnLockWorker(stateHome)];
-          const results = yield* Effect.all(workers.map((worker) => worker.finished));
+          const results = yield* Effect.forEach(workers, (worker) => worker.finished);
           for (const result of results) {
             expect(result.status).toBe(0);
             expectNoSecrets(result);

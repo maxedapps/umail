@@ -21,9 +21,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Record from "effect/Record";
 import * as Schema from "effect/Schema";
-import * as Command from "effect/unstable/cli/Command";
-import * as Flag from "effect/unstable/cli/Flag";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as Command from "effect/cli/Command";
+import * as Flag from "effect/cli/Flag";
+import * as HttpClient from "effect/http/HttpClient";
 
 import { decideApproval } from "../approvals.ts";
 import { login, logout } from "../auth.ts";
@@ -110,11 +110,11 @@ const addressesCommand = Command.make("addresses").pipe(
     Command.make(
       "create",
       {
-        localPart: Flag.string("local-part").pipe(
+        localPart: Flag.String("local-part").pipe(
           Flag.withDescription("Mailbox local part; the server appends its configured domain"),
         ),
         displayName: Flag.optional(
-          Flag.string("display-name").pipe(Flag.withDescription("Display name")),
+          Flag.String("display-name").pipe(Flag.withDescription("Display name")),
         ),
       },
       ({ localPart, displayName }) =>
@@ -131,7 +131,7 @@ const addressesCommand = Command.make("addresses").pipe(
       "update",
       {
         id: idFlag,
-        displayName: Flag.string("display-name").pipe(Flag.withDescription("Display name")),
+        displayName: Flag.String("display-name").pipe(Flag.withDescription("Display name")),
       },
       ({ id, displayName }) => patchAddress(id, new PatchAddressPayload({ displayName })),
     ).pipe(Command.withDescription("Update a mailbox address")),
@@ -153,7 +153,7 @@ const sendingIdentitiesCommand = Command.make("sending-identities").pipe(
   ]),
 );
 
-const addressIdFlag = Flag.string("address-id").pipe(Flag.withDescription("Address id"));
+const addressIdFlag = Flag.String("address-id").pipe(Flag.withDescription("Address id"));
 
 const forwardingCommand = Command.make("forwarding").pipe(
   Command.withDescription("Forward an address's inbound mail to another inbox"),
@@ -214,7 +214,7 @@ const messagesList = Command.make(
   {
     direction: directionFlag,
     addressId: Flag.optional(
-      Flag.string("address-id").pipe(Flag.withDescription("Mailbox address id")),
+      Flag.String("address-id").pipe(Flag.withDescription("Mailbox address id")),
     ),
     since: sinceFlag,
     sinceHours: sinceHoursFlag,
@@ -301,7 +301,7 @@ const messagesReply = Command.make(
     }),
 ).pipe(Command.withDescription("Reply to a message; recipients are derived from the parent"));
 
-const outputFlag = Flag.string("output").pipe(Flag.withDescription("File to write"));
+const outputFlag = Flag.String("output").pipe(Flag.withDescription("File to write"));
 
 const messagesCommand = Command.make("messages").pipe(
   Command.withDescription("Messages"),
@@ -337,7 +337,7 @@ const attachmentsCommand = Command.make("attachments").pipe(
       "get",
       {
         id: idFlag,
-        attachmentId: Flag.string("attachment-id").pipe(Flag.withDescription("Attachment id")),
+        attachmentId: Flag.String("attachment-id").pipe(Flag.withDescription("Attachment id")),
         output: outputFlag,
       },
       ({ id, attachmentId, output }) =>

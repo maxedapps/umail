@@ -10,10 +10,10 @@ import * as Path from "effect/Path";
 import type { Json } from "effect/Schema";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as ChildProcess from "effect/process/ChildProcess";
 
 import { ApprovalDecisionState, MailThreadPage } from "../packages/api-contract/src/api-spec.ts";
 

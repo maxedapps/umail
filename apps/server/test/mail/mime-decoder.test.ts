@@ -14,9 +14,9 @@ const PARSERS = [
   { label: "CommonJS", parser: PostalMimeCommonJs },
 ] as const;
 
-describe.each(PARSERS)("PostalMime $label decoded-byte accumulation", ({ parser }) => {
+describe.each(PARSERS)("PostalMime $label decoded chunk concatenation", ({ parser }) => {
   it.effect.each(["\n", "\r\n"] as const)(
-    "normalizes %j pass-through input while preserving empty and final lines",
+    "keeps the %j line endings of pass-through input, empty and final lines included",
     (lineEnding) =>
       Effect.gen(function* () {
         const decoded = yield* parseAttachment(
@@ -24,14 +24,11 @@ describe.each(PARSERS)("PostalMime $label decoded-byte accumulation", ({ parser 
           attachmentEml("8bit", ["alpha", "", "omega"], lineEnding, false),
         );
 
-        expect(decoded).toEqual(new TextEncoder().encode("alpha\n\nomega\n"));
-        expect(sha256Hex(decoded)).toBe(
-          "ab8d35cf232afde3151ce6ce55e0661be0e7961c8652a75eb540ddc53d7f56d2",
-        );
+        expect(decoded).toEqual(new TextEncoder().encode(`alpha${lineEnding}${lineEnding}omega\n`));
       }),
   );
 
-  it.effect("decodes 76-character folded base64 across remainder and accumulator blocks", () =>
+  it.effect("decodes 76-character folded base64 across remainder and decoder chunks", () =>
     Effect.gen(function* () {
       const expected = deterministicBytes(2 * 64 * 1024 + 257);
       const base64 = Buffer.from(expected).toString("base64");
@@ -78,11 +75,11 @@ describe.each(PARSERS)("PostalMime $label decoded-byte accumulation", ({ parser 
       Effect.gen(function* () {
         const lines = [...softWrapped("a".repeat(65_534), 75), "aa=42=G1=", "tail"];
         const decoded = yield* parseAttachment(parser, attachmentEml("quoted-printable", lines));
-        const expected = new TextEncoder().encode(`${"a".repeat(65_536)}B=G1tail\n`);
+        const expected = new TextEncoder().encode(`${"a".repeat(65_536)}B=G1tail\r\n`);
 
-        expect(decoded.byteLength).toBe(65_545);
+        expect(decoded.byteLength).toBe(65_546);
         expect(sha256Hex(decoded)).toBe(
-          "555dfdae0f13ac8d4e4a662b92581e7da27da09b7f9863410a266f50eb981434",
+          "2ef20671ca73fcf6b8e2549b25c148e1b268f242d46f40748610c641774f1ed0",
         );
         expect(decoded).toEqual(expected);
       }),

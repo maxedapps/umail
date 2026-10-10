@@ -25,7 +25,6 @@ import {
 } from "./options.ts";
 
 const CREDENTIAL_PROVIDER_ID = "credential" as const;
-const CREDENTIAL_ISSUER = "local:credential" as const;
 const AUTH_SCHEMA_SECRET = "umail-auth-schema" as const;
 
 type AuthProvisionInput = {
@@ -59,10 +58,6 @@ const ExistingClientRow = Schema.Struct({
 const ExistingAccountRow = Schema.Struct({
   id: Schema.String,
   password: Schema.NullOr(Schema.String),
-  issuer: Schema.String,
-  providerId: Schema.String,
-  accountId: Schema.String,
-  userId: Schema.String,
 });
 type ExistingAccountRow = typeof ExistingAccountRow.Type;
 
@@ -73,6 +68,7 @@ function authMigrationOptions() {
 }
 
 const applyAuthSchema = Effect.fn("applyAuthSchema")(function* (db: AuthDatabase) {
+  yield* dropAccountIssuer(db);
   const database = yield* db.raw;
   // Deployment-only: keep migration dependencies out of the Worker startup path.
   const { getMigrations } = yield* Effect.promise(() => import("better-auth/db/migration"));
@@ -85,6 +81,19 @@ const applyAuthSchema = Effect.fn("applyAuthSchema")(function* (db: AuthDatabase
     }),
   );
   yield* Effect.promise(() => migrations.runMigrations());
+});
+
+// Better Auth 1.7.0 through 1.7.2 required `account.issuer`; 1.7.3 dropped it and never writes it,
+// so a database made by those versions loses the column and its index, as its 1.7 upgrade guide says.
+const dropAccountIssuer = Effect.fn("dropAccountIssuer")(function* (db: AuthDatabase) {
+  const issuer = yield* db
+    .prepare(`SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'`)
+    .first();
+  if (issuer === null) return;
+  yield* db.batch([
+    db.prepare(`DROP INDEX IF EXISTS account_issuer_accountId_uidx`),
+    db.prepare(`ALTER TABLE account DROP COLUMN issuer`),
+  ]);
 });
 
 export const provisionAuth = Effect.fn("provisionAuth")(function* (
@@ -159,8 +168,7 @@ const loadCredentialAccount = Effect.fn("loadCredentialAccount")(function* (
 ) {
   const row = yield* db
     .prepare(
-      `SELECT id, password, issuer, providerId, accountId, userId
-       FROM account
+      `SELECT id, password FROM account
        WHERE userId = ? AND providerId = ?`,
     )
     .bind(operatorId, CREDENTIAL_PROVIDER_ID)
@@ -169,7 +177,7 @@ const loadCredentialAccount = Effect.fn("loadCredentialAccount")(function* (
   const decoded = Schema.decodeUnknownOption(ExistingAccountRow)(row);
   if (Option.isNone(decoded)) {
     return yield* Effect.die(
-      new Error("credential account row does not match Better Auth 1.7.2 mapping"),
+      new Error("credential account row does not match Better Auth's account mapping"),
     );
   }
   return decoded.value;
@@ -206,26 +214,25 @@ const persistOperatorIdentity = Effect.fn("persistOperatorIdentity")(function* (
       db
         .prepare(
           `INSERT INTO account (
-             id, accountId, providerId, userId, issuer, password,
+             id, accountId, providerId, userId, password,
              accessToken, refreshToken, idToken, scope, createdAt, updatedAt
-           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .bind(
           input.operatorId,
           input.operatorId,
           CREDENTIAL_PROVIDER_ID,
           input.operatorId,
-          CREDENTIAL_ISSUER,
           input.passwordHash,
           input.now,
           input.now,
         ),
     );
-  } else if (account.issuer !== CREDENTIAL_ISSUER || input.passwordChanged) {
+  } else if (input.passwordChanged) {
     statements.push(
       db
-        .prepare(`UPDATE account SET issuer = ?, password = ?, updatedAt = ? WHERE id = ?`)
-        .bind(CREDENTIAL_ISSUER, input.passwordHash, input.now, account.id),
+        .prepare(`UPDATE account SET password = ?, updatedAt = ? WHERE id = ?`)
+        .bind(input.passwordHash, input.now, account.id),
     );
   }
 

@@ -3,7 +3,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
-import * as Command from "effect/unstable/cli/Command";
+import * as Command from "effect/cli/Command";
 
 import { OAuthCredentialStore } from "./credential-store.ts";
 import { ApprovalTokenSource } from "./approvals.ts";

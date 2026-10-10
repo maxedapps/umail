@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
+import * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
 
 import { NotPermitted, Unauthenticated } from "./errors.ts";
 import { ExternalMailAddress, parseExternalMailAddress } from "./mail-contact.ts";

@@ -8,8 +8,8 @@ import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Terminal from "effect/Terminal";
-import * as Prompt from "effect/unstable/cli/Prompt";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as Prompt from "effect/cli/Prompt";
+import * as HttpClient from "effect/http/HttpClient";
 
 import { publicApprovalClient } from "./client.ts";
 import { UnexpectedResponse, fromHttpClientError } from "./errors.ts";
@@ -50,7 +50,7 @@ export class ApprovalTokenSource extends Context.Service<
       const terminal = yield* Terminal.Terminal;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const promptToken = Prompt.password({ message: "Approval token" }).pipe(
+      const promptToken = Prompt.Password({ message: "Approval token" }).pipe(
         Effect.provideService(Terminal.Terminal, terminal),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),

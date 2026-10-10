@@ -1,6 +1,6 @@
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 
 // Effect's Crypto service over WebCrypto, which both workerd and Node provide.
@@ -22,5 +22,5 @@ export const randomId = Effect.gen(function* () {
 
 export const sha256Hex = Effect.fn("sha256Hex")(function* (bytes: Uint8Array) {
   const service = yield* Crypto.Crypto;
-  return Encoding.encodeHex(yield* service.digest("SHA-256", bytes).pipe(Effect.orDie));
+  return Hex.encode(yield* service.digest("SHA-256", bytes).pipe(Effect.orDie));
 });

@@ -57,9 +57,9 @@ export interface OAuthCredentialStoreService {
 // `$XDG_STATE_HOME/umail/oauth.json`, else `~/.local/state/umail/oauth.json`.
 export const credentialFile = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const root = yield* Config.string("XDG_STATE_HOME").pipe(
+  const root = yield* Config.String("XDG_STATE_HOME").pipe(
     Config.orElse(() =>
-      Config.string("HOME").pipe(Config.map((home) => path.join(home, ".local", "state"))),
+      Config.String("HOME").pipe(Config.map((home) => path.join(home, ".local", "state"))),
     ),
     Effect.mapError(() => new MissingStateHome()),
   );
