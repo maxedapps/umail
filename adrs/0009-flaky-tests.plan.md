@@ -1,6 +1,6 @@
 # Plan for 0009: Flaky tests (task 636)
 
-- **Status:** In progress
+- **Status:** Done
 - **Rules:** [awesome-tests](https://github.com/academind/agent-setup/blob/main/skills/awesome-tests/SKILL.md#flaky-tests), from Max's decisions in task 636: the gate reruns a red test alone and logs it but stays red; a skip expires after 14 days with one task per skip; agents run the full suites from time to time at their judgement; live checks stay out of the gate.
 
 ## Goal
