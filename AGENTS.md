@@ -69,8 +69,6 @@ Review every UI change yourself in a browser before you report it. Never hand th
 - Destroy the preview when you're done. Its mail domain stays registered in Email Routing, so tell Max it needs cleaning up by hand ([Stages and removal](docs/operations.md#stages-and-removal)).
 - Never run `alchemy dev` against Max's `dev` stage without asking him first.
 
-`agents land` runs this at the worktree's root (agentmanager ADR 0289):
+## Landing
 
-```agents-land
-gate: pnpm gate
-```
+- Check: pnpm gate
