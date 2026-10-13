@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 
 import { MailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
 import {
-  layoutForStage,
+  layoutForStage as layout,
   operatorEmail,
   rootDomain,
   stageHostnameLabel,
@@ -15,6 +15,9 @@ import {
 } from "../src/site.ts";
 
 const ROOT = Schema.decodeSync(MailDomain)("umail.example.com");
+
+const layoutForStage = (root: MailDomain, stage: string) =>
+  layout(root, stage, [{ name: root, receive: true, send: true }]);
 
 const readRoot = (env: Record<string, string>) =>
   Effect.exit(rootDomain.parse(ConfigProvider.fromEnv({ env })));
@@ -33,6 +36,7 @@ describe("layoutForStage", () => {
       kind: "prod",
       apiHostname: "umail.example.com",
       mailDomain: "umail.example.com",
+      mailDomains: [{ name: "umail.example.com", receive: true, send: true }],
     });
   });
 
@@ -41,12 +45,14 @@ describe("layoutForStage", () => {
       kind: "preview",
       apiHostname: "dev.umail.example.com",
       mailDomain: "dev-mail.umail.example.com",
+      mailDomains: [{ name: "dev-mail.umail.example.com", receive: true, send: true }],
       testLocalParts: ["probe", "inbox"],
     });
     expect(layoutForStage(ROOT, "staging")).toEqual({
       kind: "preview",
       apiHostname: "staging.umail.example.com",
       mailDomain: "staging-mail.umail.example.com",
+      mailDomains: [{ name: "staging-mail.umail.example.com", receive: true, send: true }],
       testLocalParts: ["probe", "inbox"],
     });
   });
@@ -111,7 +117,13 @@ describe("operatorEmail", () => {
     Effect.exit(
       operatorEmail.parse(
         ConfigProvider.fromEnv({
-          env: { UMAIL_DOMAIN: "umail.example.com", UMAIL_OPERATOR_EMAIL: value },
+          env: {
+            UMAIL_DOMAIN: "umail.example.com",
+            UMAIL_MAIL_DOMAINS: JSON.stringify([
+              { name: "umail.example.com", receive: true, send: true },
+            ]),
+            UMAIL_OPERATOR_EMAIL: value,
+          },
         }),
       ),
     );
@@ -133,7 +145,7 @@ describe("operatorEmail", () => {
     (address) =>
       Effect.gen(function* () {
         expect(failureMessage(yield* read(address))).toContain(
-          "must be an inbox outside UMAIL_DOMAIN",
+          "must be an inbox outside the receiving mail domains",
         );
       }),
   );

@@ -1,3 +1,4 @@
+import { recipientPorts } from "../mail/recipient-fake.ts";
 import {
   OPERATOR_POLICY,
   SubmissionRequestId,
@@ -392,6 +393,7 @@ const createWorld = Effect.fn("createWorld")(function* (
     },
     runAt(nowMs: number) {
       const ports: DueWorkPorts<never> = {
+        routes: recipientPorts(MAIL_DOMAIN),
         sender,
         htmlPolicy,
         applicationUrl: new URL("https://umail.example.com"),

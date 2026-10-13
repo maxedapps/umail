@@ -86,8 +86,8 @@ const QueryPlanRow = Schema.Struct({
 });
 
 const FAILING_MIGRATION = {
-  version: 11,
-  name: "0011_fail",
+  version: 12,
+  name: "0012_fail",
   sql: `CREATE TABLE fail_marker (
   id TEXT PRIMARY KEY NOT NULL
 );
@@ -253,6 +253,7 @@ export class AccountStoreTestHost extends DurableObject {
       mailDomain,
       displayName,
       nowIso,
+      true,
     );
   }
 

@@ -6,7 +6,7 @@ There is no IMAP/SMTP server. The browser handles login, client permissions and 
 
 Limits include 20 MiB raw inbound mail, 50 inbound attachments, and 50 recipients per outgoing message.
 
-> **Every stage enables Cloudflare Email Routing for its mail domain's entire zone, and it stays enabled after the stage is destroyed. Production also replaces the zone's email catch-all**, even when using a subdomain. Explicit routing rules take precedence; AgentMail rejects recipients without an active mailbox. Deploy only where you intend to control the zone's email routing.
+AgentMail onboards only its declared receiving children and creates one literal rule per mailbox at runtime. It requires an already enabled zone with Cloudflare's shared receiving DKIM record; it refuses implicit shared-zone setup and never repairs external apex MX, SPF or DMARC. New installations never manage a catch-all. Existing installations follow the [two-step recipient migration](docs/operations.md#existing-installation-cutover).
 
 ## Prerequisites
 
@@ -15,6 +15,7 @@ Limits include 20 MiB raw inbound mail, 50 inbound attachments, and 50 recipient
 - An existing inbox for operator notifications and approval requests.
 - Git, **Node.js 22.18+**, **pnpm 11.13.1**, and Linux/macOS for CLI credential storage.
 - A [Cloudflare user API token](https://dash.cloudflare.com/profile/api-tokens) with **Account → Email Routing Addresses → Edit**, scoped to your account, for forwarding management.
+- A separate token with **Zone → Email Routing Rules → Edit**, limited to the receiving zones. Deployment OAuth cannot provision it; see [token setup](docs/operations.md#routing-credentials).
 
 ## Install and configure
 
@@ -27,16 +28,20 @@ cp .env.example .env
 
 Edit `.env`. Replace example domains with your own; keep credentials private. Keep `UMAIL_STACK=uMail` for an existing installation.
 
-| Variable                  | Required for          | Value                                                                                                                                                                         |
-| ------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UMAIL_STACK`             | New installation      | Stable, case-sensitive Alchemy stack name, e.g. `uMail-academind`; absent defaults to the existing `uMail`. Use 1–32 letters/digits/internal hyphens, starting with a letter. |
-| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                                                                                                         |
-| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox outside `UMAIL_DOMAIN`, since it approves sends; the only operator allowed to sign in.                                                                         |
-| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                                                                                                    |
-| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                                                                                                                  |
-| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.                                                                                    |
-| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                                                                                                          |
-| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                                                                                                    |
+| Variable                       | Required for                      | Value                                                                                                                                                                          |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `UMAIL_STACK`                  | New installation                  | Stable, case-sensitive Alchemy stack name, e.g. `uMail-academind`; absent defaults to the existing `uMail`. Use 1–32 letters/digits/internal hyphens, starting with a letter.  |
+| `UMAIL_DOMAIN`                 | Deployment                        | Console/API hostname, e.g. `mail.example.com`; no scheme/path.                                                                                                                 |
+| `UMAIL_MAIL_DOMAINS`           | Deployment                        | JSON array of `{ "name": "mail.example.com", "receive": true, "send": true }`; unique names and at least one receiving domain. Use the existing mail domain for its migration. |
+| `UMAIL_OPERATOR_EMAIL`         | Deployment                        | Existing inbox outside every receiving domain, since it approves sends; the only operator allowed to sign in.                                                                  |
+| `UMAIL_OPERATOR_PASSWORD`      | Deployment                        | Unique password of at least 12 characters.                                                                                                                                     |
+| `CF_EMAIL_ROUTING_TOKEN`       | Deployment                        | Forwarding-management token described above.                                                                                                                                   |
+| `CF_EMAIL_ROUTING_RULES_TOKEN` | Deployment                        | Rules-only token scoped to receiving zones; bound as a Worker secret.                                                                                                          |
+| `UMAIL_LEGACY_CATCH_ALL`       | Existing prod rollout only        | `true` preserves the stored owned catch-all during backfill; false for new installations.                                                                                      |
+| `UMAIL_LEGACY_SEED_RULES`      | Existing dev/preview rollout only | `true` transfers stored seed rules to the controller without deleting them.                                                                                                    |
+| `UMAIL_URL`                    | CLI                               | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.                                                                                     |
+| `CLOUDFLARE_ACCOUNT_ID`        | Token deployment only             | Target account ID; omit when using an OAuth profile.                                                                                                                           |
+| `CLOUDFLARE_API_TOKEN`         | Token deployment only             | Deployment token; leave unset when using an OAuth profile.                                                                                                                     |
 
 Set up deployment authentication:
 
@@ -65,7 +70,7 @@ One repository can select multiple installations. Alchemy's Cloudflare account +
 
 ```sh
 cp .env.example .env.second
-# Set UMAIL_STACK=uMail-second, UMAIL_DOMAIN=mail.second-example.com and its credentials.
+# Set the new stack, console hostname, receiving manifest and scoped credentials.
 pnpm deploy:stage --env-file .env.second --stage prod --profile default --dry-run --no-input
 # Only after reviewing the plan and confirming the zone is safe to manage:
 pnpm deploy:stage --env-file .env.second --stage prod --profile default
@@ -73,7 +78,7 @@ pnpm deploy:stage --env-file .env.second --stage prod --profile default
 
 `--env-file` also works on Alchemy's plan, destroy, logs and profile commands. Without it, the shell overrides `.env`; with it, the selected file overrides the shell and replaces `.env`. A blank stack name is an error. Names are not trimmed or lower-cased. A valid typo selects new state and plans a brand-new installation: check the stack name and proposed creates in every dry-run. Updating an installation means selecting its same env file, stack, account/profile and stage every time. See [installation operations](docs/operations.md#named-installations).
 
-**Stack isolation does not isolate zone-wide Email Routing. Do not deploy `.env.academind` for `mail.academind.ai` yet.** Current routing still enables the entire zone and sets prod's catch-all. Preserving Purelymail at `academind.ai` requires subdomain-only onboarding and literal routes for every mailbox, including mailboxes created at runtime. That larger routing change is deferred ([ADR 0010](adrs/0010-named-installations.md)); a different stack alone is not sufficient.
+For Academind, prepare `.env.academind` with `UMAIL_STACK=uMail-academind`, `UMAIL_DOMAIN=mail.academind.ai` and `UMAIL_MAIL_DOMAINS='[{"name":"mail.academind.ai","receive":true,"send":false}]'`. Select the profile for its owning account. **Do not deploy it before Max's go and its dry-run.** Preserve Purelymail's apex records and verify the shared receiving foundation first. The isolated child-only SMTP proof passed on temporary `vps-course.com` ([ADR 0011](adrs/0011-recipient-routing.md)); it changed neither live installation.
 
 ## First mailbox
 
@@ -83,7 +88,9 @@ pnpm umail login
 pnpm umail addresses create --local-part inbox --display-name "Inbox"
 ```
 
-Open the verification URL printed by `login` and approve the CLI. Send a test email to `inbox@mail.example.com`, then read it:
+Open the verification URL printed by `login` and approve the CLI. With several receiving domains, add `--domain mail.example.com` to creation; `addresses domains` lists the choices. Creation returns `routing.state: pending`; reception starts when the alarm verifies the owned Cloudflare rule and state becomes `ready`. Console, CLI and MCP mailbox lists expose routing status separately from lifecycle. Transient failures retry durably; after fixing a permission or ownership error use `addresses retry-routing --id <id>`. Pause preserves its route and rejects incoming mail; `addresses retire --id <id>` removes its owned rule and keeps its archive. Retirement cannot be resumed with `addresses enable`.
+
+Once reception is ready, send a test email to `inbox@mail.example.com`, then read it:
 
 ```sh
 pnpm umail messages list --direction inbound --limit 10

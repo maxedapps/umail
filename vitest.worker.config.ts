@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
 import { rerunTriggers } from "./tests/rerun-triggers.ts";
 import { evaluateApplication, requireWorker, resolveGraphValue } from "./tests/stack-fixture.ts";
 import { bundleWorker } from "./tests/worker-bundle.ts";
+import { recipientRoutingService } from "./tests/recipient-routing-service.ts";
 
 const workerConfig = Effect.gen(function* () {
   const path = yield* Path.Path;
@@ -31,9 +32,15 @@ const workerConfig = Effect.gen(function* () {
       cloudflareTest({
         main: path.resolve(".alchemy/test-runtime/App", bundle.files[0].path),
         miniflare: {
+          outboundService: recipientRoutingService(),
           compatibilityDate: "2026-08-21",
           compatibilityFlags: ["nodejs_compat"],
-          bindings,
+          bindings: {
+            ...bindings,
+            ALCHEMY_WORKER_NAME: "App",
+            ALCHEMY_STACK_NAME: "uMail",
+            ALCHEMY_STAGE: "dev",
+          },
           d1Databases: ["AuthDb"],
           r2Buckets: ["MailArchive"],
           queueProducers: ["MailIndex"],
@@ -53,7 +60,7 @@ const workerConfig = Effect.gen(function* () {
         "alchemy.run.ts",
         "tools/stack-name.ts",
         "apps/server/src/**",
-        "tests/{stack-fixture,worker-bundle}.ts",
+        "tests/{stack-fixture,worker-bundle,recipient-routing-service}.ts",
       ),
     },
   };

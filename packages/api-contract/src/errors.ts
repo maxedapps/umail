@@ -11,6 +11,8 @@ type InvalidRequestCode =
   | "invalid_cursor"
   | "address_invalid"
   | "address_reserved"
+  | "receiving_domain_required"
+  | "sender_domain_receive_only"
   | "from_address_unknown"
   | "from_address_inactive"
   | "too_many_recipients"

@@ -18,6 +18,7 @@ import { IndexReceiptWork, indexReceipt } from "./mail/process-index.ts";
 import { StructuredLogs, appRuntime } from "./app-runtime.ts";
 import { AuthDb, MailArchive, MailIndex, ProvisionedOperator } from "./resources.ts";
 import { currentSite } from "./site.ts";
+import { DeploymentMailDomains } from "./mail/routing.ts";
 
 const appProps = Effect.gen(function* () {
   const site = yield* currentSite;
@@ -27,11 +28,14 @@ const appProps = Effect.gen(function* () {
 
   const provisioned = yield* ProvisionedOperator;
   const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+  const resolvedDomains = yield* DeploymentMailDomains;
   return {
     ...props,
     env: {
       AUTH_OPERATOR_ID: provisioned.operatorId,
       CLOUDFLARE_ACCOUNT_ID: accountId,
+      UMAIL_RESOLVED_MAIL_DOMAINS: resolvedDomains.domainsJson,
+      UMAIL_RESOLVED_LEGACY_SEEDS: resolvedDomains.legacySeedsJson,
     },
   };
 });
@@ -98,6 +102,9 @@ export default App.make(
       destinations: cloudflareDestinations({ token: routingToken, accountId }),
       htmlPolicy: runtime.htmlPolicy,
       mailDomain: runtime.site.mailDomain,
+      mailDomains: runtime.domains,
+      routingWorkerName: runtime.workerName,
+      routingOwnerPrefix: runtime.routeOwnerPrefix,
       applicationUrl: runtime.applicationUrl,
       operatorId: runtime.operatorId,
       notificationKey: runtime.notificationKey,

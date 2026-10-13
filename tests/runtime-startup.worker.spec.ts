@@ -9,6 +9,14 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { beforeEach } from "vitest";
+
+// Cloudflare rules are outside the DO's storage. Reset the local control plane alongside
+// Vitest's per-test SQLite/R2 isolation so prior fixtures cannot own these recipients.
+beforeEach(async () => {
+  const response = await fetch("https://umail-test-control.invalid/reset", { method: "POST" });
+  expect(response.status).toBe(204);
+});
 
 // Exercise the generated bridge and its real SQLite storage.
 const DUE_AT = "2030-01-01T00:00:00.000Z";
@@ -16,6 +24,22 @@ const testEnv = env as {
   AccountStore: DurableObjectNamespace;
   AuthDb: D1Database;
 };
+
+// Miniflare may already have consumed the alarm and be reconciling over HTTP.
+// The helper then returns false; wait for committed routing rather than its return value.
+async function settleSeedRoutes(stub: DurableObjectStub) {
+  await runDurableObjectAlarm(stub);
+  await expect
+    .poll(() =>
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("SELECT state, rule_id, zone_id FROM mailbox_routes").toArray(),
+      ),
+    )
+    .toEqual([
+      { state: "ready", rule_id: expect.any(String), zone_id: "test-zone" },
+      { state: "ready", rule_id: expect.any(String), zone_id: "test-zone" },
+    ]);
+}
 
 describe("generated application runtime", () => {
   it.effect(
@@ -51,6 +75,17 @@ describe("generated application runtime", () => {
           { address: "inbox@dev-mail.umail.example.com" },
           { address: "probe@dev-mail.umail.example.com" },
         ]);
+        yield* Effect.promise(() => settleSeedRoutes(stub));
+        const routes = yield* Effect.promise(() =>
+          runInDurableObject(stub, (_instance, state) =>
+            state.storage.sql.exec("SELECT state, rule_id, zone_id FROM mailbox_routes").toArray(),
+          ),
+        );
+        expect(routes).toHaveLength(2);
+        expect(routes).toEqual([
+          { state: "ready", rule_id: expect.any(String), zone_id: "test-zone" },
+          { state: "ready", rule_id: expect.any(String), zone_id: "test-zone" },
+        ]);
         const before = yield* Effect.promise(() =>
           runInDurableObject(stub, (_instance, state) => ({
             migrations: state.storage.sql
@@ -63,7 +98,10 @@ describe("generated application runtime", () => {
               .toArray(),
           })),
         );
-        expect(before.migrations).toEqual([{ version: 10, name: "0010_account" }]);
+        expect(before.migrations).toEqual([
+          { version: 10, name: "0010_account" },
+          { version: 11, name: "0011_recipient_routes" },
+        ]);
         expect(before.tables).toContainEqual({ name: "inbound_receipts" });
         expect(before.tables).toContainEqual({ name: "outbound_jobs" });
         expect(before.tables).toContainEqual({ name: "approval_requests" });
@@ -78,6 +116,8 @@ describe("generated application runtime", () => {
   it.effect("arms the store's alarm on start for the due work it finds", () =>
     Effect.gen(function* () {
       const stub = testEnv.AccountStore.getByName("operator");
+      yield* Effect.promise(() => runInDurableObject(stub, () => undefined));
+      yield* Effect.promise(() => settleSeedRoutes(stub));
       yield* Effect.promise(() =>
         runInDurableObject(stub, (_instance, state) => {
           state.storage.sql.exec(

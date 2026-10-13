@@ -26,6 +26,30 @@ export class Address extends Schema.Class<Address>("Address")({
   forwardTo: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  domain: Schema.String,
+  canSend: Schema.Boolean,
+  retiredAt: Schema.NullOr(Schema.String),
+  routing: Schema.Struct({
+    state: Schema.Literals(["pending", "ready", "error"]),
+    error: Schema.NullOr(Schema.String),
+    ruleId: Schema.NullOr(Schema.String),
+    zoneId: Schema.NullOr(Schema.String),
+  }),
+}) {}
+
+export class ReceivingDomain extends Schema.Class<ReceivingDomain>("ReceivingDomain")({
+  name: Schema.String,
+  receive: Schema.Boolean,
+  send: Schema.Boolean,
+  zoneId: Schema.String,
+}) {}
+
+export class RoutingConfiguration extends Schema.Class<RoutingConfiguration>(
+  "RoutingConfiguration",
+)({
+  workerName: Schema.String,
+  ownerPrefix: Schema.String,
+  domains: Schema.Array(ReceivingDomain),
 }) {}
 
 export class SendingIdentity extends Schema.Class<SendingIdentity>("SendingIdentity")({
@@ -273,6 +297,7 @@ export class CreateAddressPayload extends Schema.Class<CreateAddressPayload>(
   "CreateAddressPayload",
 )({
   localPart: Schema.String,
+  domain: Schema.optionalKey(Schema.String),
   displayName: Schema.optionalKey(Schema.String),
 }) {}
 
@@ -307,6 +332,32 @@ const AttachmentParams = Schema.Struct({
 const storeErrors = [NotFound, Conflict] as const;
 
 class AddressesGroup extends HttpApiGroup.make("Addresses")
+  .add(
+    HttpApiEndpoint.get("listReceivingDomains", "/receiving-domains", {
+      success: Schema.Array(ReceivingDomain),
+      error: storeErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getRoutingConfiguration", "/routing-configuration", {
+      success: RoutingConfiguration,
+      error: storeErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("retryAddressRouting", "/addresses/:id/routing/retry", {
+      params: IdParams,
+      success: Address,
+      error: storeErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("retireAddress", "/addresses/:id/retire", {
+      params: IdParams,
+      success: Address,
+      error: storeErrors,
+    }),
+  )
   .add(
     HttpApiEndpoint.post("createAddress", "/addresses", {
       payload: CreateAddressPayload,

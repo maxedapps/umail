@@ -11,6 +11,8 @@ import { cloudflareEmailSender } from "../mail/email-sender.ts";
 import { StructuredLogs, appRuntime } from "../app-runtime.ts";
 import { MailIndex } from "../resources.ts";
 import { operatorEmail } from "../site.ts";
+import type { MailDomainConfiguration } from "../mail/domains.ts";
+import { RecipientRules } from "../mail/recipient-rules.ts";
 import {
   createAddress,
   getAddress,
@@ -20,6 +22,9 @@ import {
   patchAddress,
   resolveSendingIdentity,
   setAddressForwarding,
+  configureSendingDomains,
+  retireAddress,
+  retryAddressRouting,
 } from "./administration.ts";
 import {
   applyAccountSchema,
@@ -60,7 +65,11 @@ const runStore = <A>(run: () => A): Effect.Effect<A, AccountStoreError> =>
     Effect.tapDefect((defect) => Effect.logError("AccountStore call failed", defect)),
   );
 
-export function makeAccountStoreRpc(storage: AccountStorage, crypto: Crypto.Crypto) {
+export function makeAccountStoreRpc(
+  storage: AccountStorage,
+  crypto: Crypto.Crypto,
+  domains: ReadonlyArray<MailDomainConfiguration>,
+) {
   const call =
     <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
     (...args: Args) =>
@@ -99,9 +108,20 @@ export function makeAccountStoreRpc(storage: AccountStorage, crypto: Crypto.Cryp
       nowIso: string,
     ) =>
       Effect.flatMap(newId, (id) =>
-        call(createAddress)(id, localPart, mailDomain, displayName, nowIso),
+        domains.some((domain) => domain.name === mailDomain && domain.receive)
+          ? callAndArm(createAddress)(
+              id,
+              localPart,
+              mailDomain,
+              displayName,
+              nowIso,
+              domains.some((domain) => domain.name === mailDomain && domain.send),
+            )
+          : Effect.succeed(null),
       ),
     patchAddress: call(patchAddress),
+    retireAddress: callAndArm(retireAddress),
+    retryAddressRouting: callAndArm(retryAddressRouting),
     listSendingIdentities: call(listSendingIdentities),
     resolveSendingIdentity: call(resolveSendingIdentity),
     setAddressForwarding: call(setAddressForwarding),
@@ -140,20 +160,33 @@ export const AccountStoreLive = AccountStore.make(
     const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
     const approvalAdminEmail = yield* operatorEmail;
     const crypto = yield* Crypto.Crypto;
+    const routes = yield* RecipientRules;
     // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's Durable Object shape: the outer effect runs once per isolate and returns the per-instance initializer.
     return Effect.gen(function* () {
       const storage = state.raw.storage;
       const now = yield* DateTime.now;
       applyAccountSchema(storage, DateTime.formatIso(now));
-      const rpc = makeAccountStoreRpc(storage, crypto);
+      configureSendingDomains(
+        storage,
+        runtime.domains.filter(({ send }) => send).map(({ name }) => name),
+      );
+      const rpc = makeAccountStoreRpc(storage, crypto, runtime.domains);
       if (site.kind === "preview") {
-        yield* seedDevelopmentAddresses(rpc, {
-          mailDomain: site.mailDomain,
-          localParts: site.testLocalParts,
-          nowIso: DateTime.formatIso(now),
-        }).pipe(Effect.orDie);
+        for (const domain of runtime.domains.filter(({ receive }) => receive))
+          yield* seedDevelopmentAddresses(rpc, {
+            mailDomain: domain.name,
+            localParts: site.testLocalParts,
+            nowIso: DateTime.formatIso(now),
+          }).pipe(Effect.orDie);
       }
       const ports = {
+        routes: {
+          client: routes,
+          domains: runtime.domains,
+          workerName: runtime.workerName,
+          ownerPrefix: runtime.routeOwnerPrefix,
+          legacySeeds: runtime.legacySeeds,
+        },
         sender: yield* cloudflareEmailSender(email),
         index,
         htmlPolicy: runtime.htmlPolicy,
@@ -179,7 +212,6 @@ export const AccountStoreLive = AccountStore.make(
       };
     });
   }).pipe(
-    Effect.orDie,
     Effect.provide(
       Layer.mergeAll(
         Cloudflare.Email.SendBinding,
@@ -187,8 +219,10 @@ export const AccountStoreLive = AccountStore.make(
         Cloudflare.D1.QueryDatabaseBinding,
         WebCrypto,
         StructuredLogs,
+        RecipientRules.layer,
       ),
     ),
+    Effect.orDie,
   ),
 );
 

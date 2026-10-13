@@ -121,6 +121,10 @@ describe("document renderer", () => {
           forwardTo: null,
           createdAt: "2026-09-25T00:00:00.000Z",
           updatedAt: "2026-09-25T00:00:00.000Z",
+          domain: "example.com",
+          canSend: true,
+          retiredAt: null,
+          routing: { state: "ready", error: null, ruleId: "rule-test", zoneId: "zone-test" },
         }),
     );
     const mail = consolePage({ section: "mail", mailboxes: { addresses, current: "box-2" } });

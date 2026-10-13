@@ -8,6 +8,7 @@ import type { IndexReceiptWork } from "../mail/process-index.ts";
 import { redriveDueInboundReceipts } from "./commands.ts";
 import { expireDueApprovals, readyJobIds, settleAbandonedClaims } from "./jobs.ts";
 import type { AccountSqliteStorage } from "./sqlite.ts";
+import { reconcileDueRecipientRoutes, type RecipientRoutingPorts } from "./recipient-routing.ts";
 
 // The store's single alarm; the Durable Object storage provides it.
 interface AccountAlarm {
@@ -19,6 +20,7 @@ export type AccountStorage = AccountSqliteStorage & AccountAlarm;
 
 export type DueWorkPorts<R> = DispatchPorts & {
   readonly index: { send(body: IndexReceiptWork): Effect.Effect<void, Error, R> };
+  readonly routes: RecipientRoutingPorts;
 };
 
 const SEND_BATCH_SIZE = 10;
@@ -31,6 +33,7 @@ type DueWork<A> = {
   readonly ready: A;
   readonly claims: A;
   readonly receipts: A;
+  readonly routes: A;
 };
 
 // One pass over everything the store has due: expire approvals, send ready jobs, settle abandoned
@@ -63,6 +66,10 @@ export const runDueWork = Effect.fn("runDueWork")(function* <R>(
         }
       }),
     ),
+    routes: yield* attempt(
+      { step: "routes" },
+      reconcileDueRecipientRoutes(storage, ports.routes, nowMs),
+    ),
   } satisfies DueWork<boolean>;
   yield* Effect.promise(() => armDueWork(storage, nowMs, failed));
 });
@@ -77,7 +84,7 @@ export function armDueWork(
 ): Promise<void> {
   const due = dueTimes(storage);
   let next: number | null = null;
-  for (const source of ["approvals", "ready", "claims", "receipts"] as const) {
+  for (const source of ["approvals", "ready", "claims", "receipts", "routes"] as const) {
     const at = due[source];
     if (at === null) continue;
     const floored = failed?.[source] === true ? Math.max(at, nowMs + FAILED_STEP_RETRY_MS) : at;
@@ -124,6 +131,7 @@ const DueTimesRow = Schema.Struct({
   ready: Schema.NullOr(Schema.String),
   claims: Schema.NullOr(Schema.String),
   receipts: Schema.NullOr(Schema.String),
+  routes: Schema.NullOr(Schema.String),
 });
 
 // When each kind of work is next due, in epoch milliseconds. A ready job is due at once.
@@ -135,7 +143,8 @@ function dueTimes(storage: AccountSqliteStorage): DueWork<number | null> {
            (SELECT MIN(expires_at) FROM approval_requests WHERE state = 'pending') AS approvals,
            (SELECT MIN(created_at) FROM outbound_jobs WHERE state = 'ready') AS ready,
            (SELECT MIN(claim_expires_at) FROM outbound_jobs WHERE state = 'in_flight') AS claims,
-           (SELECT MIN(retry_after) FROM inbound_receipts WHERE work_state = 'ready') AS receipts`,
+           (SELECT MIN(retry_after) FROM inbound_receipts WHERE work_state = 'ready') AS receipts,
+           (SELECT MIN(retry_after) FROM mailbox_routes) AS routes`,
       )
       .toArray(),
   );
@@ -145,5 +154,6 @@ function dueTimes(storage: AccountSqliteStorage): DueWork<number | null> {
     ready: at(row.ready),
     claims: at(row.claims),
     receipts: at(row.receipts),
+    routes: at(row.routes),
   };
 }

@@ -12,6 +12,7 @@ const ACCOUNT_TABLES = [
   "approval_requests",
   "attachments",
   "inbound_receipts",
+  "mailbox_routes",
   "message_participants",
   "message_references",
   "messages",
@@ -19,7 +20,10 @@ const ACCOUNT_TABLES = [
   "schema_migrations",
 ] as const;
 
-const ACCOUNT_MIGRATIONS = [{ version: 10, name: "0010_account" }] as const;
+const ACCOUNT_MIGRATIONS = [
+  { version: 10, name: "0010_account" },
+  { version: 11, name: "0011_recipient_routes" },
+] as const;
 
 describe("account-store schema activation", () => {
   it.effect("applies versioned migrations before serving commands", () =>

@@ -8,6 +8,7 @@ import * as Resource from "alchemy/Resource";
 import { Stack, type StackSpec } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
 import * as Cloudflare from "alchemy/Cloudflare";
+import { unpackEnvValue } from "alchemy/RuntimeContext";
 import { InMemoryService, State } from "alchemy/State";
 import { describe, expect, it } from "@effect/vitest";
 import { evaluateApplication, requireWorker, resolveGraphValue } from "./stack-fixture.ts";
@@ -19,7 +20,6 @@ const COMMON_IDS = [
   "BetterAuthSecret",
   "MailArchive",
   "MailIndex",
-  "MailRouting",
   "MailRoutingDomain",
   "NotificationKey",
 ];
@@ -88,7 +88,7 @@ describe("application resource graph", () => {
     "preserves production identities and provisions auth before the Worker without live credentials",
     () =>
       Effect.gen(function* () {
-        const stack = yield* evaluateApplication("prod");
+        const stack = yield* evaluateApplication("prod", { UMAIL_LEGACY_CATCH_ALL: "true" });
         expect(Object.keys(stack.resources).sort()).toEqual(
           [...COMMON_IDS, "MailCatchAll", "MailSending"].sort(),
         );
@@ -109,11 +109,11 @@ describe("application resource graph", () => {
         expect(Redacted.isRedacted(env?.NotificationKey_text)).toBe(true);
         expect(Redacted.isRedacted(env?.UMAIL_OPERATOR_EMAIL)).toBe(true);
         expect(Redacted.isRedacted(env?.CF_EMAIL_ROUTING_TOKEN)).toBe(true);
+        expect(Redacted.isRedacted(env?.CF_EMAIL_ROUTING_RULES_TOKEN)).toBe(true);
         expect(env).not.toHaveProperty("UMAIL_OPERATOR_PASSWORD");
         expect(app.Props.exports?.AccountStore?.kind).toBe("durableObject");
         expect(stack.resources.AuthDb?.RemovalPolicy).toBe("retain");
         expect(stack.resources.MailArchive?.RemovalPolicy).toBe("retain");
-        expect(stack.resources.MailRouting?.RemovalPolicy).toBe("retain");
         expect(stack.resources.MailRoutingDomain?.RemovalPolicy).toBe("retain");
         expect(yield* resolveGraphValue(stack.resources.MailArchive?.Props)).toEqual({});
         expect(yield* resolveGraphValue(stack.resources.MailCatchAll?.Props)).toMatchObject({
@@ -163,15 +163,15 @@ describe("application resource graph", () => {
       const preview = yield* evaluateApplication("pr-42");
       const dev = yield* evaluateApplication("dev");
       const policies = (stack: typeof preview) =>
-        ["AuthDb", "MailArchive", "MailRoutingDomain", "MailRouting"].map(
+        ["AuthDb", "MailArchive", "MailRoutingDomain"].map(
           (id) => stack.resources[id]?.RemovalPolicy,
         );
 
-      expect(policies(preview)).toEqual(["destroy", "destroy", "destroy", "retain"]);
+      expect(policies(preview)).toEqual(["destroy", "destroy", "destroy"]);
       expect(yield* resolveGraphValue(preview.resources.MailArchive?.Props)).toEqual({
         forceDestroy: true,
       });
-      expect(policies(dev)).toEqual(["retain", "retain", "retain", "retain"]);
+      expect(policies(dev)).toEqual(["retain", "retain", "retain"]);
     }),
   );
 
@@ -179,22 +179,35 @@ describe("application resource graph", () => {
     Effect.gen(function* () {
       const stack = yield* evaluateApplication(stage);
       expect(Object.keys(stack.resources).sort()).toEqual(
-        [
-          ...COMMON_IDS,
-          "Mail_probe",
-          "Mail_inbox",
-          ...(stage === "dev" ? ["MailSending"] : []),
-        ].sort(),
+        [...COMMON_IDS, ...(stage === "dev" ? ["MailSending"] : [])].sort(),
       );
-      for (const part of ["probe", "inbox"]) {
-        expect(yield* resolveGraphValue(stack.resources[`Mail_${part}`]?.Props)).toMatchObject({
-          zone: "test-zone",
-          matchers: [
-            { type: "literal", field: "to", value: `${part}@${stage}-mail.umail.example.com` },
-          ],
-          actions: [{ type: "worker", value: ["app-test"] }],
-        });
-      }
+      expect(stack.resources).not.toHaveProperty("MailCatchAll");
+      expect(stack.resources).not.toHaveProperty("MailRouting");
+      const app = requireWorker(stack, "App");
+      const env = yield* resolveGraphValue(app.Props.env);
+      expect(unpackEnvValue(String(env?.UMAIL_RESOLVED_MAIL_DOMAINS))).toBe(
+        JSON.stringify([
+          {
+            name: `${stage}-mail.umail.example.com`,
+            receive: true,
+            send: true,
+            zoneId: "test-zone",
+          },
+        ]),
+      );
+    }),
+  );
+
+  it.effect("new production installations never declare a catch-all or zone-wide routing", () =>
+    Effect.gen(function* () {
+      const stack = yield* evaluateApplication("prod");
+      expect(stack.resources).not.toHaveProperty("MailCatchAll");
+      expect(stack.resources).not.toHaveProperty("MailRouting");
+      expect(
+        Object.values(stack.resources).some(
+          (resource) => resource.Type === "Cloudflare.Email.Rule",
+        ),
+      ).toBe(false);
     }),
   );
 });

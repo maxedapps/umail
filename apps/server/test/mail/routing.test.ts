@@ -13,9 +13,10 @@ import {
   deleteEmailRoutingDomain,
   diffEmailRoutingDomain,
   EmailRoutingDomainNotReady,
+  ReceivingDomainUnsafe,
   readEmailRoutingDomain,
   reconcileEmailRoutingDomain,
-} from "../../src/mail/routing.ts";
+} from "../../src/mail/receiving-domain.ts";
 
 const zoneName = "example.com";
 const domain = { zoneId: "zone-1", name: "mail.example.com" };
@@ -27,15 +28,12 @@ function record(id: string, name: string, type: string, content: string) {
   return { id, name, type, content, ttl: 1, proxied: false, proxiable: false, meta: {} };
 }
 
-// What a zone holds at and around a routed subdomain once its routing records are unlocked.
-const records = [
-  record("mx-1", domain.name, "MX", "route1.mx.cloudflare.net"),
-  record("mx-2", domain.name, "MX", "route2.mx.cloudflare.net"),
-  record("spf", domain.name, "TXT", '"v=spf1 include:_spf.mx.cloudflare.net ~all"'),
-  record("site", domain.name, "A", "192.0.2.1"),
-  record("verify", domain.name, "TXT", '"site-verification=abc"'),
-  record("other", `other.${zoneName}`, "MX", "route1.mx.cloudflare.net"),
-];
+const sharedDkim = record(
+  "shared-dkim",
+  `cf2024-1._domainkey.${zoneName}`,
+  "TXT",
+  "k=rsa; p=existing",
+);
 
 // The deploy's status session: records the notes a waiting reconcile writes.
 function recordingSession() {
@@ -52,6 +50,7 @@ interface FakeReadiness {
   // Each readiness probe takes the next answer; the last one repeats.
   readonly apex?: Array<boolean>;
   readonly subdomain?: Array<boolean>;
+  readonly dkim?: boolean;
 }
 
 function envelope(result: unknown) {
@@ -59,7 +58,7 @@ function envelope(result: unknown) {
 }
 
 // Fakes the Cloudflare API that the SDK talks to at deploy time.
-function fakeCloudflare({ apex = [true], subdomain = [true] }: FakeReadiness) {
+function fakeCloudflare({ apex = [true], subdomain = [true], dkim = true }: FakeReadiness) {
   const requests: Array<string> = [];
   const authorizations = new Set<string | undefined>();
   const next = (answers: Array<boolean>) =>
@@ -73,10 +72,10 @@ function fakeCloudflare({ apex = [true], subdomain = [true] }: FakeReadiness) {
   const resultFor = (route: string, url: URL) => {
     if (route === `GET ${routingPath}`) return settings(next(apex));
     if (route === `POST ${routingPath}/dns`) return settings(true);
-    if (route === `PATCH ${routingPath}/dns`) return { ...settings(true), status: "unlocked" };
-    if (route === `GET ${recordsPath}`) return url.searchParams.get("page") === "1" ? records : [];
-    if (route.startsWith(`DELETE ${recordsPath}/`)) return { id: route.split("/").at(-1) };
+    if (route === `DELETE ${routingPath}/dns`) return settings(true);
+    if (route === `GET ${recordsPath}`) return dkim ? [sharedDkim] : [];
     if (route !== `GET ${routingPath}/dns`) return undefined;
+    if (!url.searchParams.has("subdomain")) return [sharedDkim];
     const missing = {
       code: "missing",
       missing: {
@@ -178,13 +177,13 @@ describe("Email Routing domain provider", () => {
 
       expect(diff).toEqual({ action: "update" });
       expect(result).toEqual(domain);
-      expect(cloudflare.requests.filter((request) => request !== settingsRead)).toEqual([
-        dnsCheck,
-        dnsCheck,
+      expect(cloudflare.requests.filter((request) => request.startsWith("POST"))).toEqual([
         `POST ${routingPath}/dns {"name":"${domain.name}"}`,
-        dnsCheck,
-        dnsCheck,
       ]);
+      expect(cloudflare.requests).toContain(`GET ${routingPath}/dns`);
+      expect(cloudflare.requests.some((request) => request.startsWith(`GET ${recordsPath}`))).toBe(
+        true,
+      );
     }),
   );
 
@@ -213,19 +212,14 @@ describe("Email Routing domain provider", () => {
     }),
   );
 
-  it.effect("takes a subdomain down by unlocking and deleting only its routing records", () =>
+  it.effect("removes only the named child registration", () =>
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({});
 
       yield* deleteEmailRoutingDomain(domain).pipe(Effect.provide(cloudflare.layer));
 
       const writes = cloudflare.requests.filter((request) => !request.startsWith("GET"));
-      expect(writes).toEqual([
-        `PATCH ${routingPath}/dns {"name":"${domain.name}"}`,
-        `DELETE ${recordsPath}/mx-1`,
-        `DELETE ${recordsPath}/mx-2`,
-        `DELETE ${recordsPath}/spf`,
-      ]);
+      expect(writes).toEqual([`DELETE ${routingPath}/dns {"name":"${domain.name}"}`]);
     }),
   );
 
@@ -234,30 +228,45 @@ describe("Email Routing domain provider", () => {
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({});
 
-      yield* deleteEmailRoutingDomain(apex).pipe(Effect.provide(cloudflare.layer));
+      const error = yield* deleteEmailRoutingDomain(apex).pipe(
+        Effect.provide(cloudflare.layer),
+        Effect.flip,
+      );
+      expect(error).toBeInstanceOf(ReceivingDomainUnsafe);
 
       expect(cloudflare.requests).toEqual([settingsRead]);
     }),
   );
 
-  it.effect("enables apex routing from the zone's routing settings", () =>
+  it.effect("refuses to enable or repair apex routing", () =>
     Effect.gen(function* () {
       const cloudflare = fakeCloudflare({ apex: [false, false, true] });
 
-      const fiber = yield* reconcileEmailRoutingDomain(apex, recordingSession().session).pipe(
+      const error = yield* reconcileEmailRoutingDomain(apex, recordingSession().session).pipe(
         Effect.provide(cloudflare.layer),
-        Effect.forkChild,
+        Effect.flip,
       );
-      yield* TestClock.adjust("1 minute");
-      const result = yield* Fiber.join(fiber);
-
-      expect(result).toEqual(apex);
-      expect(cloudflare.requests).toEqual([
-        settingsRead,
-        `POST ${routingPath}/dns {}`,
-        settingsRead,
-        settingsRead,
-      ]);
+      expect(error).toBeInstanceOf(ReceivingDomainUnsafe);
+      expect(cloudflare.requests).toEqual([settingsRead]);
     }),
+  );
+
+  it.effect(
+    "refuses child creation before any write when the zone foundation is disabled or missing DKIM",
+    () =>
+      Effect.gen(function* () {
+        for (const options of [
+          { apex: [false], subdomain: [false] },
+          { subdomain: [false], dkim: false },
+        ]) {
+          const cloudflare = fakeCloudflare(options);
+          const error = yield* reconcileEmailRoutingDomain(domain, recordingSession().session).pipe(
+            Effect.provide(cloudflare.layer),
+            Effect.flip,
+          );
+          expect(error).toBeInstanceOf(ReceivingDomainUnsafe);
+          expect(cloudflare.requests.filter((request) => !request.startsWith("GET"))).toEqual([]);
+        }
+      }),
   );
 });

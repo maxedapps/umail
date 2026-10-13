@@ -1,19 +1,12 @@
 import {
   MailContact,
   parseExternalMailAddress,
-  parseMailDomain,
   parseMailboxAddress,
   type MailboxAddress,
 } from "@umail/api-contract";
 import { describe, expect, it } from "@effect/vitest";
 
 import { deriveReplyRecipients } from "../../src/api/reply-plan.ts";
-
-const parsedDomain = parseMailDomain("umail.example.com");
-if (parsedDomain.kind !== "ok") {
-  throw new Error("expected mail domain");
-}
-const DOMAIN = parsedDomain.domain;
 
 function contact(raw: string, displayName: string | null = null) {
   const parsed = parseExternalMailAddress(raw);
@@ -47,7 +40,6 @@ describe("deriveReplyRecipients", () => {
         cc: [contact("bob@example.com")],
       },
       registered,
-      DOMAIN,
       inbox,
     );
     expect(recipients.to.map((item) => item.address)).toEqual(["replies@example.com"]);
@@ -65,7 +57,6 @@ describe("deriveReplyRecipients", () => {
         cc: [],
       },
       registered,
-      DOMAIN,
       probe,
     );
     expect(recipients.to.map((item) => item.address)).toEqual(["inbox@umail.example.com"]);

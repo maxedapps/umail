@@ -10,6 +10,9 @@ import { createMailHtmlPolicy } from "./mail/html-policy.ts";
 import { notificationKeyFromHex } from "./mail/notifications.ts";
 import { AuthDb, NotificationKey } from "./resources.ts";
 import { currentSite } from "./site.ts";
+import { ResolvedMailDomain } from "./mail/domains.ts";
+import { LegacySeedRule } from "./account/recipient-routing.ts";
+import * as Schema from "effect/Schema";
 
 // Workers Logs get one JSON object per log line, with its annotations (jobId, tool, clientId) as
 // fields, at its own level (console.error for logError). Provided on both Workers' init effects so
@@ -27,8 +30,31 @@ export const appRuntime = Effect.gen(function* () {
   const operatorId = globalThis.__ALCHEMY_RUNTIME__
     ? yield* Config.String("AUTH_OPERATOR_ID")
     : "plan";
+  const domains = globalThis.__ALCHEMY_RUNTIME__
+    ? yield* Config.schema(
+        Schema.fromJsonString(Schema.Array(ResolvedMailDomain)),
+        "UMAIL_RESOLVED_MAIL_DOMAINS",
+      )
+    : site.mailDomains.map((domain) => ({ ...domain, zoneId: "plan" }));
+  const workerName = globalThis.__ALCHEMY_RUNTIME__
+    ? yield* Config.String("ALCHEMY_WORKER_NAME")
+    : "plan";
+  const stackName = globalThis.__ALCHEMY_RUNTIME__
+    ? yield* Config.String("ALCHEMY_STACK_NAME")
+    : "plan";
+  const stage = globalThis.__ALCHEMY_RUNTIME__ ? yield* Config.String("ALCHEMY_STAGE") : "plan";
+  const legacySeeds = globalThis.__ALCHEMY_RUNTIME__
+    ? yield* Config.schema(
+        Schema.fromJsonString(Schema.Array(LegacySeedRule)),
+        "UMAIL_RESOLVED_LEGACY_SEEDS",
+      )
+    : [];
   return {
     site,
+    domains,
+    workerName,
+    routeOwnerPrefix: `umail/${stackName}/${stage}/`,
+    legacySeeds,
     applicationUrl: new URL(`https://${site.apiHostname}`),
     htmlPolicy: createMailHtmlPolicy(),
     // Read when used: the key is bound into the Worker's env and readable only at runtime.

@@ -111,9 +111,19 @@ function sendDeniedMessage(error: JobAuthorizationError): string {
 // with the operator's session.
 export const createAddress = Effect.fn("createAddress")(function* (
   deps: ApiDeps,
-  input: { readonly localPart: string; readonly displayName?: string },
+  input: { readonly localPart: string; readonly displayName?: string; readonly domain?: string },
 ) {
-  const checked = constructMailboxAddress(input.localPart, deps.mailDomain);
+  const receiving = deps.mailDomains.filter(({ receive }) => receive);
+  const domain =
+    input.domain === undefined && receiving.length === 1
+      ? receiving[0]
+      : receiving.find(({ name }) => name === input.domain?.trim().toLowerCase());
+  if (domain === undefined)
+    return yield* new InvalidRequest({
+      code: "receiving_domain_required",
+      message: "Choose a configured receiving domain for this mailbox.",
+    });
+  const checked = constructMailboxAddress(input.localPart, domain.name);
   if (checked.kind === "reserved") {
     return yield* new InvalidRequest({
       code: "address_reserved",
@@ -124,7 +134,7 @@ export const createAddress = Effect.fn("createAddress")(function* (
   const address =
     checked.kind === "ok"
       ? yield* deps.account
-          .createAddress(input.localPart, deps.mailDomain, input.displayName, now)
+          .createAddress(input.localPart, domain.name, input.displayName, now)
           .pipe(storeCall)
       : null;
   if (address === null) {
@@ -146,6 +156,21 @@ export const getAddress = Effect.fn("getAddress")(function* (deps: ApiDeps, id: 
   if (address === null) {
     return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
+  return new Address(address);
+});
+
+export const retireAddress = Effect.fn("retireAddress")(function* (deps: ApiDeps, id: string) {
+  const address = yield* deps.account.retireAddress(id, yield* currentIso).pipe(storeCall);
+  if (address === null) return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
+  return new Address(address);
+});
+
+export const retryAddressRouting = Effect.fn("retryAddressRouting")(function* (
+  deps: ApiDeps,
+  id: string,
+) {
+  const address = yield* deps.account.retryAddressRouting(id, yield* currentIso).pipe(storeCall);
+  if (address === null) return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   return new Address(address);
 });
 
@@ -440,7 +465,6 @@ const replyRecipients = Effect.fn("replyRecipients")(function* (
       cc: parent.cc.map(toMailContact),
     },
     registered,
-    deps.mailDomain,
     sending?.address,
   );
   const [first, ...rest] = recipients.to;
@@ -531,9 +555,17 @@ const unusableSender = Effect.fn("unusableSender")(function* (
   if (address !== null && !address.active) {
     return yield* new InvalidRequest({
       code: "from_address_inactive",
-      message: `Mailbox ${fromAddressId} (${address.address}) is inactive. Reactivate it, or send from an active id in the sending-identities list.`,
+      message:
+        address.retiredAt !== null
+          ? `Mailbox ${address.address} is retired. Send from an active id in the sending-identities list.`
+          : `Mailbox ${fromAddressId} (${address.address}) is inactive. Reactivate it, or send from an active id in the sending-identities list.`,
     });
   }
+  if (address !== null && !address.canSend)
+    return yield* new InvalidRequest({
+      code: "sender_domain_receive_only",
+      message: `Mailbox ${address.address} belongs to a receive-only domain and cannot send.`,
+    });
   return yield* new InvalidRequest({
     code: "from_address_unknown",
     message: `Sending identity ${fromAddressId} is unknown. Use an id from the sending-identities list.`,

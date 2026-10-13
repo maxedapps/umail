@@ -28,6 +28,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import { decideApproval } from "../approvals.ts";
 import { login, logout } from "../auth.ts";
 import { apiCall, umailClient } from "../client.ts";
+import { cutoverCloudflare, recipientCutover } from "../recipient-cutover.ts";
 import type { ServerFailed, ServerUnreachable } from "../errors.ts";
 import {
   ccFlag,
@@ -116,14 +117,55 @@ const addressesCommand = Command.make("addresses").pipe(
         displayName: Flag.optional(
           Flag.String("display-name").pipe(Flag.withDescription("Display name")),
         ),
+        domain: Flag.optional(
+          Flag.String("domain").pipe(
+            Flag.withDescription("Receiving domain; required when the installation has several"),
+          ),
+        ),
       },
-      ({ localPart, displayName }) =>
+      ({ localPart, displayName, domain }) =>
         callApi((client) =>
           client.Addresses.createAddress({
-            payload: new CreateAddressPayload({ localPart, ...presentOptions({ displayName }) }),
+            payload: new CreateAddressPayload({
+              localPart,
+              ...presentOptions({ displayName, domain }),
+            }),
           }),
         ),
     ).pipe(Command.withDescription("Create a mailbox address")),
+    Command.make("domains", {}, () =>
+      callApi((client) => client.Addresses.listReceivingDomains()),
+    ).pipe(Command.withDescription("List configured receiving domains")),
+    Command.make("retry-routing", { id: idFlag }, ({ id }) =>
+      callApi((client) => client.Addresses.retryAddressRouting({ params: { id } })),
+    ).pipe(Command.withDescription("Retry a mailbox's routing operation")),
+    Command.make("retire", { id: idFlag }, ({ id }) =>
+      callApi((client) => client.Addresses.retireAddress({ params: { id } })),
+    ).pipe(
+      Command.withDescription("Retire a mailbox and remove its owned route; keep its archive"),
+    ),
+    Command.make(
+      "cutover",
+      {
+        zoneId: Flag.String("zone"),
+        envFile: Flag.String("env-file").pipe(Flag.withDefault(".env")),
+        execute: Flag.Boolean("execute").pipe(Flag.withDefault(false)),
+      },
+      ({ zoneId, envFile, execute }) =>
+        Effect.gen(function* () {
+          const client = yield* requireClient();
+          const configuration = yield* apiCall(client.Addresses.getRoutingConfiguration());
+          const mailboxes = yield* apiCall(client.Addresses.listAddresses({}));
+          const cloudflare = yield* cutoverCloudflare(envFile);
+          yield* printJson(
+            yield* recipientCutover({ zoneId, execute, configuration, mailboxes }, cloudflare),
+          );
+        }),
+    ).pipe(
+      Command.withDescription(
+        "Inspect recipient coverage before removing the existing catch-all; changes require --execute",
+      ),
+    ),
     Command.make("get", { id: idFlag }, ({ id }) =>
       callApi((client) => client.Addresses.getAddress({ params: { id } })),
     ).pipe(Command.withDescription("Get a mailbox address")),

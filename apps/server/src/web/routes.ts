@@ -21,6 +21,8 @@ import {
   mailboxesRoute,
   mailboxRoute,
   saveMailboxRoute,
+  retryMailboxRoutingRoute,
+  retireMailboxRoute,
 } from "./pages/mailboxes.ts";
 import {
   attachmentRoute,
@@ -72,6 +74,8 @@ export function webRoutes(deps: ApiDeps) {
     HttpRouter.add("GET", "/mailboxes/:id", operator(mailboxRoute)),
     HttpRouter.add("POST", "/mailboxes/:id", operator(saveMailboxRoute)),
     HttpRouter.add("POST", "/mailboxes/:id/forwarding", operator(forwardingRoute)),
+    HttpRouter.add("POST", "/mailboxes/:id/routing/retry", operator(retryMailboxRoutingRoute)),
+    HttpRouter.add("POST", "/mailboxes/:id/retire", operator(retireMailboxRoute)),
     HttpRouter.add("GET", "/mail/compose", operator(composeRoute)),
     HttpRouter.add("POST", "/mail/compose", operator(sendRoute)),
     HttpRouter.add("GET", "/mail/sent/:jobId", operator(sentRoute)),

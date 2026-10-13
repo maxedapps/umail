@@ -11,7 +11,7 @@ describe("seedDevelopmentAddresses", () => {
   it.effect("creates preview mailboxes through AccountStore provisioning commands", () =>
     Effect.gen(function* () {
       const store = new MemoryAddressProvisioning();
-      const site = layoutForStage(ROOT, "dev");
+      const site = layoutForStage(ROOT, "dev", [{ name: ROOT, receive: true, send: true }]);
       if (site.kind !== "preview") {
         throw new Error("expected a preview site");
       }
@@ -32,7 +32,7 @@ describe("seedDevelopmentAddresses", () => {
   it.effect("treats already-provisioned addresses as idempotent rather than failing the seed", () =>
     Effect.gen(function* () {
       const store = new MemoryAddressProvisioning();
-      const site = layoutForStage(ROOT, "dev");
+      const site = layoutForStage(ROOT, "dev", [{ name: ROOT, receive: true, send: true }]);
       if (site.kind !== "preview") {
         throw new Error("expected a preview site");
       }
@@ -73,6 +73,10 @@ class MemoryAddressProvisioning {
         forwardTo: null,
         createdAt: nowIso,
         updatedAt: nowIso,
+        domain: mailDomain,
+        canSend: true,
+        retiredAt: null,
+        routing: { state: "pending", error: null, ruleId: null, zoneId: null },
       } satisfies AccountAddress;
       this.created.push(created);
       return Effect.succeed(created);

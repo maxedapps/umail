@@ -19,6 +19,7 @@ describe("account-store SQLite Durable Object runtime", () => {
       yield* Effect.promise(() => evictDurableObject(store));
       expect(yield* Effect.promise(() => store.listMigrations())).toEqual([
         { version: 10, name: "0010_account" },
+        { version: 11, name: "0011_recipient_routes" },
       ]);
       expect(created).not.toBeNull();
       expect(yield* Effect.promise(() => store.getAddress(created?.id ?? ""))).toEqual(created);

@@ -21,6 +21,8 @@ import {
   PublicApprovalApi,
   RequestErrors,
   UmailApi,
+  ReceivingDomain,
+  RoutingConfiguration,
   type MailDomain,
   type Principal,
 } from "@umail/api-contract";
@@ -67,6 +69,8 @@ import {
   setThreadReadState,
   softDeleteVisibleThread,
   submitMessage,
+  retireAddress,
+  retryAddressRouting,
 } from "./operations.ts";
 
 export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportError>()(
@@ -84,6 +88,9 @@ export type ApiDeps = {
   readonly destinations: DestinationsClient;
   readonly htmlPolicy: MailHtmlPolicy;
   readonly mailDomain: MailDomain;
+  readonly mailDomains: ReadonlyArray<import("../mail/domains.ts").ResolvedMailDomain>;
+  readonly routingWorkerName: string;
+  readonly routingOwnerPrefix: string;
   readonly auth: UmailAuthInstance;
   readonly access: Access;
   readonly applicationUrl: URL;
@@ -167,6 +174,24 @@ export const RequestErrorsLive = HttpApiMiddleware.layerSchemaErrorTransform(
 function addressesGroup(deps: ApiDeps) {
   return HttpApiBuilder.group(UmailApi, "Addresses", (handlers) =>
     handlers
+      .handle("listReceivingDomains", () =>
+        Effect.succeed(
+          deps.mailDomains
+            .filter(({ receive }) => receive)
+            .map((domain) => new ReceivingDomain(domain)),
+        ),
+      )
+      .handle("getRoutingConfiguration", () =>
+        Effect.succeed(
+          new RoutingConfiguration({
+            workerName: deps.routingWorkerName,
+            ownerPrefix: deps.routingOwnerPrefix,
+            domains: deps.mailDomains.map((domain) => new ReceivingDomain(domain)),
+          }),
+        ),
+      )
+      .handle("retryAddressRouting", ({ params }) => retryAddressRouting(deps, params.id))
+      .handle("retireAddress", ({ params }) => retireAddress(deps, params.id))
       .handle("createAddress", ({ payload }) => createAddress(deps, payload))
       .handle("listAddresses", () => listAddresses(deps))
       .handle("getAddress", ({ params }) => getAddress(deps, params.id))

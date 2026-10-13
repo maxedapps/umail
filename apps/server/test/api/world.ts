@@ -1,3 +1,6 @@
+import { recipientPorts } from "../mail/recipient-fake.ts";
+import type { ResolvedMailDomain } from "../../src/mail/domains.ts";
+import type { RecipientRoutingPorts } from "../../src/account/recipient-routing.ts";
 import * as Alchemy from "alchemy";
 import { betterAuth } from "better-auth";
 import * as Clock from "effect/Clock";
@@ -78,6 +81,7 @@ export type World = {
   ) => Effect.Effect<A, E>;
   readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
+  readonly recipientRoutes: RecipientRoutingPorts;
   readonly auth: UmailBetterAuth;
   readonly operatorId: string;
   readonly operatorEmail: ExternalMailAddress;
@@ -96,6 +100,7 @@ export const createWorld = Effect.fn("createWorld")(function* (
     readonly operatorEmail?: ExternalMailAddress;
     readonly archive?: MailArchiveReader;
     readonly htmlPolicy?: MailHtmlPolicy;
+    readonly mailDomains?: ReadonlyArray<ResolvedMailDomain>;
     // Replaces store methods seen by the API only; `world.account` stays the real store for seeding.
     readonly account?: Partial<AccountStoreRpc>;
     // Merged into every request fiber, e.g. a test Logger.
@@ -103,7 +108,10 @@ export const createWorld = Effect.fn("createWorld")(function* (
   } = {},
 ) {
   const db = new MemoryD1();
-  const memoryAccount = createMemoryAccount();
+  const domains = settings.mailDomains ?? [
+    { name: MAIL_DOMAIN, receive: true, send: true, zoneId: "test-zone" },
+  ];
+  const memoryAccount = createMemoryAccount(domains);
   const operatorEmail = settings.operatorEmail ?? OPERATOR_EMAIL;
   const provision = yield* provisionAuth(memoryQueryDatabase(db), {
     identity: { databaseId: "test-auth" },
@@ -134,6 +142,9 @@ export const createWorld = Effect.fn("createWorld")(function* (
       destinations,
       htmlPolicy: settings.htmlPolicy ?? htmlPolicy,
       mailDomain: MAIL_DOMAIN,
+      mailDomains: domains,
+      routingWorkerName: "test-worker",
+      routingOwnerPrefix: "umail/uMail/test/",
       auth: { auth: Effect.succeed(auth) },
       access,
       applicationUrl: APPLICATION_URL,
@@ -180,6 +191,7 @@ export const createWorld = Effect.fn("createWorld")(function* (
     run,
     notificationKey,
     deps: runtime.deps,
+    recipientRoutes: { ...recipientPorts(), domains },
     auth,
     operatorId: provision.operatorId,
     operatorEmail,
@@ -327,6 +339,7 @@ export const runDueWorkPass = Effect.fn("runDueWorkPass")(function* (
   yield* runDueWork(
     world.accountStorage,
     {
+      routes: world.recipientRoutes,
       sender: {
         send: (mail) =>
           Effect.sync(() => {

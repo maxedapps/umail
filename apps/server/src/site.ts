@@ -10,6 +10,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ExternalMailAddress } from "../../../packages/api-contract/src/mail-contact.ts";
 import { MailDomain, parseMailDomain } from "../../../packages/api-contract/src/mailbox-address.ts";
+import { ConfiguredMailDomain, mailDomains, type MailDomainConfiguration } from "./mail/domains.ts";
 
 const previewMailLocalParts = ["probe", "inbox"] as const;
 
@@ -18,11 +19,13 @@ export type StageSite =
       readonly kind: "prod";
       readonly apiHostname: string;
       readonly mailDomain: MailDomain;
+      readonly mailDomains: ReadonlyArray<MailDomainConfiguration>;
     }
   | {
       readonly kind: "preview";
       readonly apiHostname: string;
       readonly mailDomain: MailDomain;
+      readonly mailDomains: ReadonlyArray<MailDomainConfiguration>;
       readonly testLocalParts: typeof previewMailLocalParts;
     };
 
@@ -50,23 +53,6 @@ export function deployConfigError(error: Config.ConfigError): DeployConfigError 
   const name = issue?.path?.map(String).join(".") ?? "A variable";
   return new DeployConfigError({ message: `${name} ${issue?.message ?? "is invalid."}` });
 }
-
-// A bare hostname, trimmed and lower-cased as `parseMailDomain` does.
-const ConfiguredMailDomain = Schema.String.pipe(
-  Schema.decode(
-    SchemaTransformation.composeTransformation(
-      SchemaTransformation.trim(),
-      SchemaTransformation.toLowerCase(),
-    ),
-  ),
-  Schema.decodeTo(
-    MailDomain.check(
-      Schema.isPattern(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, {
-        message: "must be a hostname like mail.example.com (no scheme, path or port).",
-      }),
-    ),
-  ),
-);
 
 // Trims the address and lower-cases its domain, as `parseExternalMailAddress` does.
 const ConfiguredMailAddress = Schema.String.pipe(
@@ -108,16 +94,19 @@ export const operatorPassword = Config.schema(
 // The operator inbox receives send approvals, so it must not be a mailbox umail hosts: a client that
 // can read it could approve its own sends. Every stage's mail domain is the root or a subdomain.
 export const operatorEmail = Config.all([
-  rootDomain,
+  mailDomains,
   Config.schema(ConfiguredMailAddress, "UMAIL_OPERATOR_EMAIL"),
 ]).pipe(
-  Config.mapEffect(([root, address]) => {
+  Config.mapEffect(([domains, address]) => {
     const domain = address.slice(address.lastIndexOf("@") + 1);
-    return domain === root || domain.endsWith(`.${root}`)
+    return domains
+      .filter(({ receive }) => receive)
+      .map(({ name }) => name)
+      .some((hosted) => domain === hosted || domain.endsWith(`.${hosted}`))
       ? Effect.fail(
           new Config.ConfigError(
             new ConfigProvider.SourceError({
-              message: `UMAIL_OPERATOR_EMAIL must be an inbox outside UMAIL_DOMAIN (${root}).`,
+              message: "UMAIL_OPERATOR_EMAIL must be an inbox outside the receiving mail domains.",
             }),
           ),
         )
@@ -127,7 +116,7 @@ export const operatorEmail = Config.all([
 
 export const currentSite = Effect.gen(function* () {
   const stack = yield* Alchemy.Stack;
-  return layoutForStage(yield* rootDomain, stack.stage);
+  return layoutForStage(yield* rootDomain, stack.stage, yield* mailDomains);
 });
 
 export function stageHostnameLabel(stage: string): string {
@@ -140,12 +129,19 @@ export function stageHostnameLabel(stage: string): string {
   return stage;
 }
 
-export function layoutForStage(root: MailDomain, stage: string): StageSite {
+export function layoutForStage(
+  root: MailDomain,
+  stage: string,
+  domains: ReadonlyArray<MailDomainConfiguration>,
+): StageSite {
+  const primary = domains.find(({ send }) => send) ?? domains[0];
+  if (primary === undefined)
+    throw new DeployConfigError({ message: "UMAIL_MAIL_DOMAINS is empty." });
   if (stage === "prod") {
-    return { kind: "prod", apiHostname: root, mailDomain: root };
+    return { kind: "prod", apiHostname: root, mailDomain: primary.name, mailDomains: domains };
   }
   const label = stageHostnameLabel(stage);
-  if (`${label}-mail.${root}`.length > 253) {
+  if (domains.some(({ name }) => `${label}-mail.${name}`.length > 253)) {
     throw new DeployConfigError({
       message: `Stage "${stage}" produces a mail domain longer than 253 characters under ${root}. Choose a shorter stage name or UMAIL_DOMAIN.`,
     });
@@ -153,7 +149,11 @@ export function layoutForStage(root: MailDomain, stage: string): StageSite {
   return {
     kind: "preview",
     apiHostname: `${label}.${root}`,
-    mailDomain: previewMailDomain(label, root),
+    mailDomain: previewMailDomain(label, primary.name),
+    mailDomains: domains.map((domain) => ({
+      ...domain,
+      name: previewMailDomain(label, domain.name),
+    })),
     testLocalParts: previewMailLocalParts,
   };
 }

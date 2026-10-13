@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
 
 import { FakeMailHtmlPolicy } from "../mail/fakes.ts";
+import { recipientPorts } from "../mail/recipient-fake.ts";
 import { accountStore, approvalMaterial } from "./harness.ts";
 import type { AccountStoreTestHost } from "./worker-host.ts";
 
@@ -33,6 +34,7 @@ describe("account-store alarm", () => {
       yield* Effect.promise(() =>
         runInDurableObject(store, (host: AccountStoreTestHost, state) => {
           host.dueWorkPorts = {
+            routes: recipientPorts(),
             sender: {
               send: (mail) =>
                 Effect.sync(() => {

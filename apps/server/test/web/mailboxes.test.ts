@@ -66,7 +66,7 @@ describe("mailbox pages", () => {
 
       const detail = yield* page(world, `${path}?saved`);
       expect(detail).toContain('value="Support desk"');
-      expect(detail).toContain('<span class="badge">Inactive</span>');
+      expect(detail).toContain('<span class="badge">Paused</span>');
       expect(detail).toContain("Saved.");
       expect(yield* page(world, "/mail/compose")).not.toContain(`value="${id}"`);
     }),

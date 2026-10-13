@@ -79,8 +79,12 @@ const address = {
   id: "address-1",
   localPart: "inbox",
   address: "inbox@umail.example.test",
+  domain: "umail.example.test",
   displayName: "Inbox",
   active: true,
+  canSend: true,
+  retiredAt: null,
+  routing: { state: "ready", zoneId: "fixture-zone", ruleId: "fixture-rule", error: null },
   forwardTo: null,
   createdAt: "2026-08-25T10:00:00.000Z",
   updatedAt: "2026-08-25T10:00:00.000Z",
@@ -412,6 +416,74 @@ function serializeApprovalFailureCapture(captured: ApprovalFailureCapture): stri
 }
 
 layer(NodeServices.layer)("retained CLI dispatch", (it) => {
+  it.effect("inspects cutover coverage without --execute and performs no writes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "umail-cli-cutover-" });
+      const envFile = path.join(directory, ".env");
+      yield* fs.writeFileString(envFile, "CF_EMAIL_ROUTING_RULES_TOKEN=fixture-rules-token\n");
+      const { captured, httpClient } = capturingClient((_request, url) => {
+        if (url.pathname === "/routing-configuration")
+          return jsonResponse({
+            workerName: "worker",
+            ownerPrefix: "umail/uMail/prod/",
+            domains: [
+              { name: "umail.example.test", receive: true, send: true, zoneId: "fixture-zone" },
+            ],
+          });
+        if (url.pathname === "/addresses") return jsonResponse([address]);
+        if (url.pathname.endsWith("/catch_all"))
+          return jsonResponse({
+            success: true,
+            errors: [],
+            messages: [],
+            result: {
+              enabled: true,
+              matchers: [{ type: "all" }],
+              actions: [{ type: "worker", value: ["worker"] }],
+            },
+          });
+        if (url.pathname.endsWith("/rules"))
+          return jsonResponse({
+            success: true,
+            errors: [],
+            messages: [],
+            result:
+              url.searchParams.get("page") === "2"
+                ? []
+                : [
+                    {
+                      id: "fixture-rule",
+                      name: "umail/uMail/prod/address-1",
+                      enabled: true,
+                      matchers: [{ type: "literal", field: "to", value: address.address }],
+                      actions: [{ type: "worker", value: ["worker"] }],
+                    },
+                  ],
+            result_info: { page: 1, total_pages: 1 },
+          });
+        throw new Error(`Unexpected cutover request ${url.href}`);
+      });
+      const result = yield* dispatchEffect(
+        ["addresses", "cutover", "--zone", "fixture-zone", "--env-file", envFile],
+        testEnv,
+        httpClient,
+      );
+      expect(result).toMatchObject({
+        ready: true,
+        mode: "dry-run",
+        catchAll: { change: { enabled: false, actions: [{ type: "drop" }] } },
+      });
+      expect(captured.every(({ method }) => method === "GET")).toBe(true);
+      expect(
+        captured
+          .filter(({ url }) => url.hostname === "api.cloudflare.com")
+          .every(({ authorization }) => authorization === "Bearer fixture-rules-token"),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("dispatches every address and sending-identity operation to root routes", () =>
     Effect.gen(function* () {
       const { captured, httpClient } = capturingClient();

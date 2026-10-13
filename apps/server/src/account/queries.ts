@@ -497,10 +497,12 @@ function loadSendingIdentitiesByIds(
                 addresses.active AS active,
                 addresses.forward_to AS forward_to,
                 addresses.created_at AS created_at,
-                addresses.updated_at AS updated_at
+                addresses.updated_at AS updated_at,
+                addresses.retired_at AS retired_at,
+                addresses.send_enabled AS send_enabled
          FROM addresses
          JOIN json_each(?) AS requested ON requested.value = addresses.id
-         WHERE addresses.active = 1`,
+         WHERE addresses.active = 1 AND addresses.retired_at IS NULL AND addresses.send_enabled = 1`,
         bindJsonStringArray(ids),
       )
       .toArray(),

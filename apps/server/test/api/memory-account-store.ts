@@ -4,6 +4,8 @@ import { type AccountSqlRow, type AccountSqlValue } from "../../src/account/sqli
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 import { makeAccountStoreRpc, type AccountStoreRpc } from "../../src/account/worker.ts";
+import { MailDomain } from "@umail/api-contract";
+import type { MailDomainConfiguration } from "../../src/mail/domains.ts";
 import { webCrypto } from "../../src/crypto.ts";
 
 const TEST_NOW = "2026-01-01T00:00:00.000Z";
@@ -78,12 +80,16 @@ export type MemoryAccount = {
   readonly account: AccountStoreRpc;
 };
 
-export function createMemoryAccount(): MemoryAccount {
+export function createMemoryAccount(
+  domains: ReadonlyArray<MailDomainConfiguration> = [
+    { name: MailDomain.make("umail.example.com"), receive: true, send: true },
+  ],
+): MemoryAccount {
   const storage = new MemoryAccountSqliteStorage();
   applyAccountSchema(storage, TEST_NOW);
   return {
     storage,
-    account: makeAccountStoreRpc(storage, webCrypto),
+    account: makeAccountStoreRpc(storage, webCrypto, domains),
   };
 }
 

@@ -11,12 +11,14 @@ import { createMemoryAccount } from "../api/memory-account-store.ts";
 const NOW = "2026-01-01T00:00:00.000Z";
 
 describe("account-store RPC boundary", () => {
-  it("fails with a typed AccountConflictError for a duplicate address", () => {
+  it("fails with a typed AccountConflictError for a duplicate address", async () => {
     const { account } = createMemoryAccount();
     const domain = requireMailDomain();
-    Effect.runSync(account.createAddress("inbox", domain, undefined, NOW));
+    await Effect.runPromise(account.createAddress("inbox", domain, undefined, NOW));
 
-    const exit = Effect.runSyncExit(account.createAddress("inbox", domain, undefined, NOW));
+    const exit = await Effect.runPromiseExit(
+      account.createAddress("inbox", domain, undefined, NOW),
+    );
 
     expect(Option.map(Exit.findErrorOption(exit), (error) => error._tag)).toEqual(
       Option.some("AccountConflictError"),

@@ -11,7 +11,7 @@ env -u CLOUDFLARE_API_TOKEN pnpm deploy:stage --stage prod --profile mschwarzmue
 ```
 
 - `UMAIL_STACK` selects the installation; absent defaults to the exact existing `uMail`. Keep `UMAIL_STACK=uMail` explicit in its `.env`. A second installation uses a distinct name and private env file with `--env-file <file>` on every Alchemy command, and its own `prod` stage. A valid typo plans a new installation; check the stack name and unexpected creates in the dry-run. The folder does not select cloud state. See [named installations](docs/operations.md#named-installations).
-- Stack isolation does not isolate Email Routing's zone settings/catch-all. Task 931 deliberately leaves routing unchanged to preserve runtime mailbox creation. Do not deploy `mail.academind.ai` while this remains: first implement recipient routing and verify child-only onboarding preserves Purelymail's apex MX/SPF/DMARC ([ADR 0010](adrs/0010-named-installations.md)).
+- `UMAIL_MAIL_DOMAINS` declares receiving/sending domains separately from the console hostname. New installs use runtime literal rules, never a catch-all or zone-wide enable. Child onboarding requires the existing shared routing flag/DKIM foundation; preserve external apex mail. Existing prod keeps `UMAIL_LEGACY_CATCH_ALL=true` through verified backfill; cutover is a separate dry-run/explicit command ([ADR 0011](adrs/0011-recipient-routing.md), [operations](docs/operations.md#existing-installation-cutover)). Prod and Academind deployment still require Max's go.
 - The `mschwarzmueller` profile stores its target account itself (`values.accountId` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`, Max's `18e364…`); `.env` sets no `CLOUDFLARE_ACCOUNT_ID`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
 - `App/AUTH_OPERATOR_ID` plans as "update" on every deploy (`AuthProvision` runs each time). That is harmless.
 - Cloudflare allows one worker consumer per queue, and Alchemy creates the new consumer before deleting the old one. Before a deploy that moves a queue consumer to another worker, detach the old one (`DELETE accounts/{id}/queues/{qid}/consumers/{cid}`), then deploy.
@@ -24,11 +24,11 @@ The gate before landing is `pnpm gate` ([ADR 0007](adrs/0007-adaptive-gate.md)).
 
 A slow spec runs when it or a file it imports changed. A suite runs whole when a change hits one of its `forceRerunTriggers`, the paths it reaches at runtime. Every suite has its own config and the shared triggers in `tests/rerun-triggers.ts` (the root, server and contract `package.json` and `tsconfig.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `patches/**`, `packages/api-contract/src/**` and the helper itself), plus:
 
-| Suite (config)                                                                      | Specs                                            | Also runs whole for                                                                                     |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| root worker, workerd, App worker bundle (`vitest.worker.config.ts`)                 | `tests/runtime-startup.worker.spec.ts`           | `alchemy.run.ts`, `tools/stack-name.ts`, `apps/server/src/**`, `tests/{stack-fixture,worker-bundle}.ts` |
-| server worker, workerd, Durable Object host (`apps/server/vitest.worker.config.ts`) | `apps/server/test/**/*.worker.spec.ts`           | `apps/server/src/**` except `api/` and `web/`, `apps/server/test/account/worker-host.ts`                |
-| browser, Chromium (`apps/server/vitest.browser.config.ts`)                          | `web-pages`, `html-semantics` `.browser.spec.ts` | `apps/server/src/**`, `test/web/web-pages-browser-*.ts`, `test/api/` helpers                            |
+| Suite (config)                                                                      | Specs                                            | Also runs whole for                                                                                                               |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| root worker, workerd, App worker bundle (`vitest.worker.config.ts`)                 | `tests/runtime-startup.worker.spec.ts`           | `alchemy.run.ts`, `tools/stack-name.ts`, `apps/server/src/**`, `tests/{stack-fixture,worker-bundle,recipient-routing-service}.ts` |
+| server worker, workerd, Durable Object host (`apps/server/vitest.worker.config.ts`) | `apps/server/test/**/*.worker.spec.ts`           | `apps/server/src/**` except `api/` and `web/`, `apps/server/test/account/worker-host.ts`                                          |
+| browser, Chromium (`apps/server/vitest.browser.config.ts`)                          | `web-pages`, `html-semantics` `.browser.spec.ts` | `apps/server/src/**`, `test/web/web-pages-browser-*.ts`, `test/api/` helpers                                                      |
 
 When a suite starts to reach a file at runtime that its specs don't import (a new host import, fixture plugin or bundled asset outside these paths), add the file to that config's `rerunTriggers(...)` and to this table.
 
@@ -68,7 +68,7 @@ Review every UI change yourself in a browser before you report it. Never hand th
 - Open `https://pr-<n>.<UMAIL_DOMAIN>/login` with agent-browser. Sign in with `UMAIL_OPERATOR_EMAIL` and `UMAIL_OPERATOR_PASSWORD` from `.env`. Pass them as shell variables (`set -a; . ./.env; set +a`) and never print their values.
 - Review every page the change touches in light and dark mode (`agent-browser set media dark|light`), at desktop width and at 320px (`agent-browser set viewport 320 800`).
 - Report what you saw, with screenshots.
-- Destroy the preview when you're done. Its mail domain stays registered in Email Routing, so tell Max it needs cleaning up by hand ([Stages and removal](docs/operations.md#stages-and-removal)).
+- Retire its mailboxes and verify owned rules are gone before destroying the preview. Named child DELETE removes its registration/DNS; shared zone settings and DKIM remain. Verify cleanup and report leftovers ([Stages and removal](docs/operations.md#stages-and-removal)).
 - Never run `alchemy dev` against Max's `dev` stage without asking him first.
 
 ## Landing

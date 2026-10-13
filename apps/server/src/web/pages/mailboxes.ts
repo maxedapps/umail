@@ -1,6 +1,11 @@
-import { parseExternalMailAddress, type Address } from "@umail/api-contract";
+import {
+  parseExternalMailAddress,
+  type Address,
+  type CreateAddressPayload,
+} from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { Mutable } from "effect/Types";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
@@ -12,27 +17,44 @@ import {
   patchAddress,
   removeAddressForwarding,
   setAddressForwarding,
+  retireAddress,
+  retryAddressRouting,
 } from "../../api/operations.ts";
 import { htmlResponse, redirect, type Flash, type PageView } from "../document.ts";
 import { html, type Html } from "../html.ts";
 import { icon } from "../icons.ts";
 
-type FieldError = { readonly field: "localPart" | "forwardTo"; readonly message: string };
+type FieldError = {
+  readonly field: "localPart" | "domain" | "forwardTo";
+  readonly message: string;
+};
 
 function fieldError(error: FieldError | null, field: FieldError["field"]): Html | null {
   return error?.field === field ? html`<p class="error" role="alert">${error.message}</p>` : null;
 }
 
 function activeBadge(address: Address): Html {
+  if (address.retiredAt !== null) return html`<span class="badge">Retired</span>`;
   return address.active
     ? html`<span class="badge success">Active</span>`
-    : html`<span class="badge">Inactive</span>`;
+    : html`<span class="badge">Paused</span>`;
+}
+
+function receptionBadge(address: Address): Html {
+  if (address.routing.state === "error") return html`<span class="badge">Reception error</span>`;
+  if (address.retiredAt !== null)
+    return html`<span class="badge"
+      >${address.routing.state === "ready" ? "Reception removed" : "Removing reception"}</span
+    >`;
+  return address.routing.state === "ready"
+    ? html`<span class="badge success">Ready</span>`
+    : html`<span class="badge">Reception pending</span>`;
 }
 
 export function mailboxesPage(
   addresses: ReadonlyArray<Address>,
-  mailDomain: string,
-  form: { readonly localPart: string; readonly displayName: string },
+  domains: ApiDeps["mailDomains"],
+  form: { readonly localPart: string; readonly displayName: string; readonly domain: string },
   error: FieldError | null,
 ): PageView {
   return {
@@ -51,7 +73,8 @@ export function mailboxesPage(
                   html`<li>
                     <a class="row" href="/mailboxes/${encodeURIComponent(address.id)}">
                       <span
-                        ><span class="mono">${address.address}</span> ${activeBadge(address)}</span
+                        ><span class="mono">${address.address}</span> ${activeBadge(address)}
+                        ${receptionBadge(address)}</span
                       >
                       <small
                         >${address.displayName ?? "No display name"}${
@@ -67,24 +90,28 @@ export function mailboxesPage(
         <section class="setting" aria-labelledby="new-mailbox-title">
           <header>
             <h2 id="new-mailbox-title">New mailbox</h2>
-            <p>Receives mail at @${mailDomain}.</p>
+            <p>Create an address on one of this installation's receiving domains.</p>
           </header>
           <form method="post" action="/mailboxes">
             <div class="field">
               <label for="localPart">Address</label>
-              <div class="suffixed">
-                <input
-                  id="localPart"
-                  name="localPart"
-                  type="text"
-                  value="${form.localPart}"
-                  required
-                  autocomplete="off"
-                  ${error?.field === "localPart" ? html`aria-invalid="true"` : null}
-                />
-                <span>@${mailDomain}</span>
-              </div>
+              <input
+                id="localPart"
+                name="localPart"
+                type="text"
+                value="${form.localPart}"
+                required
+                autocomplete="off"
+                ${error?.field === "localPart" ? html`aria-invalid="true"` : null}
+              />
               ${fieldError(error, "localPart")}
+            </div>
+            <div class="field">
+              <label for="domain">Receiving domain</label>
+              <select id="domain" name="domain" required>
+                ${domains.filter(({ receive }) => receive).map(({ name }) => html`<option value="${name}" ${form.domain === name ? html`selected` : null}>@${name}</option>`)}
+              </select>
+              ${fieldError(error, "domain")}
             </div>
             <div class="field">
               <label for="displayName">Display name</label>
@@ -116,86 +143,120 @@ export function mailboxPage(
       <a href="/mailboxes">Mailboxes</a>${icon("right")}<span>${address.address}</span>
     </nav>`,
     main: html`<div class="settings">
-      <section class="setting" aria-labelledby="general-title">
+      <section class="setting" aria-labelledby="reception-title">
         <header>
-          <h2 id="general-title">General</h2>
-          <p>How the address signs its mail, and whether it takes any.</p>
+          <h2 id="reception-title">Reception</h2>
+          <p>${receptionBadge(address)}</p>
         </header>
-        <form method="post" action="${path}">
-          <div class="field">
-            <label for="displayName">Display name</label>
-            <input
-              id="displayName"
-              name="displayName"
-              type="text"
-              value="${address.displayName ?? ""}"
-            />
-            <p class="hint">Shown as the sender name on mail from this address.</p>
-          </div>
-          <label class="switch-row"
-            ><span
-              ><b>Active</b
-              ><small>An inactive mailbox rejects new mail and cannot send.</small></span
-            ><input
-              class="switch"
-              type="checkbox"
-              name="active"
-              ${address.active ? html`checked` : null}
-          /></label>
-          <div class="actions"><button class="button" type="submit">Save</button></div>
-        </form>
+        ${address.routing.error === null ? null : html`<p class="error" role="alert">${address.routing.error}</p>`}
+        ${address.routing.state === "error" ? html`<form method="post" action="${path}/routing/retry"><button class="button" type="submit">Retry reception</button></form>` : null}
+        ${address.routing.state === "pending" ? html`<p>Reception is being updated. <a href="${path}">Refresh status</a></p>` : null}
+        <p>${address.canSend ? "This domain can send mail." : "This domain receives mail only."}</p>
       </section>
-      <section class="setting" aria-labelledby="forwarding-title">
-        <header>
-          <h2 id="forwarding-title">Forwarding</h2>
-          <p>Copies incoming mail to another address.</p>
-        </header>
-        <form method="post" action="${path}/forwarding">
-          ${
-            address.forwardTo === null
-              ? html`<p class="muted">Mail is kept here only.</p>`
-              : awaitingVerification
-                ? html`<p class="note warning" role="status">
-                    ${icon("alert")}Waiting for verification — Cloudflare emailed
-                    ${address.forwardTo}. Mail is forwarded once the address is verified.
-                  </p>`
-                : html`<p class="muted">
-                    Mail is also forwarded to <span class="mono">${address.forwardTo}</span>.
-                  </p>`
-          }
-          <div class="field">
-            <label for="forwardTo">Forward to</label>
-            <input
-              id="forwardTo"
-              name="email"
-              type="email"
-              value="${forwardTo}"
-              required
-              ${error?.field === "forwardTo" ? html`aria-invalid="true"` : null}
-            />
-            <p class="hint">Cloudflare emails this address once to verify it before forwarding.</p>
-            ${fieldError(error, "forwardTo")}
-          </div>
-          <div class="actions">
-            <button class="button" type="submit">
-              ${address.forwardTo === null ? "Forward" : "Change"}
-            </button>
-            ${
-              address.forwardTo === null
-                ? null
-                : html`<button
-                    class="button danger"
-                    type="submit"
-                    name="remove"
-                    value="1"
-                    formnovalidate
-                  >
-                    Stop forwarding
-                  </button>`
-            }
-          </div>
-        </form>
-      </section>
+      ${
+        address.retiredAt !== null
+          ? html`<section class="setting">
+              <h2>Archived mailbox</h2>
+              <p>
+                Retired on ${address.retiredAt}. Existing mail remains available; this address
+                cannot be resumed.
+              </p>
+            </section>`
+          : html` <section class="setting" aria-labelledby="general-title">
+                <header>
+                  <h2 id="general-title">General</h2>
+                  <p>How the address signs its mail, and whether it takes any.</p>
+                </header>
+                <form method="post" action="${path}">
+                  <div class="field">
+                    <label for="displayName">Display name</label>
+                    <input
+                      id="displayName"
+                      name="displayName"
+                      type="text"
+                      value="${address.displayName ?? ""}"
+                    />
+                    <p class="hint">Shown as the sender name on mail from this address.</p>
+                  </div>
+                  <label class="switch-row"
+                    ><span
+                      ><b>Active</b
+                      ><small>An inactive mailbox rejects new mail and cannot send.</small></span
+                    ><input
+                      class="switch"
+                      type="checkbox"
+                      name="active"
+                      ${address.active ? html`checked` : null}
+                  /></label>
+                  <div class="actions"><button class="button" type="submit">Save</button></div>
+                </form>
+              </section>
+              <section class="setting" aria-labelledby="forwarding-title">
+                <header>
+                  <h2 id="forwarding-title">Forwarding</h2>
+                  <p>Copies incoming mail to another address.</p>
+                </header>
+                <form method="post" action="${path}/forwarding">
+                  ${
+                    address.forwardTo === null
+                      ? html`<p class="muted">Mail is kept here only.</p>`
+                      : awaitingVerification
+                        ? html`<p class="note warning" role="status">
+                            ${icon("alert")}Waiting for verification — Cloudflare emailed
+                            ${address.forwardTo}. Mail is forwarded once the address is verified.
+                          </p>`
+                        : html`<p class="muted">
+                            Mail is also forwarded to
+                            <span class="mono">${address.forwardTo}</span>.
+                          </p>`
+                  }
+                  <div class="field">
+                    <label for="forwardTo">Forward to</label>
+                    <input
+                      id="forwardTo"
+                      name="email"
+                      type="email"
+                      value="${forwardTo}"
+                      required
+                      ${error?.field === "forwardTo" ? html`aria-invalid="true"` : null}
+                    />
+                    <p class="hint">
+                      Cloudflare emails this address once to verify it before forwarding.
+                    </p>
+                    ${fieldError(error, "forwardTo")}
+                  </div>
+                  <div class="actions">
+                    <button class="button" type="submit">
+                      ${address.forwardTo === null ? "Forward" : "Change"}
+                    </button>
+                    ${
+                      address.forwardTo === null
+                        ? null
+                        : html`<button
+                            class="button danger"
+                            type="submit"
+                            name="remove"
+                            value="1"
+                            formnovalidate
+                          >
+                            Stop forwarding
+                          </button>`
+                    }
+                  </div>
+                </form>
+              </section>
+              <section class="setting" aria-labelledby="retire-title">
+                <header>
+                  <h2 id="retire-title">Retire mailbox</h2>
+                  <p>
+                    Permanently stop reception and sending. Existing messages stay in the archive.
+                  </p>
+                </header>
+                <form method="post" action="${path}/retire">
+                  <button class="button danger" type="submit">Retire mailbox</button>
+                </form>
+              </section>`
+      }
     </div>`,
   };
 }
@@ -204,6 +265,7 @@ const MailboxForm = Schema.Struct({
   localPart: Schema.optionalKey(Schema.String),
   displayName: Schema.optionalKey(Schema.String),
   active: Schema.optionalKey(Schema.String),
+  domain: Schema.optionalKey(Schema.String),
 });
 
 const ForwardingForm = Schema.Struct({
@@ -223,8 +285,8 @@ export const mailboxesRoute = Effect.fn("mailboxesRoute")(function* (deps: ApiDe
     200,
     mailboxesPage(
       yield* listAddresses(deps),
-      deps.mailDomain,
-      { localPart: "", displayName: "" },
+      deps.mailDomains,
+      { localPart: "", displayName: "", domain: "" },
       null,
     ),
   );
@@ -234,7 +296,11 @@ export const createMailboxRoute = Effect.fn("createMailboxRoute")(function* (dep
   const form = yield* HttpServerRequest.schemaBodyUrlParams(MailboxForm);
   const localPart = (form.localPart ?? "").trim();
   const displayName = (form.displayName ?? "").trim();
-  const input = displayName.length === 0 ? { localPart } : { localPart, displayName };
+  const input: Mutable<Pick<CreateAddressPayload, "localPart" | "displayName" | "domain">> = {
+    localPart,
+  };
+  if (displayName.length > 0) input.displayName = displayName;
+  if (form.domain !== undefined) input.domain = form.domain;
   return yield* createAddress(deps, input).pipe(
     Effect.map((address) => redirect(`/mailboxes/${encodeURIComponent(address.id)}?saved`)),
     Effect.catchTag(["InvalidRequest", "Conflict"], (problem) =>
@@ -243,14 +309,34 @@ export const createMailboxRoute = Effect.fn("createMailboxRoute")(function* (dep
           400,
           mailboxesPage(
             addresses,
-            deps.mailDomain,
-            { localPart, displayName },
-            { field: "localPart", message: problem.message },
+            deps.mailDomains,
+            { localPart, displayName, domain: form.domain ?? "" },
+            {
+              field:
+                problem._tag === "InvalidRequest" && problem.code === "receiving_domain_required"
+                  ? "domain"
+                  : "localPart",
+              message: problem.message,
+            },
           ),
         ),
       ),
     ),
   );
+});
+
+export const retryMailboxRoutingRoute = Effect.fn("retryMailboxRoutingRoute")(function* (
+  deps: ApiDeps,
+) {
+  const { id } = yield* HttpRouter.schemaPathParams(MailboxParams);
+  yield* retryAddressRouting(deps, id);
+  return redirect(`/mailboxes/${encodeURIComponent(id)}`);
+});
+
+export const retireMailboxRoute = Effect.fn("retireMailboxRoute")(function* (deps: ApiDeps) {
+  const { id } = yield* HttpRouter.schemaPathParams(MailboxParams);
+  yield* retireAddress(deps, id);
+  return redirect(`/mailboxes/${encodeURIComponent(id)}`);
 });
 
 export const mailboxRoute = Effect.fn("mailboxRoute")(function* (deps: ApiDeps) {

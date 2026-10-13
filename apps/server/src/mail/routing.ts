@@ -1,230 +1,115 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import type { Input } from "alchemy";
-import { isResolved } from "alchemy/Diff";
-import * as Provider from "alchemy/Provider";
-import type { ScopedPlanStatusSession } from "alchemy/Report";
-import { UserFacingError } from "alchemy/UserFacingError";
-import { Resource, type Resource as AlchemyResource } from "alchemy/Resource";
-import * as dns from "@distilled.cloud/cloudflare/dns";
-import * as emailRouting from "@distilled.cloud/cloudflare/email-routing";
-import * as Data from "effect/Data";
-import * as Effect from "effect/Effect";
-import * as Schedule from "effect/Schedule";
-import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
+import * as Output from "alchemy/Output";
+import { packEnvValue } from "alchemy/RuntimeContext";
+import { Array as EffectArray, Config, Context, Effect } from "effect";
+import { currentSite, rootDomain, stageKeepsData, stageSendsMail } from "../site.ts";
+import { EmailRoutingDomain } from "./receiving-domain.ts";
+import { mailDomains } from "./domains.ts";
+import { ReceivingDomainUnsafe } from "./receiving-domain.ts";
 
-import { stageKeepsData, stageSendsMail, type StageSite } from "../site.ts";
-
-const EmailRoutingDomainTypeId = "uMail.Email.RoutingDomain" as const;
-type EmailRoutingDomainTypeId = typeof EmailRoutingDomainTypeId;
-
-interface EmailRoutingDomainProps {
-  readonly zoneId: string;
-  readonly name: string;
-}
-
-export type EmailRoutingDomain = AlchemyResource<
-  EmailRoutingDomainTypeId,
-  EmailRoutingDomainProps,
-  EmailRoutingDomainProps
->;
-
-export const EmailRoutingDomain = Resource<EmailRoutingDomain>(EmailRoutingDomainTypeId);
-
-const READY_POLLS = 12;
-const READY_POLL_INTERVAL = "5 seconds";
-
-// alchemy prints a UserFacingError as one line, so the deploy says which records to look at.
-export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDomainNotReady")<{
-  readonly zoneId: string;
-  readonly name: string;
-  readonly missing: ReadonlyArray<string>;
-}> {
-  readonly [UserFacingError] = true;
-  override readonly message = `Email Routing DNS for ${this.name} is not ready after 60 s.${
-    this.missing.length === 0 ? "" : ` Missing: ${this.missing.join("; ")}.`
-  } Check for conflicting MX/TXT records.`;
-}
-
-// A DNS record Email Routing still needs on a subdomain.
-const MissingRecord = Schema.Struct({
-  type: Schema.optional(Schema.NullOr(Schema.String)),
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  content: Schema.optional(Schema.NullOr(Schema.String)),
-  priority: Schema.optional(Schema.NullOr(Schema.Finite)),
-});
-
-// `getDns` with `subdomain` answers `{ errors, record }` rather than the zone's record list the SDK
-// types. Cloudflare deprecated the parameter but offers no other subdomain check, so it is decoded here.
-const SubdomainDns = Schema.Struct({
-  errors: Schema.optional(
-    Schema.NullOr(
-      Schema.Array(
-        Schema.Struct({
-          code: Schema.optional(Schema.NullOr(Schema.String)),
-          missing: Schema.optional(Schema.NullOr(MissingRecord)),
-        }),
-      ),
-    ),
-  ),
-});
-
-// The zone apex reports readiness in its routing settings. A subdomain is ready once Cloudflare
-// lists no missing DNS records for it; the ones it lists are what a stuck deploy reports.
-const inspect = Effect.fn("inspectEmailRoutingDomain")(function* ({
-  zoneId,
-  name,
-}: EmailRoutingDomainProps) {
-  const settings = yield* emailRouting.getEmailRouting({ zoneId });
-  if (settings.name === name) {
-    return { apex: true, ready: settings.enabled && settings.status === "ready", missing: [] };
+export class DeploymentMailDomains extends Context.Service<
+  DeploymentMailDomains,
+  {
+    readonly domainsJson: Alchemy.Input<string>;
+    readonly legacySeedsJson: Alchemy.Input<string>;
+    readonly legacyZone: Alchemy.Input<string> | null;
   }
-  const dns = yield* Schema.decodeUnknownEffect(SubdomainDns)(
-    yield* emailRouting.getDns({ zoneId, subdomain: name }),
+>()("umail/DeploymentMailDomains") {}
+
+// Deferred lookups are inert during graph construction and runtime. Zone IDs consumed by the
+// app come from resource outputs, so the Worker never looks up zones with its rules-only token.
+export const mailDomainResources = Effect.gen(function* () {
+  const site = yield* currentSite;
+  const stage = yield* Alchemy.Stage;
+  const root = yield* rootDomain;
+  const configured = yield* mailDomains;
+  const outputs = [];
+  const seeds = [];
+  let legacyZone: Alchemy.Input<string> | null = null;
+  const transferSeeds = yield* Config.Boolean("UMAIL_LEGACY_SEED_RULES").pipe(
+    Config.withDefault(false),
   );
-  const missing = (dns.errors ?? []).map(({ code, missing }) =>
-    missing === null || missing === undefined ? (code ?? "unknown") : describeRecord(missing),
-  );
-  return { apex: false, ready: missing.length === 0, missing };
-});
-
-// "MX mail.example.com → route1.mx.cloudflare.net (priority 1)"
-function describeRecord(record: typeof MissingRecord.Type): string {
-  const priority =
-    record.priority === null || record.priority === undefined
-      ? ""
-      : ` (priority ${record.priority})`;
-  return `${record.type ?? "?"} ${record.name ?? "?"} → ${record.content ?? "?"}${priority}`;
-}
-
-function waitUntilReady(domain: EmailRoutingDomainProps, session: ScopedPlanStatusSession) {
-  return inspect(domain).pipe(
-    Effect.tap(({ ready, missing }) =>
-      ready ? Effect.void : session.note(`waiting for Email Routing DNS: ${missing.join("; ")}`),
-    ),
-    Effect.repeat({
-      schedule: Schedule.spaced(READY_POLL_INTERVAL),
-      until: ({ ready }) => ready,
-      times: READY_POLLS,
-    }),
-    Effect.flatMap(({ ready, missing }) =>
-      ready ? Effect.void : Effect.fail(new EmailRoutingDomainNotReady({ ...domain, missing })),
-    ),
-  );
-}
-
-// A ready registration is adopted as is; one that is not ready is created.
-export const readEmailRoutingDomain = Effect.fn("readEmailRoutingDomain")(function* (
-  domain: EmailRoutingDomainProps,
-) {
-  const { ready } = yield* inspect(domain);
-  return ready ? { zoneId: domain.zoneId, name: domain.name } : undefined;
-});
-
-export const diffEmailRoutingDomain = Effect.fn("diffEmailRoutingDomain")(function* (
-  olds: EmailRoutingDomainProps,
-  news: EmailRoutingDomainProps,
-  output: EmailRoutingDomainProps | undefined,
-) {
-  if (olds.zoneId !== news.zoneId || olds.name !== news.name) {
-    return { action: "replace" } as const;
-  }
-  if (output === undefined) return undefined;
-  const { ready } = yield* inspect(news);
-  return ready ? undefined : ({ action: "update" } as const);
-});
-
-export const reconcileEmailRoutingDomain = Effect.fn("reconcileEmailRoutingDomain")(function* (
-  domain: EmailRoutingDomainProps,
-  session: ScopedPlanStatusSession,
-) {
-  const { zoneId, name } = domain;
-  const { apex, ready } = yield* inspect(domain);
-  if (!ready) {
-    yield* emailRouting.createDns(apex ? { zoneId } : { zoneId, name });
-    yield* waitUntilReady(domain, session);
-  }
-  return { zoneId, name };
-});
-
-// Cloudflare's only removal endpoints (`DELETE …/email/routing/dns`, `POST …/disable`) are
-// zone-wide, so a subdomain is taken down by hand: unlock its routing records, then delete them.
-// The registration entry itself stays listed as "unconfigured"; no subdomain-scoped API removes it.
-// The apex carries every stage's routing and is never touched; prod and dev retain their domain.
-export const deleteEmailRoutingDomain = Effect.fn("deleteEmailRoutingDomain")(function* ({
-  zoneId,
-  name,
-}: EmailRoutingDomainProps) {
-  const settings = yield* emailRouting.getEmailRouting({ zoneId });
-  if (settings.name === name) return;
-  yield* emailRouting.patchDns({ zoneId, name });
-  const records = yield* dns.listRecords
-    .items({ zoneId, name: { exact: name } })
-    .pipe(Stream.runCollect);
-  for (const record of records) {
-    if (record.name === name && isRoutingRecord(record.type, record.content ?? "")) {
-      yield* dns.deleteRecord({ zoneId, dnsRecordId: record.id });
+  for (const [domain, base] of EffectArray.zip(site.mailDomains, configured)) {
+    const baseName = base.name;
+    const suffix = baseName === root ? "" : `_${baseName}`;
+    const lookup = Output.fromEffect(
+      Effect.gen(function* () {
+        const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+        return yield* Cloudflare.Zone.resolveZoneId({
+          accountId,
+          hostname: domain.name,
+          zone: undefined,
+        }).pipe(Effect.orDie);
+      }),
+    );
+    let zoneId = lookup;
+    if (domain.receive) {
+      const receiving = yield* EmailRoutingDomain(`MailRoutingDomain${suffix}`, {
+        zoneId: lookup,
+        name: domain.name,
+      }).pipe(Alchemy.RemovalPolicy.retain(stageKeepsData(stage)));
+      zoneId = receiving.zoneId;
+      if (domain.name === root) legacyZone = receiving.zoneId;
     }
+    if (domain.send && stageSendsMail(stage)) {
+      yield* Cloudflare.Email.SendingSubdomain(`MailSending${suffix}`, {
+        zoneId,
+        name: domain.name,
+      });
+    }
+    if (transferSeeds && site.kind === "preview" && domain.name === site.mailDomain) {
+      for (const localPart of site.testLocalParts) {
+        const address = `${localPart}@${domain.name}`;
+        // This provider retains observed actions; it never reconciles these into a routing write.
+        const rule = yield* Cloudflare.Email.Rule(`Mail_${localPart}`, {
+          zone: zoneId,
+          matchers: [{ type: "literal", field: "to", value: address }],
+          actions: [],
+        }).pipe(Alchemy.RemovalPolicy.retain());
+        seeds.push(
+          Output.all(rule.ruleId, rule.zoneId).pipe(
+            Output.map(([id, zone]) => ({ id, zoneId: zone, address })),
+          ),
+        );
+      }
+    }
+    outputs.push(zoneId.pipe(Output.map((id) => ({ ...domain, zoneId: id }))));
   }
-});
-
-// The MX and SPF records Email Routing adds to a subdomain; unlocking drops their routing marker.
-function isRoutingRecord(type: string, content: string): boolean {
-  return (
-    (type === "MX" && content.endsWith(".mx.cloudflare.net")) ||
-    (type === "TXT" && content.includes("include:_spf.mx.cloudflare.net"))
-  );
-}
-
-export const EmailRoutingDomainProvider = Provider.succeed(EmailRoutingDomain, {
-  stables: ["zoneId", "name"],
-  diff: ({ olds, news, output }) =>
-    isResolved(news) ? diffEmailRoutingDomain(olds, news, output) : Effect.void,
-  read: ({ olds }) => readEmailRoutingDomain(olds),
-  reconcile: ({ news, session }) => reconcileEmailRoutingDomain(news, session),
-  delete: ({ output }) => deleteEmailRoutingDomain(output),
+  return DeploymentMailDomains.of({
+    // Explicit env strings bypass RuntimeContext.set. Pack JSON strings so runtime get
+    // preserves them as strings for Config's JSON schema instead of reinterpreting an array.
+    domainsJson: Output.all(...outputs).pipe(
+      Output.map((domains) => packEnvValue(JSON.stringify(domains))),
+    ),
+    legacySeedsJson: Output.all(...seeds).pipe(
+      Output.map((rules) => packEnvValue(JSON.stringify(rules))),
+    ),
+    legacyZone,
+  });
 });
 
 export const configureMailRouting = Effect.fn("configureMailRouting")(function* (
-  site: StageSite,
-  stage: string,
-  workerName: Input<string>,
+  workerName: Alchemy.Input<string>,
 ) {
-  const routing = yield* Cloudflare.Email.Routing("MailRouting", {
-    zone: site.mailDomain,
+  const legacy = yield* Config.Boolean("UMAIL_LEGACY_CATCH_ALL").pipe(Config.withDefault(false));
+  if (!legacy) return;
+  const site = yield* currentSite;
+  if (site.kind !== "prod") return;
+  const root = yield* rootDomain;
+  if (!site.mailDomains.some((domain) => domain.name === root && domain.receive))
+    return yield* new ReceivingDomainUnsafe({
+      message:
+        "UMAIL_LEGACY_CATCH_ALL requires the existing UMAIL_DOMAIN in the receiving manifest.",
+    });
+  const registrations = yield* DeploymentMailDomains;
+  const zone = registrations.legacyZone;
+  if (zone === null)
+    return yield* new ReceivingDomainUnsafe({
+      message: "UMAIL_LEGACY_CATCH_ALL requires this installation's existing receiving zone.",
+    });
+  yield* Cloudflare.Email.CatchAll("MailCatchAll", {
+    zone,
+    actions: [{ type: "worker", value: [workerName] }],
   }).pipe(Alchemy.RemovalPolicy.retain());
-  const routingDomain = yield* EmailRoutingDomain("MailRoutingDomain", {
-    zoneId: routing.zoneId,
-    name: site.mailDomain,
-  }).pipe(Alchemy.RemovalPolicy.retain(stageKeepsData(stage)));
-
-  if (stageSendsMail(stage)) {
-    yield* Cloudflare.Email.SendingSubdomain("MailSending", {
-      zoneId: routingDomain.zoneId,
-      name: site.mailDomain,
-    });
-  }
-  if (site.kind === "prod") {
-    yield* Cloudflare.Email.CatchAll("MailCatchAll", {
-      zone: routingDomain.zoneId,
-      actions: [{ type: "worker", value: [workerName] }],
-    });
-  } else {
-    const mailRule = (localPart: (typeof site.testLocalParts)[number]) =>
-      Cloudflare.Email.Rule(`Mail_${localPart}`, {
-        zone: routingDomain.zoneId,
-        matchers: [
-          {
-            type: "literal",
-            field: "to",
-            value: `${localPart}@${site.mailDomain}`,
-          },
-        ],
-        actions: [{ type: "worker", value: [workerName] }],
-      });
-    for (const localPart of site.testLocalParts) {
-      yield* mailRule(localPart);
-    }
-  }
 });

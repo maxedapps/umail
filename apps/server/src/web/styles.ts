@@ -800,30 +800,6 @@ export const styles = String.raw`
     font-weight: 560;
   }
 
-  /* An input joined to its domain. */
-  .suffixed {
-    display: flex;
-
-    > input {
-      min-inline-size: 0;
-      border-start-end-radius: 0;
-      border-end-end-radius: 0;
-    }
-
-    > span {
-      display: flex;
-      align-items: center;
-      padding-inline: 0.75rem;
-      border: 1px solid var(--border-strong);
-      border-inline-start: 0;
-      border-start-end-radius: var(--radius);
-      border-end-end-radius: var(--radius);
-      background: var(--hover);
-      color: var(--text-2);
-      white-space: nowrap;
-    }
-  }
-
   /* A radio as a card; the whole card is the label. */
   .choices {
     display: grid;

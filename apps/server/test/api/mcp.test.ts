@@ -35,6 +35,7 @@ import {
 } from "./world.ts";
 
 const MCP_TOOL_NAMES = [
+  "umail_list_mailboxes",
   "umail_list_sending_identities",
   "umail_list_threads",
   "umail_list_messages",

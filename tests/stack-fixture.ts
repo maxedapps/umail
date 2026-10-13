@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Redacted from "effect/Redacted";
 import { application } from "../alchemy.run.ts";
-import { EmailRoutingDomain } from "../apps/server/src/mail/routing.ts";
+import { EmailRoutingDomain } from "../apps/server/src/mail/receiving-domain.ts";
 
 export const evaluateApplication = Effect.fn("evaluateApplication")(function* (
   stage: string,
@@ -73,6 +73,10 @@ export const evaluateApplication = Effect.fn("evaluateApplication")(function* (
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromUnknown({
             UMAIL_DOMAIN: "umail.example.com",
+            UMAIL_MAIL_DOMAINS: JSON.stringify([
+              { name: "umail.example.com", receive: true, send: true },
+            ]),
+            CF_EMAIL_ROUTING_RULES_TOKEN: "unused-rules-test-token",
             UMAIL_OPERATOR_EMAIL: "operator@example.net",
             UMAIL_OPERATOR_PASSWORD: "operator-test-passphrase",
             CF_EMAIL_ROUTING_TOKEN: "unused-runtime-test-token",

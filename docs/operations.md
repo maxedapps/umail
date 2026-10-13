@@ -12,20 +12,43 @@ Keep one private file per installation, e.g. `.env` for the existing `uMail` and
 
 Pass `--env-file <file>` to every Alchemy command for that installation (`deploy:stage`, `alchemy plan`, `destroy`, `logs`, profile commands). It replaces the default `.env` and takes precedence over the shell; without it, the shell takes precedence over the optional `.env`. Shell values fill variables absent from an explicit file, so keep the file complete and check shell overrides. Always dry-run with the same file, profile and stage before deploying or destroying. The plan's stack name must match the intended installation; unexpected creates for an existing installation indicate the wrong identity/account/stage.
 
-For an independent installation on a zone AgentMail may fully manage:
+For an independent installation with its receiving children and shared foundation ready:
 
 ```sh
 pnpm deploy:stage --env-file .env.second --stage prod --profile mschwarzmueller --dry-run --no-input
 pnpm deploy:stage --env-file .env.second --stage prod --profile mschwarzmueller --no-input --yes
 ```
 
-**The Academind configuration above is preparatory; do not deploy it yet.** Routing is unchanged: `Cloudflare.Email.Routing` enables the whole zone, and prod manages its singleton catch-all. A new stack does not isolate those shared effects. Cloudflare [supports literal subdomain address rules, with catch-all only at the apex](https://developers.cloudflare.com/email-service/configuration/subdomains/); replacing the existing catch-all with a few rules would leave future console/CLI mailboxes unroutable. Task 931 stops after stack selection ([ADR 0010](../adrs/0010-named-installations.md)).
+`UMAIL_MAIL_DOMAINS` is required JSON: each normalized, unique `{ name, receive, send }` entry must have a capability, and at least one must receive. `UMAIL_DOMAIN` is the console hostname. Existing installations explicitly retain their original mail domain and `send: true`. Academind starts with `[{"name":"mail.academind.ai","receive":true,"send":false}]`; receive-only mailboxes cannot send, including jobs revalidated when claimed.
 
-Before an Academind install: choose automatic recipient routing (preserves console/CLI creation) or deploy-defined inboxes; establish supported child-only receiving without changing apex MX; verify the zone belongs to the intended account; prepare its env file; plan only the approved child DNS/rules; obtain Max's go. Preserve the `academind.ai` Purelymail MX, SPF and DMARC. Stack creation and a dry-run graph alone do not prove DNS safety. If the prod dry-run cannot run because OAuth has expired, restore the profile login and run it before any deployment; expect only the usual `App/AUTH_OPERATOR_ID` update from this stack-selection change.
+Alchemy adopts ready receiving registrations or onboards only a named child. Cloudflare's child API implicitly enables the zone and adds shared DKIM if absent, so the provider requires those shared settings to exist before writing. A foreign-MX apex reporting `misconfigured` is expected; it is never repaired. For a fresh zone, arrange the shared foundation separately with the zone owner's go. No deployment creates an apex MX or modifies zone-wide routing/catch-all options. See [ADR 0011 and the isolated SMTP proof](../adrs/0011-recipient-routing.md).
 
-`UMAIL_OPERATOR_EMAIL` receives send approvals, so it must be an inbox outside `UMAIL_DOMAIN`: deployment fails for an address on that domain or any subdomain, since a client that can read the inbox could approve its own sends. Changing `UMAIL_OPERATOR_PASSWORD` and redeploying invalidates sessions and OAuth grants; unchanged credentials preserve them. Approval links are derived from the `NotificationKey` secret Alchemy mints once and keeps in its encrypted state; replacing that resource breaks approval notifications that have not been sent yet. Replace Cloudflare tokens through their issuing account, update private configuration, redeploy, and verify the affected operation.
+**Academind deployment still needs Max's go.** Its zone is in company@academind.com's account, not the personal deployment account. Prepare the complete private file/profile, scoped tokens and child DNS plan; preserve Purelymail's apex MX, SPF and DMARC. Review the dry-run for this exact stack/account/stage before deployment. If OAuth cannot renew, skip the rehearsal and run it after login, before any deploy.
+
+`UMAIL_OPERATOR_EMAIL` must be outside every receiving domain and its children, since a client that reads that inbox could approve its own sends. Changing `UMAIL_OPERATOR_PASSWORD` and redeploying invalidates sessions and OAuth grants; unchanged credentials preserve them. Approval links use Alchemy's retained `NotificationKey`; replacing it breaks pending unsent notifications. Replace Cloudflare tokens through their issuing account, update private configuration, redeploy, and explicitly retry failed routing after its cause is fixed.
 
 Upgrading an existing deployment across [ADR 0001](../adrs/0001-consistent-mail-and-access-flows.md) needs a full reset (see [Stages and removal](#stages-and-removal)): the Worker, the store's schema, and the auth database changed. Afterwards every client authorizes again, and mailboxes and forwarding are recreated.
+
+## Routing credentials
+
+Create a separate rules token for each installation: Cloudflare account → **Manage account → Account API tokens → Create Token → Custom token**; choose only **Zone → Email Routing Rules → Edit**, with **Include → Specific zone** for its receiving zone(s), then **Continue to summary → Create Token**. Save it as `CF_EMAIL_ROUTING_RULES_TOKEN` in that installation's private env file; never paste it into a message. It is a Worker secret, separate from the account-wide forwarding token `CF_EMAIL_ROUTING_TOKEN`; it needs no DNS, settings or token-provisioning permission.
+
+Alchemy beta.81 provides a stack-owned `AccountApiToken` resource, but creating one requires `Account API Tokens Write`. Task 931 checked the refreshed personal/Academind profiles and company `cf` OAuth: account reads succeeded while the account-token endpoint refused them with 403/9109, and their scopes lack that permission. These credentials cannot own automatic token creation/deletion. A temporary test token must be revoked in the issuing dashboard after its stage is removed.
+
+## Existing installation cutover
+
+Keep the existing `UMAIL_STACK=uMail`, domain, profile, resource IDs and stage. Migration 0011 appends route intent without replacing old mailbox IDs, active flags or archives. Both live steps below require Max's explicit go; landing code deploys nothing.
+
+1. Add the required original-domain manifest and rules token to the existing private env file. Keep `UMAIL_LEGACY_CATCH_ALL=true` for prod. For an existing dev/preview's first rollout, use `UMAIL_LEGACY_SEED_RULES=true`: only its stored Alchemy rule IDs can transfer to the controller. Dry-run the controller deploy. The old zone foundation is relinquished with retention; the catch-all stays unchanged. The transitional providers never create, re-enable, retarget or delete a live route.
+2. After deployment, the alarm backfills literal rules for every existing mailbox, including paused mailboxes. Check readiness in the console/CLI. With `UMAIL_URL` pointing at this install and the operator CLI already authorized, run the observation-only command:
+
+   ```sh
+   pnpm umail addresses cutover --zone <original-zone-id> --env-file .env
+   ```
+
+   It lists all non-retired mailbox/rule IDs, verifies enabled literal rules with the exact installation owner/address/Worker across every receiving zone, and prints the owned catch-all's proposed disable/drop change. Missing, pending, conflicting or foreign coverage makes it unready. Only after reviewing this plan and Max's go, run again with `--execute`. That operation disables only the verified owned catch-all; it changes no mailbox rules, DNS or zone settings. After confirmed success, set `UMAIL_LEGACY_CATCH_ALL=false` in the private file and dry-run the next deploy to relinquish retained state. Once seed-rule transfer is verified, clear `UMAIL_LEGACY_SEED_RULES` the same way.
+
+The production Alchemy dry-run and cutover inventory are separate proofs. Runtime-created mailbox rules cannot appear as Alchemy resources: they exist only after the controller rollout. A deploy dry-run alone cannot demonstrate successful backfill. Never remove the existing catch-all with the first rollout.
 
 ## Sending and due work
 
@@ -34,7 +57,8 @@ One Worker, `App`, serves HTTP and MCP, receives mail, consumes the MailIndex qu
 - expires due approvals and rejects their unsent jobs (the only place approvals expire);
 - sends up to 10 ready jobs, and runs again at once while more are waiting;
 - settles a claim abandoned mid-send as `unknown` once its 15-minute claim expires, never sending it again;
-- redrives inbound mail still unindexed 5 minutes after it arrived, then every 1–30 minutes depending on its age.
+- redrives inbound mail still unindexed 5 minutes after it arrived, then every 1–30 minutes depending on its age;
+- reconciles up to 10 due mailbox routes, with persisted retries for temporary failures and explicit retry after permission/ownership errors.
 
 A failed step is logged as "Due work failed" (with the step, and the job for a send) and retried after a minute; the other steps still run.
 
@@ -83,10 +107,10 @@ Nothing re-imports raw mail from R2 into a lost or rewound AccountStore, and out
 
 - Within each `UMAIL_STACK`, `prod` uses `UMAIL_DOMAIN`. Other stages use `<stage>.<domain>` for HTTP and `<stage>-mail.<domain>` for mail, with seeded `inbox` and `probe` addresses. Of these, only `dev` provisions sending: it persists, sends real mail, and incurs charges. Each stage keeps its mail data in one AccountStore Durable Object, addressed by the fixed name `operator`.
 - Preview names are lowercase DNS labels, at most 58 characters, without leading/trailing hyphens. Renaming a stage does not migrate data.
-- Every stage enables Email Routing for its mail domain's whole zone and registers its mail domain as an Email Routing domain. `prod` replaces the zone's catch-all; other stages add literal rules for `inbox` and `probe`.
+- Every stage registers only its declared receiving domains. Preview domains derive from each manifest entry (`<stage>-mail.<domain>`), and runtime seed mailboxes receive literal rules through the controller. New stages never manage a catch-all or enable a zone; the shared foundation must already exist.
 - Deleting a conversation hides it; archived objects remain. Destroying a stage can delete AccountStore data.
-- Destroying `prod` or `dev` retains its AuthDb, MailArchive, and Email Routing domain; retained resources can incur charges. Destroying a preview deletes its AuthDb and MailArchive (objects included) and its mail domain's routing DNS records: it unlocks that subdomain's records by name and deletes them. Zone routing stays enabled for every stage.
-- Cloudflare has no subdomain-scoped API to drop a registration, so a destroyed preview's mail domain stays listed as `unconfigured` in the zone's Email Routing settings. Remove it there by hand when convenient; registrations count toward the zone's limit of 30 Email Routing domains. Don't use the API's `email/routing/disable` or `DELETE email/routing/dns` endpoints: both are zone-wide. Never disable the zone apex, which every stage's routing depends on, or the `UMAIL_DOMAIN` and `dev-mail.<domain>` registrations; confirm they are still enabled afterwards.
+- Before removing a preview, retire all its mailboxes and verify their owned rules are removed; Alchemy does not own or delete those runtime rules. Destroying `prod` or `dev` retains AuthDb, MailArchive and receiving registrations; retained resources can incur charges. A preview removes its data and uses the proved named DNS DELETE to remove only its receiving child registration/records. Shared routing/DKIM stay as they were.
+- Never call zone-wide routing disable or an unnamed DNS DELETE on a shared zone. Apex registration removal is refused. Inspect DNS, registrations, rules and shared settings after cleanup; report leftovers and preserve every other installation. The temporary unused-zone proof alone restored routing off and removed its task-owned shared foundation, because its starting zone was empty and Max explicitly authorized that isolated test.
 - For an intentional full reset of `prod` or `dev`: inventory/protect data, review and destroy the exact stage, then empty/delete its retained archive and database, remove its Email Routing domain registration, and inspect leftover DNS. Forwarding destinations are account-wide Cloudflare resources that survive a reset; `forwarding set` adopts an existing one. Never delete retained resources while old stage state still references them. Preserve shared zone routing, the Alchemy state store, and other stages. Verify removal before redeploying.
 
 ## Dependency patches

@@ -1,9 +1,7 @@
 import {
   MailContact,
   dedupeMailContacts,
-  isOwnRegisteredIdentity,
   parseMailboxAddress,
-  type MailDomain,
   type MailboxAddress,
 } from "@umail/api-contract";
 
@@ -26,7 +24,6 @@ export function deriveReplyRecipients(
   mode: ReplyMode,
   participants: ReplyParticipants,
   registered: ReadonlySet<MailboxAddress>,
-  mailDomain: MailDomain,
   sendingAddress?: MailboxAddress,
 ): ReplyRecipients {
   const toSeed = direction === "inbound" ? inboundReplyTo(participants) : participants.to;
@@ -36,7 +33,7 @@ export function deriveReplyRecipients(
         ? [...participants.to, ...participants.cc]
         : participants.cc
       : [];
-  let to = excludeOwn(toSeed, registered, mailDomain);
+  let to = excludeOwn(toSeed, registered);
   if (to.length === 0 && sendingAddress !== undefined) {
     to = excludeSendingAddress(toSeed, sendingAddress);
   }
@@ -44,9 +41,7 @@ export function deriveReplyRecipients(
     to = excludeSendingAddress(participants.from, sendingAddress);
   }
   const toKeys = new Set(to.map((contact) => contact.address));
-  const cc = excludeOwn(ccSeed, registered, mailDomain).filter(
-    (contact) => !toKeys.has(contact.address),
-  );
+  const cc = excludeOwn(ccSeed, registered).filter((contact) => !toKeys.has(contact.address));
   return {
     to: dedupeMailContacts(to),
     cc: dedupeMailContacts(cc),
@@ -63,11 +58,11 @@ function inboundReplyTo(participants: ReplyParticipants): ReadonlyArray<MailCont
 function excludeOwn(
   contacts: ReadonlyArray<MailContact>,
   registered: ReadonlySet<MailboxAddress>,
-  mailDomain: MailDomain,
 ): ReadonlyArray<MailContact> {
   const kept: Array<MailContact> = [];
   for (const contact of contacts) {
-    if (isOwnRegisteredIdentity(contact.address, mailDomain, registered)) {
+    const parsed = parseMailboxAddress(contact.address);
+    if (parsed.kind === "ok" && registered.has(parsed.address)) {
       continue;
     }
     kept.push(contact);

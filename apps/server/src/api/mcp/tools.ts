@@ -6,6 +6,7 @@ import {
   MessageHeaders,
   OutboundJobStatus,
   SendingIdentity,
+  Address,
   ThreadMessage,
   composeFields,
   hasMessageBody,
@@ -32,7 +33,9 @@ import {
   listThreads,
   setThreadReadState,
   submitMessage,
+  listAddresses,
 } from "../operations.ts";
+import { mailboxAllowed, requireRead } from "../principal.ts";
 
 const threadId = Schema.String.annotate({
   description: "A thread id or any message id in the thread.",
@@ -122,6 +125,24 @@ export function registerTools(
         ),
     );
   }
+
+  tool(
+    "umail_list_mailboxes",
+    {
+      description:
+        "List mailboxes this client may read, with reception status, pause and retirement state.",
+      annotations: { ...readOnly, openWorldHint: false },
+      input: Schema.Record(Schema.String, Schema.Never),
+      output: Schema.Struct({ mailboxes: Schema.Array(Address) }),
+    },
+    () =>
+      requireRead(principal).pipe(
+        Effect.andThen(listAddresses(deps)),
+        Effect.map((addresses) => ({
+          mailboxes: addresses.filter((address) => mailboxAllowed(principal, address.id)),
+        })),
+      ),
+  );
 
   tool(
     "umail_list_sending_identities",

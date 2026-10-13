@@ -307,6 +307,15 @@ export type AccountAddress = {
   readonly forwardTo: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly domain: string;
+  readonly canSend: boolean;
+  readonly retiredAt: string | null;
+  readonly routing: {
+    readonly state: "pending" | "ready" | "error";
+    readonly error: string | null;
+    readonly ruleId: string | null;
+    readonly zoneId: string | null;
+  };
 };
 
 export type PatchAddressInput = {
@@ -428,6 +437,8 @@ export const AddressRow = Schema.Struct({
   forward_to: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
+  retired_at: Schema.NullOr(Schema.String),
+  send_enabled: Schema.Finite,
 });
 export type AddressRow = typeof AddressRow.Type;
 

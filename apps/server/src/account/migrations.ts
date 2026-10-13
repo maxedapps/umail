@@ -155,6 +155,23 @@ export const accountMigrations = [
     name: "0010_account",
     sql: accountMigration0010Sql,
   },
+  {
+    version: 11,
+    name: "0011_recipient_routes",
+    sql: `ALTER TABLE addresses ADD COLUMN retired_at TEXT;
+ALTER TABLE addresses ADD COLUMN send_enabled INTEGER NOT NULL DEFAULT 1 CHECK (send_enabled IN (0, 1));
+CREATE TABLE mailbox_routes (
+  mailbox_id TEXT PRIMARY KEY NOT NULL REFERENCES addresses(id),
+  zone_id TEXT,
+  rule_id TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'error')),
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_after TEXT
+);
+CREATE INDEX mailbox_routes_due ON mailbox_routes(retry_after, mailbox_id) WHERE retry_after IS NOT NULL;
+INSERT INTO mailbox_routes (mailbox_id, state, retry_after) SELECT id, 'pending', created_at FROM addresses;`,
+  },
 ] as const satisfies readonly AccountMigration[];
 
 export function sqlStatements(sql: string): readonly string[] {
