@@ -25,17 +25,18 @@ pnpm install --frozen-lockfile
 cp .env.example .env
 ```
 
-Edit `.env`. Replace example domains with your own; keep credentials private.
+Edit `.env`. Replace example domains with your own; keep credentials private. Keep `UMAIL_STACK=uMail` for an existing installation.
 
-| Variable                  | Required for          | Value                                                                                                 |
-| ------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                                 |
-| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox outside `UMAIL_DOMAIN`, since it approves sends; the only operator allowed to sign in. |
-| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                            |
-| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                                          |
-| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.            |
-| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                                  |
-| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                            |
+| Variable                  | Required for          | Value                                                                                                                                                                         |
+| ------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UMAIL_STACK`             | New installation      | Stable, case-sensitive Alchemy stack name, e.g. `uMail-academind`; absent defaults to the existing `uMail`. Use 1–32 letters/digits/internal hyphens, starting with a letter. |
+| `UMAIL_DOMAIN`            | Deployment            | Hostname and mailbox domain, e.g. `mail.example.com`; no scheme/path.                                                                                                         |
+| `UMAIL_OPERATOR_EMAIL`    | Deployment            | Existing inbox outside `UMAIL_DOMAIN`, since it approves sends; the only operator allowed to sign in.                                                                         |
+| `UMAIL_OPERATOR_PASSWORD` | Deployment            | Unique password of at least 12 characters.                                                                                                                                    |
+| `CF_EMAIL_ROUTING_TOKEN`  | Deployment            | Forwarding-management token described above.                                                                                                                                  |
+| `UMAIL_URL`               | CLI                   | HTTPS origin, e.g. `https://mail.example.com`; export in your shell; not read from `.env`.                                                                                    |
+| `CLOUDFLARE_ACCOUNT_ID`   | Token deployment only | Target account ID; omit when using an OAuth profile.                                                                                                                          |
+| `CLOUDFLARE_API_TOKEN`    | Token deployment only | Deployment token; leave unset when using an OAuth profile.                                                                                                                    |
 
 Set up deployment authentication:
 
@@ -50,13 +51,29 @@ For automated/token deployment, set both Cloudflare variables instead. The deplo
 ## Deploy
 
 ```sh
-pnpm exec alchemy plan --stage prod --profile default
-pnpm exec alchemy deploy --stage prod --profile default
+pnpm deploy:stage --stage prod --profile default --dry-run --no-input
+pnpm deploy:stage --stage prod --profile default
 ```
 
 Review the plan before confirming. The first deployment may also prompt to create Alchemy's shared state store. For a named profile, replace `default` consistently.
 
 Open `https://mail.example.com/login` and sign in; you land on `/mail`. Check Cloudflare's domain/DNS readiness if the hostname is unavailable. **Create a mailbox next,** on `/mailboxes` or with the CLI below: production deployment alone creates no inbox.
+
+### Separate installations
+
+One repository can select multiple installations. Alchemy's Cloudflare account + `UMAIL_STACK` + stage identify the installation, regardless of the checkout folder. Keep the existing stack `uMail`, domain and profile unchanged. A second installation uses a different stack and domain in its own private env file, with the ordinary `prod` stage; it gets its own Worker, data, console and MCP authorization. Changing only the domain under the same stack/account/stage updates the existing installation.
+
+```sh
+cp .env.example .env.second
+# Set UMAIL_STACK=uMail-second, UMAIL_DOMAIN=mail.second-example.com and its credentials.
+pnpm deploy:stage --env-file .env.second --stage prod --profile default --dry-run --no-input
+# Only after reviewing the plan and confirming the zone is safe to manage:
+pnpm deploy:stage --env-file .env.second --stage prod --profile default
+```
+
+`--env-file` also works on Alchemy's plan, destroy, logs and profile commands. Without it, the shell overrides `.env`; with it, the selected file overrides the shell and replaces `.env`. A blank stack name is an error. Names are not trimmed or lower-cased. A valid typo selects new state and plans a brand-new installation: check the stack name and proposed creates in every dry-run. Updating an installation means selecting its same env file, stack, account/profile and stage every time. See [installation operations](docs/operations.md#named-installations).
+
+**Stack isolation does not isolate zone-wide Email Routing. Do not deploy `.env.academind` for `mail.academind.ai` yet.** Current routing still enables the entire zone and sets prod's catch-all. Preserving Purelymail at `academind.ai` requires subdomain-only onboarding and literal routes for every mailbox, including mailboxes created at runtime. That larger routing change is deferred ([ADR 0010](adrs/0010-named-installations.md)); a different stack alone is not sufficient.
 
 ## First mailbox
 
@@ -114,13 +131,13 @@ Tools: `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messag
 
 ## Update
 
-Keep the same account, profile, stage, and private configuration:
+Keep the same stack, account, profile, stage, and private configuration. Add `--env-file <file>` to both Alchemy commands when updating another installation:
 
 ```sh
 git pull --ff-only
 pnpm install --frozen-lockfile
-pnpm exec alchemy plan --stage prod --profile default
-pnpm exec alchemy deploy --stage prod --profile default
+pnpm deploy:stage --stage prod --profile default --dry-run --no-input
+pnpm deploy:stage --stage prod --profile default
 ```
 
 Password changes require redeployment and invalidate existing sessions/grants. Verify a mail round trip after deployment. **Deleting a conversation hides it but does not erase its archived raw objects.**

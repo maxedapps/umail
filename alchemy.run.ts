@@ -13,6 +13,7 @@ import {
 } from "./apps/server/src/mail/routing.ts";
 import { AuthDb, ProvisionedOperator } from "./apps/server/src/resources.ts";
 import { currentSite, deployConfigError, operatorEmail } from "./apps/server/src/site.ts";
+import { loadStackName } from "./tools/stack-name.ts";
 
 // Export the real application program so local tests can inspect its resource graph without cloud providers.
 export const application = Effect.gen(function* () {
@@ -49,7 +50,7 @@ export const application = Effect.gen(function* () {
 );
 
 export default Alchemy.Stack(
-  "uMail",
+  await loadStackName(),
   {
     providers: EmailRoutingDomainProvider.pipe(Layer.provideMerge(Cloudflare.providers())),
     state: Cloudflare.state(),

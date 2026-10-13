@@ -85,6 +85,18 @@ const ConfiguredMailAddress = Schema.String.pipe(
 
 export const rootDomain = Config.schema(ConfiguredMailDomain, "UMAIL_DOMAIN");
 
+// Stack identity is case-sensitive and must not be normalized: it selects existing cloud state.
+// Only an absent variable keeps the original installation; a blank value is a config error.
+export const stackName = Config.schema(
+  Schema.String.check(
+    Schema.isPattern(/^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/, {
+      message: "must start with a letter and contain only letters, digits or internal hyphens.",
+    }),
+    Schema.isMaxLength(32, { message: "must be at most 32 characters." }),
+  ),
+  "UMAIL_STACK",
+).pipe(Config.withDefault("uMail"));
+
 // Checked when the stack is evaluated, so a bad value fails before anything changes.
 export const operatorPassword = Config.schema(
   Schema.Redacted(

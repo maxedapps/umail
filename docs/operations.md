@@ -2,7 +2,26 @@
 
 ## Updates and credentials
 
-Keep the same Cloudflare account, profile, stage, and private configuration when following the README's update commands. Inspect unexpected replacements. Use `--force` only after diagnosing a reconciliation failure.
+Keep the same stack, Cloudflare account, profile, stage, and private configuration when following the README's update commands. Inspect unexpected replacements. Use `--force` only after diagnosing a reconciliation failure.
+
+## Named installations
+
+`UMAIL_STACK` selects Alchemy's stack namespace before resource evaluation. The exact existing identity is `uMail`; an absent variable defaults to that name so existing env files keep working. Set `UMAIL_STACK=uMail` explicitly in the existing install's private `.env`. Names preserve case and accept 1–32 ASCII letters/digits/internal hyphens, starting with a letter. Blank or invalid values fail with a one-line configuration error. Changing a name is a new installation, not a rename or data migration; a valid typo also creates a new namespace. The checkout folder does not identify an installation.
+
+Keep one private file per installation, e.g. `.env` for the existing `uMail` and `.env.academind` with `UMAIL_STACK=uMail-academind`, `UMAIL_DOMAIN=mail.academind.ai` and its operator/forwarding credentials. Never overwrite the existing file with a new domain. Use `prod` for each installation's permanent environment; stack identity separates their resources. Each has its own console origin, data, operator sessions and MCP consent. Set `UMAIL_URL` to the selected origin for CLI login, with a separate `XDG_STATE_HOME` if keeping both CLI logins.
+
+Pass `--env-file <file>` to every Alchemy command for that installation (`deploy:stage`, `alchemy plan`, `destroy`, `logs`, profile commands). It replaces the default `.env` and takes precedence over the shell; without it, the shell takes precedence over the optional `.env`. Shell values fill variables absent from an explicit file, so keep the file complete and check shell overrides. Always dry-run with the same file, profile and stage before deploying or destroying. The plan's stack name must match the intended installation; unexpected creates for an existing installation indicate the wrong identity/account/stage.
+
+For an independent installation on a zone AgentMail may fully manage:
+
+```sh
+pnpm deploy:stage --env-file .env.second --stage prod --profile mschwarzmueller --dry-run --no-input
+pnpm deploy:stage --env-file .env.second --stage prod --profile mschwarzmueller --no-input --yes
+```
+
+**The Academind configuration above is preparatory; do not deploy it yet.** Routing is unchanged: `Cloudflare.Email.Routing` enables the whole zone, and prod manages its singleton catch-all. A new stack does not isolate those shared effects. Cloudflare [supports literal subdomain address rules, with catch-all only at the apex](https://developers.cloudflare.com/email-service/configuration/subdomains/); replacing the existing catch-all with a few rules would leave future console/CLI mailboxes unroutable. Task 931 stops after stack selection ([ADR 0010](../adrs/0010-named-installations.md)).
+
+Before an Academind install: choose automatic recipient routing (preserves console/CLI creation) or deploy-defined inboxes; establish supported child-only receiving without changing apex MX; verify the zone belongs to the intended account; prepare its env file; plan only the approved child DNS/rules; obtain Max's go. Preserve the `academind.ai` Purelymail MX, SPF and DMARC. Stack creation and a dry-run graph alone do not prove DNS safety. If the prod dry-run cannot run because OAuth has expired, restore the profile login and run it before any deployment; expect only the usual `App/AUTH_OPERATOR_ID` update from this stack-selection change.
 
 `UMAIL_OPERATOR_EMAIL` receives send approvals, so it must be an inbox outside `UMAIL_DOMAIN`: deployment fails for an address on that domain or any subdomain, since a client that can read the inbox could approve its own sends. Changing `UMAIL_OPERATOR_PASSWORD` and redeploying invalidates sessions and OAuth grants; unchanged credentials preserve them. Approval links are derived from the `NotificationKey` secret Alchemy mints once and keeps in its encrypted state; replacing that resource breaks approval notifications that have not been sent yet. Replace Cloudflare tokens through their issuing account, update private configuration, redeploy, and verify the affected operation.
 
@@ -62,7 +81,7 @@ Nothing re-imports raw mail from R2 into a lost or rewound AccountStore, and out
 
 ## Stages and removal
 
-- `prod` uses `UMAIL_DOMAIN`. Other stages use `<stage>.<domain>` for HTTP and `<stage>-mail.<domain>` for mail, with seeded `inbox` and `probe` addresses. Of these, only `dev` provisions sending: it persists, sends real mail, and incurs charges. Each stage keeps its mail data in one AccountStore Durable Object, addressed by the fixed name `operator`.
+- Within each `UMAIL_STACK`, `prod` uses `UMAIL_DOMAIN`. Other stages use `<stage>.<domain>` for HTTP and `<stage>-mail.<domain>` for mail, with seeded `inbox` and `probe` addresses. Of these, only `dev` provisions sending: it persists, sends real mail, and incurs charges. Each stage keeps its mail data in one AccountStore Durable Object, addressed by the fixed name `operator`.
 - Preview names are lowercase DNS labels, at most 58 characters, without leading/trailing hyphens. Renaming a stage does not migrate data.
 - Every stage enables Email Routing for its mail domain's whole zone and registers its mail domain as an Email Routing domain. `prod` replaces the zone's catch-all; other stages add literal rules for `inbox` and `probe`.
 - Deleting a conversation hides it; archived objects remain. Destroying a stage can delete AccountStore data.
