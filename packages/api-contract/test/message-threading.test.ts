@@ -6,11 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   comparisonKey,
   dedupeMailContacts,
-  isOwnRegisteredIdentity,
   MailContact,
   parseExternalMailAddress,
 } from "../src/mail-contact.ts";
-import { MailboxAddress, parseMailDomain, parseMailboxAddress } from "../src/mailbox-address.ts";
 import {
   buildOutboundReferences,
   joinRfcMessageIds,
@@ -21,9 +19,6 @@ import {
   type NormalizedRfcMessageId,
 } from "../src/message-threading.ts";
 import { MailThreadPage, SubmitMessagePayload } from "../src/api-spec.ts";
-
-const MANAGED = requireMailDomain("umail.example.com");
-const INBOX = requireMailbox("inbox@umail.example.com");
 
 describe("external mail addresses", () => {
   it("preserves plus-addresses and mixed-case local parts while lowercasing the domain", () => {
@@ -42,18 +37,6 @@ describe("external mail addresses", () => {
     const other = requireContact("second@example.com", null);
     expect(dedupeMailContacts([first, duplicate, other])).toEqual([first, other]);
     expect(comparisonKey(first.address)).toBe("User+Tag@example.com");
-  });
-
-  it("excludes registered managed-domain identities without forcing plus-addresses through MailboxAddress", () => {
-    const registered = new Set<MailboxAddress>([INBOX]);
-    const mixedCaseOwn = requireExternal("Inbox@UMail.Example.COM");
-    const plusOnManaged = requireExternal("inbox+tag@umail.example.com");
-    const outsider = requireExternal("Inbox@example.com");
-
-    expect(isOwnRegisteredIdentity(mixedCaseOwn, MANAGED, registered)).toBe(true);
-    expect(isOwnRegisteredIdentity(plusOnManaged, MANAGED, registered)).toBe(false);
-    expect(isOwnRegisteredIdentity(outsider, MANAGED, registered)).toBe(false);
-    expect(parseMailboxAddress("inbox+tag@umail.example.com")).toEqual({ kind: "invalid" });
   });
 
   it.each(["", "local", "@example.com", "local@", "a b@example.com", "local@exam ple.com"])(
@@ -202,24 +185,6 @@ describe("compose and reply contract", () => {
     expect("ComposeMessagePayload" in Contract).toBe(false);
   });
 });
-
-function requireMailDomain(raw: string) {
-  const parsed = parseMailDomain(raw);
-  expect(parsed.kind).toBe("ok");
-  if (parsed.kind !== "ok") {
-    throw new Error("expected a mail domain");
-  }
-  return parsed.domain;
-}
-
-function requireMailbox(raw: string) {
-  const parsed = parseMailboxAddress(raw);
-  expect(parsed.kind).toBe("ok");
-  if (parsed.kind !== "ok") {
-    throw new Error("expected a mailbox address");
-  }
-  return parsed.address;
-}
 
 function requireExternal(raw: string) {
   const parsed = parseExternalMailAddress(raw);

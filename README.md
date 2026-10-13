@@ -123,7 +123,7 @@ For another machine, run `pnpm build:clients`, copy `dist/clients/umail.mjs`, an
 After signing in at `/login`, the browser is a second operator surface next to the CLI:
 
 - **Mail** (`/mail`): read conversations across all mailboxes or one, open messages, download attachments, mark conversations read or unread, delete them, and write new messages, replies and reply-alls. Opening a conversation marks it read, and read state is shared, so agents and the CLI that list only unread mail no longer see it. Each send shows its status.
-- **Mailboxes** (`/mailboxes`): create mailboxes, rename or pause them, and set or stop forwarding.
+- **Mailboxes** (`/mailboxes`): create mailboxes in a receiving domain, inspect or retry reception, rename, pause or retire them, and set or stop forwarding.
 - **Clients** (`/clients`): see every client with access, change what it may do, or revoke it.
 
 It is not an everyday mail client: there is no search, no drafts, no attachments or HTML on outgoing mail, and no live updates. HTML bodies render in a sandboxed frame that loads no images, remote or inline; inline images are listed as attachments. Send approvals still happen from the approval email's link.
@@ -132,7 +132,7 @@ It is not an everyday mail client: there is no search, no drafts, no attachments
 
 Add `https://mail.example.com/mcp` as a remote HTTP MCP server in a client supporting OAuth discovery and dynamic registration. The server advertises itself as **AgentMail** with an icon at `https://mail.example.com/icon.png`. Sign in as the operator and approve access; no API key is needed.
 
-Tools: `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messages`, `umail_get_thread`, `umail_get_message`, `umail_get_message_headers`, `umail_set_thread_read_state`, `umail_send_message`, `umail_reply_to_message`, `umail_get_job`.
+Tools: `umail_list_mailboxes`, `umail_list_sending_identities`, `umail_list_threads`, `umail_list_messages`, `umail_get_thread`, `umail_get_message`, `umail_get_message_headers`, `umail_set_thread_read_state`, `umail_send_message`, `umail_reply_to_message`, `umail_get_job`.
 
 **The consent screen decides what a client may do:** which mailboxes it may use (default: all) and whether it may send without approval (default: every send waits for your approval at the operator inbox). A client gets no access until you consent. `https://mail.example.com/clients` lists every client with access, including the CLI; change a client's mailboxes, recipients, or send mode there, or revoke it. Revoking ends its access at once; the client can ask again and you see the consent screen again.
 

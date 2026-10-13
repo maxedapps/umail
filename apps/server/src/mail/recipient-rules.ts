@@ -105,6 +105,7 @@ function hasRuleId(rule: routing.GetRuleResponse): rule is RecipientRule {
 }
 
 function classifyRuleError(error: { readonly _tag: string; readonly message: string }) {
+  const transient = Retry.transientOptions.while?.(error) === true;
   const terminal = [
     "Unauthorized",
     "Forbidden",
@@ -114,9 +115,10 @@ function classifyRuleError(error: { readonly _tag: string; readonly message: str
     "InvalidRoute",
     "ConfigError",
   ].includes(error._tag);
-  const credential = ["Unauthorized", "Forbidden", "ConfigError"].includes(error._tag);
+  const credential =
+    !transient && ["Unauthorized", "Forbidden", "ConfigError"].includes(error._tag);
   return new RecipientRuleError({
-    retryable: !terminal,
+    retryable: transient || !terminal,
     message: credential
       ? "Cloudflare refused CF_EMAIL_ROUTING_RULES_TOKEN. Give it Email Routing Rules Write on this installation's zones and retry."
       : `${error._tag}: ${error.message}`,

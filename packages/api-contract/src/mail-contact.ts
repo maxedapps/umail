@@ -2,8 +2,6 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import { MailboxAddress, parseMailboxAddress, type MailDomain } from "./mailbox-address.ts";
-
 export const ExternalMailAddress = Schema.String.check(
   Schema.makeFilter((raw: string) =>
     isCanonicalExternalMailAddress(raw)
@@ -66,19 +64,6 @@ export function parseExternalMailAddress(raw: string): ExternalMailAddressParseR
 
 export function comparisonKey(address: ExternalMailAddress): string {
   return address;
-}
-
-export function isOwnRegisteredIdentity(
-  address: ExternalMailAddress,
-  managedDomain: MailDomain,
-  registered: ReadonlySet<MailboxAddress>,
-): boolean {
-  const parsed = parseExternalMailAddress(address);
-  if (parsed.kind === "invalid" || parsed.domain !== managedDomain) {
-    return false;
-  }
-  const mailbox = parseMailboxAddress(parsed.address);
-  return mailbox.kind === "ok" && registered.has(mailbox.address);
 }
 
 export function dedupeMailContacts(
