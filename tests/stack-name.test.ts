@@ -27,6 +27,13 @@ describe("installation identity at the real stack entrypoint", () => {
           expected: "uMail-academind",
         },
         { shell: null, file: "uMail-file", selected: null, selectAbsent: true, expected: "uMail" },
+        {
+          shell: "uMail-shell",
+          file: "uMail-file",
+          selected: "uMail-academind",
+          exec: true,
+          expected: "uMail-academind",
+        },
         { shell: "", file: "uMail-file", selected: null, expected: invalidName },
         { shell: "uMail-shell", file: "uMail", selected: "", expected: invalidName },
         { shell: null, file: "", selected: null, expected: invalidName },
@@ -48,6 +55,7 @@ describe("installation identity at the real stack entrypoint", () => {
         const scenarios = ${JSON.stringify(scenarios)};
         const results = [];
         for (const [index, scenario] of scenarios.entries()) {
+          delete process.env.ALCHEMY_EXEC_OPTIONS;
           if (scenario.shell === null) delete process.env.UMAIL_STACK;
           else process.env.UMAIL_STACK = scenario.shell;
           if (scenario.file === null) await rm(".env", { force: true });
@@ -55,7 +63,11 @@ describe("installation identity at the real stack entrypoint", () => {
           process.argv = [process.execPath, "stack-selection", "deploy", "--stage", "prod"];
           if (scenario.selected !== null || scenario.selectAbsent) {
             await writeFile(".env.installation", scenario.selected === null ? "" : "UMAIL_STACK=" + JSON.stringify(scenario.selected) + "\\n");
-            process.argv.push("--env-file", ".env.installation");
+            if (scenario.exec) {
+              process.env.ALCHEMY_EXEC_OPTIONS = JSON.stringify({ main: ${JSON.stringify(new URL(entrypoint).pathname)}, stage: "dev", force: false, envFile: ".env.installation" });
+            } else {
+              process.argv.push("--env-file", ".env.installation");
+            }
           }
           try {
             const { default: stack } = await import(${JSON.stringify(entrypoint)} + "?selection=" + index);

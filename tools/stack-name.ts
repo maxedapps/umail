@@ -1,10 +1,13 @@
 import { parseArgs } from "node:util";
+import { DevOptions } from "alchemy/Cli/DevOptions";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { deployConfigError, stackName } from "../apps/server/src/site.ts";
 
@@ -16,7 +19,14 @@ export async function loadStackName(): Promise<string> {
     strict: false,
     allowPositionals: true,
   });
-  const selected = typeof values["env-file"] === "string" ? values["env-file"] : undefined;
+  // `alchemy dev` passes the same file to its exec child in this typed wire format, not argv.
+  const execOptions = process.env.ALCHEMY_EXEC_OPTIONS;
+  const selected =
+    typeof values["env-file"] === "string"
+      ? values["env-file"]
+      : execOptions === undefined
+        ? undefined
+        : Option.getOrUndefined(Schema.decodeSync(DevOptions)(JSON.parse(execOptions)).envFile);
   const result = await Effect.runPromiseExit(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
