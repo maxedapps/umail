@@ -41,7 +41,7 @@ interface CapturedRequest {
 type CliResponseFactory = (request: HttpClientRequest.HttpClientRequest, url: URL) => Response;
 
 // The environment the CLI reads its configuration from.
-type CliEnv = { readonly UMAIL_URL?: string };
+type CliEnv = { readonly UMAIL_URL?: string; readonly CF_EMAIL_ROUTING_RULES_TOKEN?: string };
 
 const testEnv = {
   UMAIL_URL: "https://umail.example.test",
@@ -418,11 +418,6 @@ function serializeApprovalFailureCapture(captured: ApprovalFailureCapture): stri
 layer(NodeServices.layer)("retained CLI dispatch", (it) => {
   it.effect("inspects cutover coverage without --execute and performs no writes", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "umail-cli-cutover-" });
-      const envFile = path.join(directory, ".env");
-      yield* fs.writeFileString(envFile, "CF_EMAIL_ROUTING_RULES_TOKEN=fixture-rules-token\n");
       const { captured, httpClient } = capturingClient((_request, url) => {
         if (url.pathname === "/routing-configuration")
           return jsonResponse({
@@ -466,8 +461,8 @@ layer(NodeServices.layer)("retained CLI dispatch", (it) => {
         throw new Error(`Unexpected cutover request ${url.href}`);
       });
       const result = yield* dispatchEffect(
-        ["addresses", "cutover", "--zone", "fixture-zone", "--env-file", envFile],
-        testEnv,
+        ["addresses", "cutover", "--zone", "fixture-zone"],
+        { ...testEnv, CF_EMAIL_ROUTING_RULES_TOKEN: "fixture-rules-token" },
         httpClient,
       );
       expect(result).toMatchObject({

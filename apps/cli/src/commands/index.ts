@@ -148,15 +148,14 @@ const addressesCommand = Command.make("addresses").pipe(
       "cutover",
       {
         zoneId: Flag.String("zone"),
-        envFile: Flag.String("env-file").pipe(Flag.withDefault(".env")),
         execute: Flag.Boolean("execute").pipe(Flag.withDefault(false)),
       },
-      ({ zoneId, envFile, execute }) =>
+      ({ zoneId, execute }) =>
         Effect.gen(function* () {
           const client = yield* requireClient();
           const configuration = yield* apiCall(client.Addresses.getRoutingConfiguration());
           const mailboxes = yield* apiCall(client.Addresses.listAddresses({}));
-          const cloudflare = yield* cutoverCloudflare(envFile);
+          const cloudflare = yield* cutoverCloudflare();
           yield* printJson(
             yield* recipientCutover({ zoneId, execute, configuration, mailboxes }, cloudflare),
           );

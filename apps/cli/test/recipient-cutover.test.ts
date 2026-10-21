@@ -83,7 +83,10 @@ describe("recipient catch-all cutover", () => {
       Effect.gen(function* () {
         const cf = cloudflare();
         const plan = yield* recipientCutover({ ...input, execute: true }, cf.client);
-        expect(plan).toHaveProperty("nextStep");
+        expect(plan).toHaveProperty(
+          "nextStep",
+          expect.stringContaining("agents secrets set UMAIL_LEGACY_CATCH_ALL --env prod"),
+        );
         expect(cf.writes).toEqual(["zone"]);
         yield* recipientCutover({ ...input, execute: true }, cf.client);
         expect(cf.writes).toEqual(["zone"]);

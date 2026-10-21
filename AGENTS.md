@@ -4,15 +4,16 @@ Setup, deploy and update steps are in [README.md](README.md). Stages, previews a
 
 ## Deploy
 
-Max's stages deploy from the repo root through `pnpm deploy:stage` (`alchemy deploy` once the machine has headroom); there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
+Max's stages deploy from the repo root of a worktree through `pnpm deploy:stage` (`alchemy deploy` once the machine has headroom); there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
 
 ```sh
 env -u CLOUDFLARE_API_TOKEN pnpm deploy:stage --stage prod --profile mschwarzmueller --no-input --yes
 ```
 
-- `UMAIL_STACK` selects the installation; absent defaults to the exact existing `uMail`. Keep `UMAIL_STACK=uMail` explicit in its `.env`. A second installation uses a distinct name and private env file with `--env-file <file>` on every Alchemy command, and its own `prod` stage. A valid typo plans a new installation; check the stack name and unexpected creates in the dry-run. The folder does not select cloud state. See [named installations](docs/operations.md#named-installations).
+- Settings come from the project's agentmanager vaults through `agents run` ([ADR 0012](adrs/0012-secrets-from-agentmanager.md)): `deploy:stage` takes `prod` for the `prod` stage and `dev` for every other (`tools/deploy.sh`); `pnpm umail` takes `prod`. Other Alchemy commands name their vault: `agents run [--env prod] -- pnpm exec alchemy plan|destroy|logs --stage <stage> --profile mschwarzmueller`. `agents secrets list [--env prod]` names the variables; never print a value. A worktree takes no `.env`: Alchemy would fill in from it what the vault lacks.
+- `UMAIL_STACK` selects the installation; absent defaults to the exact existing `uMail`. Keep `UMAIL_STACK=uMail` explicit in its vaults. A second installation has a distinct name, one vault env named for it (`.env.academind` → `academind`) and a `deploy:<name>` script of its own, added with its first deploy. A valid typo plans a new installation; check the stack name and unexpected creates in the dry-run. The folder does not select cloud state. See [named installations](docs/operations.md#named-installations).
 - `UMAIL_MAIL_DOMAINS` declares receiving/sending domains separately from the console hostname. New installs use runtime literal rules, never a catch-all or zone-wide enable. Child onboarding requires the existing shared routing flag/DKIM foundation; preserve external apex mail. Existing prod keeps `UMAIL_LEGACY_CATCH_ALL=true` through verified backfill; cutover is a separate dry-run/explicit command ([ADR 0011](adrs/0011-recipient-routing.md), [operations](docs/operations.md#existing-installation-cutover)). Prod and Academind deployment still require Max's go.
-- The `mschwarzmueller` profile stores its target account itself (`values.accountId` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`, Max's `18e364…`); `.env` sets no `CLOUDFLARE_ACCOUNT_ID`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
+- The `mschwarzmueller` profile stores its target account itself (`values.accountId` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`, Max's `18e364…`); the vaults set no `CLOUDFLARE_ACCOUNT_ID`. `default` has no Cloudflare provider, and other profiles target another account: a state-store prompt means the wrong profile.
 - `App/AUTH_OPERATOR_ID` plans as "update" on every deploy (`AuthProvision` runs each time). That is harmless.
 - Cloudflare allows one worker consumer per queue, and Alchemy creates the new consumer before deleting the old one. Before a deploy that moves a queue consumer to another worker, detach the old one (`DELETE accounts/{id}/queues/{qid}/consumers/{cid}`), then deploy.
 - For Cloudflare API calls, use the profile's OAuth token (`values.access` in `~/.alchemy/profiles/mschwarzmueller/cloudflare.json`) and a browser-like User-Agent: Cloudflare answers Python's default urllib one with 403.
@@ -55,8 +56,8 @@ Tests follow [awesome-tests](https://github.com/academind/agent-setup/blob/main/
 
 - Previews cannot send: every outbound job ends `rejected` with `E_SENDER_DOMAIN_NOT_AVAILABLE`. Approval emails never arrive, so approval-link pages exist only in the browser-spec fixtures.
 - Inbound mail: send from prod AgentMail through the `umail` MCP tools to `probe@pr-<n>-mail.<UMAIL_DOMAIN>`; it goes out without approval.
-- A failed forward: `forwarding set` to the preview's own `inbox@…`, which stays unverified. This creates an account-wide Cloudflare destination address; delete it afterwards with `DELETE accounts/{id}/email/routing/addresses/{id}` and `CF_EMAIL_ROUTING_TOKEN` (retry on 429).
-- CLI login against a preview: set `XDG_STATE_HOME` to a scratch dir so Max's credentials stay untouched.
+- A failed forward: `forwarding set` to the preview's own `inbox@…`, which stays unverified. This creates an account-wide Cloudflare destination address; delete it afterwards with `DELETE accounts/{id}/email/routing/addresses/{id}` and `CF_EMAIL_ROUTING_TOKEN` from `agents run --` (retry on 429).
+- CLI login against a preview: set `UMAIL_URL` to the preview (it wins over the `prod` vault's) and `XDG_STATE_HOME` to a scratch dir so Max's credentials stay untouched.
 - MCP token: dynamic registration accepts only an https redirect (`https://example.com/callback`). Authorize in the signed-in agent-browser and read the code from the URL.
 - Raw Workers Logs: `POST accounts/{id}/workers/observability/telemetry/query` with the profile token. `alchemy logs` flattens structured fields.
 
@@ -64,8 +65,8 @@ Tests follow [awesome-tests](https://github.com/academind/agent-setup/blob/main/
 
 Review every UI change yourself in a browser before you report it. Never hand the visual check to Max: a UI change that only Max has looked at is unfinished.
 
-- Deploy a preview stage `pr-<n>` (the PR number) with the command you use for `prod` ([Deploy](#deploy)), swapping only the stage.
-- Open `https://pr-<n>.<UMAIL_DOMAIN>/login` with agent-browser. Sign in with `UMAIL_OPERATOR_EMAIL` and `UMAIL_OPERATOR_PASSWORD` from `.env`. Pass them as shell variables (`set -a; . ./.env; set +a`) and never print their values.
+- Deploy a preview stage `pr-<n>` (the PR number) with `pnpm deploy:stage --stage pr-<n>` and the flags you use for `prod` ([Deploy](#deploy)).
+- Open `https://pr-<n>.<UMAIL_DOMAIN>/login` with agent-browser. Sign in with `UMAIL_OPERATOR_EMAIL` and `UMAIL_OPERATOR_PASSWORD`, passed as variables (`agents run -- sh -c 'agent-browser fill <selector> "$UMAIL_OPERATOR_PASSWORD"'`); never print their values.
 - Review every page the change touches in light and dark mode (`agent-browser set media dark|light`), at desktop width and at 320px (`agent-browser set viewport 320 800`).
 - Report what you saw, with screenshots.
 - Retire its mailboxes and verify owned rules are gone before destroying the preview. Named child DELETE removes its registration/DNS; shared zone settings and DKIM remain. Verify cleanup and report leftovers ([Stages and removal](docs/operations.md#stages-and-removal)).

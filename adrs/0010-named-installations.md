@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Its private env files per installation are superseded by vault envs ([ADR 0012](0012-secrets-from-agentmanager.md)).
 
 ## Context
 

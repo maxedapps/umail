@@ -1,7 +1,7 @@
 import type { Address, RoutingConfiguration } from "@umail/api-contract";
 import { fromApiToken, Retry, type CloudflareOpContext } from "@distilled.cloud/cloudflare";
 import * as routing from "@distilled.cloud/cloudflare/email-routing";
-import { Config, ConfigProvider, Data, Effect, Redacted, Schema, Stream } from "effect";
+import { Config, Data, Effect, Redacted, Schema, Stream } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 
 export class RecipientCutoverError extends Data.TaggedError("RecipientCutoverError")<{
@@ -18,12 +18,11 @@ export interface CutoverCloudflare {
   ): Effect.Effect<routing.PutRuleCatchAllResponse, RecipientCutoverError>;
 }
 
-export const cutoverCloudflare = Effect.fn("cutoverCloudflare")(function* (envFile: string) {
-  const provider = yield* ConfigProvider.fromDotEnv({ path: envFile, preserveEmptyStrings: true });
+export const cutoverCloudflare = Effect.fn("cutoverCloudflare")(function* () {
   const token = yield* Config.schema(
     Schema.Redacted(Schema.String.check(Schema.isMinLength(1))),
     "CF_EMAIL_ROUTING_RULES_TOKEN",
-  ).parse(provider);
+  );
   const http = yield* HttpClient.HttpClient;
   const run = <A, E extends { readonly _tag: string }>(
     request: Effect.Effect<A, E, CloudflareOpContext>,
@@ -166,13 +165,13 @@ export const recipientCutover = Effect.fn("recipientCutover")(function* (
       result.actions[0]?.type !== "drop"
     )
       return yield* refusal(
-        "Cloudflare did not confirm catch-all disablement. Inspect it before changing the installation env file.",
+        "Cloudflare did not confirm catch-all disablement. Inspect it before changing the installation's vault.",
       );
   }
   return {
     ...plan,
     nextStep:
-      "Set UMAIL_LEGACY_CATCH_ALL=false in the existing installation's env file, then dry-run its next deploy. The retained catch-all state may be relinquished; it must not be recreated.",
+      "Set UMAIL_LEGACY_CATCH_ALL=false in the existing installation's vault (agents secrets set UMAIL_LEGACY_CATCH_ALL --env prod for uMail), then dry-run its next deploy. The retained catch-all state may be relinquished; it must not be recreated.",
   };
 });
 

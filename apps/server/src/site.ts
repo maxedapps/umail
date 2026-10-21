@@ -36,12 +36,12 @@ class DeployConfigError extends Data.TaggedError("DeployConfigError")<{
   readonly [UserFacingError] = true;
 }
 
-// Names the variable, which is the config issue's path: "UMAIL_DOMAIN is missing. Set it in .env."
+// Names the variable, which is the config issue's path: "UMAIL_DOMAIN is missing. Add it to the vault (agents secrets set)."
 // Environment values are always strings, so a type mismatch means the variable is unset or empty.
 const formatConfigIssue = SchemaIssue.makeFormatterStandardSchemaV1({
   leafHook: (issue) =>
     issue._tag === "MissingKey" || issue._tag === "InvalidType"
-      ? "is missing. Set it in .env."
+      ? "is missing. Add it to the vault (agents secrets set)."
       : SchemaIssue.defaultLeafHook(issue),
 });
 

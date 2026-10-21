@@ -28,7 +28,7 @@ describe("deploy configuration errors", () => {
         "UMAIL_DOMAIN must be a hostname like mail.example.com (no scheme, path or port).",
       );
       expect(yield* deployError({ UMAIL_DOMAIN: "" })).toBe(
-        "UMAIL_DOMAIN is missing. Set it in .env.",
+        "UMAIL_DOMAIN is missing. Add it to the vault (agents secrets set).",
       );
     }),
   );
