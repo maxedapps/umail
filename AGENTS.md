@@ -4,7 +4,7 @@ Setup, deploy and update steps are in [README.md](README.md). Stages, previews a
 
 ## Deploy
 
-Max's stages deploy from the repo root of a worktree through `pnpm deploy:stage` (`alchemy deploy` once the machine has headroom); there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
+Max's stages deploy from the repo root of a worktree through `pnpm deploy:stage` (`alchemy deploy`); there is no CI deploy. Dry-run first (`--dry-run --no-input`) and read the plan:
 
 ```sh
 env -u CLOUDFLARE_API_TOKEN pnpm deploy:stage --stage prod --profile mschwarzmueller --no-input --yes
@@ -35,7 +35,7 @@ When a suite starts to reach a file at runtime that its specs don't import (a ne
 
 Tests follow [awesome-tests](https://github.com/academind/agent-setup/blob/main/skills/awesome-tests/SKILL.md) (`~/.agents/skills/awesome-tests`). In umail:
 
-- Every Vitest suite runs at most 4 workers (`maxWorkers: 4`; the browser suite runs one file at a time). The heavy scripts (`gate`, both `test:worker`, `test:browser`, `deploy:stage`) wait for headroom through `agents heavy`.
+- Every Vitest suite runs at most 4 workers (`maxWorkers: 4`; the browser suite runs one file at a time).
 - When a suite fails, the gate reruns each failing test alone once (`tools/rerun-alone.ts`), appends each that passes alone to the flake ledger [`flakes.md`](flakes.md) and stays red.
 - `tests/skips.test.ts` fails on a skip that isn't a `skipIf` marked `// flaky: task-<n> until <yyyy-mm-dd>` or that runs past 14 days.
 - No gate test reaches a live service: the Node tests evaluate the stack with an HTTP client that fails on any request, and the slow suites run on Miniflare and in-memory fixtures. Live checks stay manual ([Live checks on a preview](#live-checks-on-a-preview)).

@@ -71,7 +71,7 @@ One repository can select multiple installations. Alchemy's Cloudflare account +
 ```sh
 # Set the new stack, console hostname, receiving manifest and scoped credentials, one variable at a time:
 agents secrets set UMAIL_STACK --env second
-# Add "deploy:second": "agents run --env second -- agents heavy -- alchemy deploy --stage prod" to package.json.
+# Add "deploy:second": "agents run --env second -- alchemy deploy --stage prod" to package.json.
 pnpm deploy:second --profile default --dry-run --no-input
 # Only after reviewing the plan and confirming the zone is safe to manage:
 pnpm deploy:second --profile default

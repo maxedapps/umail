@@ -13,4 +13,4 @@ done
 
 vault=dev
 if [[ $stage == prod ]]; then vault=prod; fi
-exec agents run --env "$vault" -- agents heavy -- alchemy deploy "$@"
+exec agents run --env "$vault" -- alchemy deploy "$@"

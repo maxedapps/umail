@@ -39,7 +39,7 @@ describe("deploy:stage vault", () => {
     [[], undefined, "dev"],
   ])("runs %j with ALCHEMY_STAGE=%s under the %s vault", async (args, stage, vault) => {
     expect(await command(args, stage)).toBe(
-      `run --env ${vault} -- agents heavy -- alchemy deploy ${args.join(" ")}`.trim(),
+      `run --env ${vault} -- alchemy deploy ${args.join(" ")}`.trim(),
     );
   });
 });
