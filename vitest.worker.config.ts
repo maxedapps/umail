@@ -58,7 +58,6 @@ const workerConfig = Effect.gen(function* () {
       forceRerunTriggers: rerunTriggers(
         "vitest.worker.config.ts",
         "alchemy.run.ts",
-        "tools/stack-name.ts",
         "apps/server/src/**",
         "tests/{stack-fixture,worker-bundle,recipient-routing-service}.ts",
       ),

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Its private env files per installation are superseded by vault envs ([ADR 0012](0012-secrets-from-agentmanager.md)).
+Accepted. Its private env files per installation and the `.env`/`--env-file` stack-name resolution are superseded by vault envs and an environment-only `UMAIL_STACK` ([ADR 0012](0012-secrets-from-agentmanager.md)).
 
 ## Context
 

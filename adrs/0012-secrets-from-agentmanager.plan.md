@@ -24,3 +24,11 @@ No UI change: key files and snippets, the two vaults' names and counts, the dry-
 ## Open questions
 
 None.
+
+## Removal (task 1484, part 2)
+
+Max removed the `.env` files and Infisical. Non-goals: a deploy; changing Alchemy's own `.env`/`--env-file` loading.
+
+1. **Stack name from the environment** (`alchemy.run.ts`): read `UMAIL_STACK` with `ConfigProvider.fromEnv({ preserveEmptyStrings: true })` before the Stack; delete `tools/stack-name.ts` with its `--env-file`/`ALCHEMY_EXEC_OPTIONS` parsing and drop it from the root worker suite's rerun triggers. Tested: `tests/stack-name.test.ts` (a `.env` beside the entrypoint never selects the stack, fails against the old resolver; a blank `UMAIL_STACK` errors on one line through the real CLI).
+2. **Leftovers**: delete `.env.example` and its `.gitignore` exception (`.env*` stays ignored); AGENTS.md, `docs/operations.md`, ADRs 0005, 0010, 0012 no longer describe `.env` as current.
+3. **Checks**: `pnpm gate`.

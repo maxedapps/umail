@@ -1,5 +1,6 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -16,8 +17,12 @@ import { EmailRoutingDomainProvider } from "./apps/server/src/mail/receiving-dom
 import { LegacyCatchAllProvider } from "./apps/server/src/mail/legacy-catch-all.ts";
 import { LegacySeedRuleProvider } from "./apps/server/src/mail/legacy-seed-rules.ts";
 import { AuthDb, ProvisionedOperator } from "./apps/server/src/resources.ts";
-import { currentSite, deployConfigError, operatorEmail } from "./apps/server/src/site.ts";
-import { loadStackName } from "./tools/stack-name.ts";
+import {
+  currentSite,
+  deployConfigError,
+  operatorEmail,
+  stackName,
+} from "./apps/server/src/site.ts";
 
 // Export the real application program so local tests can inspect its resource graph without cloud providers.
 export const application = Effect.gen(function* () {
@@ -58,8 +63,17 @@ export const application = Effect.gen(function* () {
   }),
 );
 
+// Alchemy needs the stack name as a string at import, before it installs its ConfigProvider. It comes
+// from the environment alone (`agents run` fills it from the vault), keeping blanks: Alchemy's
+// provider drops them, which would let a blank fall back to the default installation.
+const stack = Effect.runSync(
+  stackName
+    .parse(ConfigProvider.fromEnv({ preserveEmptyStrings: true }))
+    .pipe(Effect.mapError(deployConfigError)),
+);
+
 export default Alchemy.Stack(
-  await loadStackName(),
+  stack,
   {
     providers: Layer.mergeAll(
       EmailRoutingDomainProvider,

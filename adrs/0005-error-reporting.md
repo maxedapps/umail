@@ -76,7 +76,7 @@ We are in early development: breaking wire and CLI changes are fine.
   - The CLI and server ship together, so no compatibility shim is needed.
 - **Messages become part of the contract and its tests.** Wording changes touch tests. That is the point: each test pins a real sentence a user reads.
 - **Policy messages reveal only what the caller supplied or may read:** a rejected recipient, the chosen mailbox, a disabled capability. Never the whole allowlist or other mailboxes. Unknown and inaccessible ids get the same wording.
-- **Deploy-time checks need the variables present.** Validating `UMAIL_OPERATOR_PASSWORD` when the stack is evaluated means `plan` and `destroy` also need it set. `.env` already has it.
+- **Deploy-time checks need the variables present.** Validating `UMAIL_OPERATOR_PASSWORD` when the stack is evaluated means `plan` and `destroy` also need it set. The vaults already have it.
 - **Structured logs change the Workers Logs format** from pretty text lines to one JSON object per log, with the annotations as fields.
 - **Out of scope:**
   - removing the previous operator's account when `UMAIL_OPERATOR_EMAIL` changes (a separate identity-lifecycle change);
