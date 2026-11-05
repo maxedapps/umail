@@ -7,7 +7,7 @@ import * as Provider from "alchemy/Provider";
 import * as Resource from "alchemy/Resource";
 import { Stack, type StackSpec } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { unpackEnvValue } from "alchemy/RuntimeContext";
 import { InMemoryService, State } from "alchemy/State";
 import { describe, expect, it } from "@effect/vitest";

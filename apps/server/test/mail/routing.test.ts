@@ -1,4 +1,4 @@
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -39,8 +39,6 @@ const sharedDkim = record(
 function recordingSession() {
   const notes: Array<string> = [];
   const session = {
-    emit: () => Effect.void,
-    done: () => Effect.void,
     note: (note: string) => Effect.sync(() => void notes.push(note)),
   } satisfies ScopedPlanStatusSession;
   return { notes, session };

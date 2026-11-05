@@ -1,5 +1,5 @@
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Provider from "alchemy/Provider";
 import { Effect } from "effect";
 import * as routing from "@distilled.cloud/cloudflare/email-routing";

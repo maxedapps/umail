@@ -8,7 +8,7 @@ export class SchemaIncompatibleError extends Data.TaggedError("SchemaIncompatibl
 
 export class SchemaMigrationError extends Data.TaggedError("SchemaMigrationError")<{
   readonly version: number;
-  readonly name: string;
+  readonly migration: string;
   readonly cause: unknown;
 }> {}
 

@@ -1,5 +1,4 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, layer } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -21,9 +20,11 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
 
 import { makeCredentialStore, OAuthCredentials } from "../apps/cli/src/credential-store.ts";
+import { CliPlatform } from "../apps/cli/src/platform.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url);
 const CREDENTIAL_STORE_HREF = new URL("../apps/cli/src/credential-store.ts", import.meta.url).href;
+const PLATFORM_HREF = new URL("../apps/cli/src/platform.ts", import.meta.url).href;
 const LockWorkerOutput = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true) }),
   Schema.Struct({
@@ -63,7 +64,7 @@ interface FakeOAuthControl {
 type ProcessEnvironment = Record<string, string>;
 
 // Real clock and processes; every server, child and directory is released with the test's scope.
-layer(NodeServices.layer, { excludeTestServices: true })(
+layer(CliPlatform, { excludeTestServices: true })(
   "credential transitions across processes",
   (it) => {
     it.effect(
@@ -292,17 +293,17 @@ const spawnCli = Effect.fn("spawnCli")(function* (
 });
 
 const LOCK_WORKER_SCRIPT = `
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
 import { credentialFile, makeCredentialStore } from ${JSON.stringify(CREDENTIAL_STORE_HREF)};
+import { CliPlatform } from ${JSON.stringify(PLATFORM_HREF)};
 
 const result = await Effect.runPromise(
   Effect.gen(function* () {
     const store = yield* makeCredentialStore(yield* credentialFile);
     return yield* Effect.result(store.withLock(store.remove));
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(CliPlatform)),
 );
 if (Result.isFailure(result)) {
   process.stdout.write(JSON.stringify({ ok: false, tag: result.failure._tag }));

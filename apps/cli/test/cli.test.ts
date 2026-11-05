@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 
 import { ApprovalToken, NotFound } from "@umail/api-contract";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { CliPlatform } from "../src/platform.ts";
 import { describe, expect, it, layer } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -278,7 +278,7 @@ const unusedApprovalTokenSource = {
 } satisfies ApprovalTokenSourceService;
 
 function cliTestLayer() {
-  return Layer.mergeAll(NodeServices.layer, Layer.fresh(TestConsole.layer));
+  return Layer.mergeAll(CliPlatform, Layer.fresh(TestConsole.layer));
 }
 
 function runProgram(
@@ -415,7 +415,7 @@ function serializeApprovalFailureCapture(captured: ApprovalFailureCapture): stri
   return JSON.stringify(captured);
 }
 
-layer(NodeServices.layer)("retained CLI dispatch", (it) => {
+layer(CliPlatform)("retained CLI dispatch", (it) => {
   it.effect("inspects cutover coverage without --execute and performs no writes", () =>
     Effect.gen(function* () {
       const { captured, httpClient } = capturingClient((_request, url) => {
@@ -1122,7 +1122,7 @@ layer(NodeServices.layer)("retained CLI dispatch", (it) => {
   );
 });
 
-layer(NodeServices.layer)("public approval capability commands", (it) => {
+layer(CliPlatform)("public approval capability commands", (it) => {
   it.effect("uses the masked-input and token-file sources without bearer configuration", () =>
     Effect.gen(function* () {
       const reads: Array<string | undefined> = [];

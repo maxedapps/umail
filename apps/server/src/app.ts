@@ -1,6 +1,6 @@
 import { BetterAuth } from "@alchemy.run/better-auth";
 import { CloudflareD1 } from "@alchemy.run/better-auth/CloudflareD1";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

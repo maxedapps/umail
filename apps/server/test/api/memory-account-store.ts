@@ -1,3 +1,4 @@
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { applyAccountSchema } from "../../src/account/commands.ts";
 import type { AccountStorage } from "../../src/account/due-work.ts";
 import { type AccountSqlRow, type AccountSqlValue } from "../../src/account/sqlite.ts";
@@ -6,7 +7,6 @@ import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqli
 import { makeAccountStoreRpc, type AccountStoreRpc } from "../../src/account/worker.ts";
 import { MailDomain } from "@umail/api-contract";
 import type { MailDomainConfiguration } from "../../src/mail/domains.ts";
-import { webCrypto } from "../../src/crypto.ts";
 
 const TEST_NOW = "2026-01-01T00:00:00.000Z";
 
@@ -87,9 +87,23 @@ export function createMemoryAccount(
 ): MemoryAccount {
   const storage = new MemoryAccountSqliteStorage();
   applyAccountSchema(storage, TEST_NOW);
+  const account = makeAccountStoreRpc(
+    storage,
+    SecureRandom.make(SecureRandom.randomBytesUnsafe),
+    domains,
+  );
   return {
     storage,
-    account: makeAccountStoreRpc(storage, webCrypto, domains),
+    account: {
+      ...account,
+      // Workers RPC refuses a class instance ("Could not serialize object of type"); Node would not.
+      patchAddress: (id, patch, now) => {
+        if (Object.getPrototypeOf(patch) !== Object.prototype) {
+          throw new TypeError(`Could not serialize object of type "${patch.constructor.name}"`);
+        }
+        return account.patchAddress(id, patch, now);
+      },
+    },
   };
 }
 

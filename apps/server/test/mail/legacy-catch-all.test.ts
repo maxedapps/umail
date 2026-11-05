@@ -1,4 +1,4 @@
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Provider from "alchemy/Provider";
 import type { ScopedPlanStatusSession } from "alchemy/Report";
 import { describe, expect, it } from "@effect/vitest";
@@ -19,9 +19,7 @@ const output: Cloudflare.Email.CatchAll["Attributes"] = {
 };
 const props = { zone: "zone", actions: output.actions };
 const session: ScopedPlanStatusSession = {
-  emit: () => Effect.void,
   note: () => Effect.void,
-  done: () => Effect.void,
 };
 const input = {
   id: "MailCatchAll",

@@ -31,9 +31,10 @@ const threadPage = {
   nextCursor: "next-cursor",
 } satisfies Json;
 
-class ArtifactApprovalDecisionResult extends Schema.Class<ArtifactApprovalDecisionResult>(
-  "ArtifactApprovalDecisionResult",
-)({
+class ArtifactApprovalDecisionResult extends Schema.Class<
+  ArtifactApprovalDecisionResult,
+  { readonly brand: unique symbol }
+>("ArtifactApprovalDecisionResult")({
   state: ApprovalDecisionState,
 }) {}
 

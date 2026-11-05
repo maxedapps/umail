@@ -1,4 +1,4 @@
-import type { RpcAsync } from "alchemy/Cloudflare/Bridge";
+import type { RpcAsync } from "@alchemy.run/cloudflare/Bridge";
 import type { AccountStoreRpc } from "../../src/account/worker.ts";
 import {
   MailHtmlPolicyError,

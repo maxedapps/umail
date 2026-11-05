@@ -22,6 +22,9 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.worker.spec.ts"],
+    // With the cache, a later worker gets its specs' whole module graph in one WebSocket message from
+    // the Cloudflare pool, past workerd's limit (1009 "Message is too large"), which ends the worker.
+    fsModuleCache: false,
     // Agents share the machine, and Vitest's default of a worker per core but one overloads it.
     maxWorkers: 4,
     // Some specs make hundreds of sequential Durable Object calls: well under 5 s alone, but not on

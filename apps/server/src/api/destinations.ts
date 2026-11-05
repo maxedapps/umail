@@ -25,10 +25,7 @@ export function cloudflareDestinations(config: {
   readonly token: Redacted.Redacted<string>;
   readonly accountId: string;
 }): DestinationsClient {
-  const cloudflare = Layer.merge(
-    fromApiToken({ apiToken: Redacted.value(config.token) }),
-    FetchHttpClient.layer,
-  );
+  const cloudflare = Layer.merge(fromApiToken({ apiToken: config.token }), FetchHttpClient.layer);
   const accountId = config.accountId;
   return {
     ensure: Effect.fn("DestinationsClient.ensure")(

@@ -1,4 +1,5 @@
 import {
+  ListThreadMessagesQuery,
   NotFound,
   type Address,
   type MailContact,
@@ -387,10 +388,20 @@ const conversation = Effect.fn("conversation")(function* (
   principal: Principal,
   threadId: string,
 ) {
-  let page = yield* getThread(deps, principal, threadId, { limit: 200 });
+  let page = yield* getThread(
+    deps,
+    principal,
+    threadId,
+    new ListThreadMessagesQuery({ limit: 200 }),
+  );
   const messages = [...page.messages];
   while (page.nextCursor !== null) {
-    page = yield* getThread(deps, principal, threadId, { limit: 200, cursor: page.nextCursor });
+    page = yield* getThread(
+      deps,
+      principal,
+      threadId,
+      new ListThreadMessagesQuery({ limit: 200, cursor: page.nextCursor }),
+    );
     messages.push(...page.messages);
   }
   return messages;

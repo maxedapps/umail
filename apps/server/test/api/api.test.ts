@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import type * as Alchemy from "alchemy";
 import { RpcCallError } from "alchemy/Rpc";
-import type * as Crypto from "effect/Crypto";
+import type { Crypto } from "../../src/crypto.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -27,6 +27,7 @@ import {
   OutboundJobStatus,
   OutboundThreadMessage,
   RequestErrors,
+  ListMessagesQuery,
   SubmissionRequestId,
   SubmitMessagePayload,
   ThreadMessage,
@@ -1263,7 +1264,7 @@ describe("error reasons", () => {
   // The error's fields, as they would be encoded.
   const failure = <A, E extends ApiError>(
     world: World,
-    effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+    effect: Effect.Effect<A, E, Crypto | Alchemy.RuntimeContext>,
   ) =>
     Effect.map(Effect.flip(world.run(effect)), (error) => ({
       _tag: error._tag,
@@ -1361,7 +1362,7 @@ describe("error reasons", () => {
       const scoped = sender(world, { mailboxIds: [inbox.id] });
       const outOfScope = yield* failure(
         world,
-        listMessages(world.deps, scoped, { addressId: probe.id }),
+        listMessages(world.deps, scoped, new ListMessagesQuery({ addressId: probe.id })),
       );
       expect(outOfScope).toEqual({
         _tag: "NotFound",
@@ -1369,11 +1370,16 @@ describe("error reasons", () => {
         message: `Mailbox ${probe.id} was not found, or it is outside this client's access.`,
       });
       expect(
-        yield* failure(world, listMessages(world.deps, scoped, { addressId: "nope" })),
+        yield* failure(
+          world,
+          listMessages(world.deps, scoped, new ListMessagesQuery({ addressId: "nope" })),
+        ),
       ).toEqual({ ...outOfScope, message: outOfScope.message.replace(probe.id, "nope") });
       expect(
         yield* Effect.map(
-          world.run(listMessages(world.deps, scoped, { addressId: inbox.id })),
+          world.run(
+            listMessages(world.deps, scoped, new ListMessagesQuery({ addressId: inbox.id })),
+          ),
           (page) => page.items,
         ),
       ).toEqual([]);

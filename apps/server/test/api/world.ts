@@ -5,7 +5,7 @@ import * as Alchemy from "alchemy";
 import { betterAuth } from "better-auth";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,7 +35,7 @@ import {
   type UmailBetterAuth,
 } from "../../src/auth/options.ts";
 import { provisionAuth } from "../../src/auth/provisioning.ts";
-import { WebCrypto, webCrypto } from "../../src/crypto.ts";
+import { type Crypto, WebCrypto } from "../../src/crypto.ts";
 import type { OutboundMail } from "../../src/mail/email-sender.ts";
 import type { NotificationKey } from "../../src/mail/notifications.ts";
 import { FaithfulMailHtmlPolicy, MemoryArchive, MemoryDestinations } from "./fakes.ts";
@@ -56,7 +56,7 @@ export const AUTH_SECRET = "umail-test-better-auth-secret";
 export const WorkerServices = Layer.merge(WebCrypto, Alchemy.RuntimeContext.phantom);
 
 export function runInWorker<A, E>(
-  effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+  effect: Effect.Effect<A, E, Crypto | Alchemy.RuntimeContext>,
 ): Promise<A> {
   return Effect.runPromise(effect.pipe(Effect.provide(WorkerServices)));
 }
@@ -77,7 +77,7 @@ export type World = {
   readonly setTime: (iso: string) => Effect.Effect<void>;
   // Runs an API operation directly, with the world's clock and the Worker's services.
   readonly run: <A, E>(
-    effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>,
+    effect: Effect.Effect<A, E, Crypto | Alchemy.RuntimeContext>,
   ) => Effect.Effect<A, E>;
   readonly notificationKey: NotificationKey;
   readonly deps: ApiDeps;
@@ -133,7 +133,7 @@ export const createWorld = Effect.fn("createWorld")(function* (
   const archive = new MemoryArchive();
   const destinations = new MemoryDestinations();
   const htmlPolicy = new FaithfulMailHtmlPolicy();
-  const notificationKey = new Uint8Array(yield* webCrypto.randomBytes(32).pipe(Effect.orDie));
+  const notificationKey = new Uint8Array(SecureRandom.randomBytesUnsafe(32));
   const access = makeAccess(memoryQueryDatabase(db), provision.operatorId);
   const runtime = yield* Effect.gen(function* () {
     const deps = {
@@ -163,7 +163,7 @@ export const createWorld = Effect.fn("createWorld")(function* (
   }).pipe(Effect.provide(Reactivity.layer), Effect.scoped);
   const clock = runtime.clock;
   const setTime = (iso: string) => clock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(iso)));
-  const run = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto | Alchemy.RuntimeContext>) =>
+  const run = <A, E>(effect: Effect.Effect<A, E, Crypto | Alchemy.RuntimeContext>) =>
     effect.pipe(Effect.provideService(Clock.Clock, clock), Effect.provide(WorkerServices));
   const requestContext = Context.add(
     settings.requestContext ?? Context.empty(),

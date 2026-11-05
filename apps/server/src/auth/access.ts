@@ -6,7 +6,7 @@ import {
   requireApprovalSendMode,
   type PrincipalSendMode,
 } from "@umail/api-contract";
-import type * as Cloudflare from "alchemy/Cloudflare";
+import type * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";

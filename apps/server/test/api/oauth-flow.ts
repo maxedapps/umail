@@ -1,8 +1,8 @@
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
 
-import { webCrypto } from "../../src/crypto.ts";
 import { jsonBody, readJson, readText, type World } from "./world.ts";
 
 const RedirectResult = Schema.Struct({
@@ -55,7 +55,9 @@ export const issueMcpAccessToken = Effect.fn("issueMcpAccessToken")(function* (
 ) {
   const verifier = "umail-test-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
   const challenge = Base64Url.encode(
-    yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+    yield* Digest.Digest.use((digest) =>
+      digest.digest(Digest.sha256, new TextEncoder().encode(verifier)),
+    ).pipe(Effect.provide(Digest.layerWebCrypto)),
   );
   const state = "umail-test-state";
   const authorize = yield* world.request(

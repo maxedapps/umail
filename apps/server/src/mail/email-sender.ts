@@ -1,5 +1,5 @@
 import type * as Alchemy from "alchemy";
-import type * as Cloudflare from "alchemy/Cloudflare";
+import type * as Cloudflare from "@alchemy.run/cloudflare";
 import { normalizeRfcMessageId } from "@umail/api-contract";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";

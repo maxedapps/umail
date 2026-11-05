@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Artifacts from "alchemy/Artifacts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";

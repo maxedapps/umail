@@ -1,4 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { CliPlatform } from "../src/platform.ts";
 import { describe, expect, it, layer } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -342,7 +342,7 @@ describe("OAuth refresh and logout", () => {
   );
 });
 
-layer(NodeServices.layer)("POSIX OAuth credential store", (it) => {
+layer(CliPlatform)("POSIX OAuth credential store", (it) => {
   const inTemporaryState = <A, E, R>(
     body: (stateHome: string, file: string) => Effect.Effect<A, E, R>,
   ) =>

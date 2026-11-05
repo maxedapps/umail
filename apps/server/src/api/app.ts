@@ -73,10 +73,10 @@ import {
   retryAddressRouting,
 } from "./operations.ts";
 
-export class ArchiveTransportError extends Schema.TaggedError<ArchiveTransportError>()(
-  "ArchiveTransportError",
-  { key: Schema.String },
-) {}
+export class ArchiveTransportError extends Schema.TaggedError<
+  ArchiveTransportError,
+  { readonly brand: unique symbol }
+>()("ArchiveTransportError", { key: Schema.String }) {}
 
 export type MailArchiveReader = {
   get(key: string): Effect.Effect<Uint8Array | null, ArchiveTransportError, Alchemy.RuntimeContext>;

@@ -3,7 +3,7 @@ import type {
   ApprovalPreviewHeaders,
   ApprovalTrustedPageHeaders,
 } from "@umail/api-contract";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -85,10 +85,9 @@ for (const time of document.querySelectorAll("time[datetime]")) {
 }
 `;
 
-export const pageNonce = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  return Hex.encode(yield* crypto.randomBytes(16));
-}).pipe(Effect.orDie);
+export const pageNonce = SecureRandom.SecureRandom.use((random) =>
+  Effect.map(random.randomBytes(16), Hex.encode),
+);
 
 export function renderDocument(view: PageView, nonce: string): string {
   const policy = KIND_POLICIES[view.kind];

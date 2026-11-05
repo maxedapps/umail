@@ -47,10 +47,10 @@ export function describeMailHtmlLimit(limit: MailHtmlResourceLimit): string {
   }
 }
 
-export class MailHtmlResourceExhaustion extends Schema.TaggedError<MailHtmlResourceExhaustion>()(
-  "MailHtmlResourceExhaustion",
-  { limit: MailHtmlResourceLimit },
-) {}
+export class MailHtmlResourceExhaustion extends Schema.TaggedError<
+  MailHtmlResourceExhaustion,
+  { readonly brand: unique symbol }
+>()("MailHtmlResourceExhaustion", { limit: MailHtmlResourceLimit }) {}
 
 type MailHtmlDepthFrame = {
   readonly node: DefaultTreeAdapterTypes.ParentNode;

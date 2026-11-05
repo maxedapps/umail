@@ -5,6 +5,7 @@ import {
   type MessageSummary,
   type OutboundRequester,
   type PageCursor,
+  type PatchAddressInput,
   type SubmitOutboundInput,
   type SubmitOutboundResult,
 } from "../account/domain.ts";
@@ -28,20 +29,19 @@ import {
   constructMailboxAddress,
   headerBlock,
   joinRfcMessageIds,
+  ListThreadMessagesQuery,
   NotFound,
   NotPermitted,
   parseUtcInstant,
   Unavailable,
   type ListJobsQuery,
   type ListMessagesQuery,
-  type ListThreadMessagesQuery,
   type NotFoundCode,
-  type PatchAddressPayload,
   type Principal,
   type SubmitMessagePayload,
 } from "@umail/api-contract";
 import type * as Alchemy from "alchemy";
-import type * as Crypto from "effect/Crypto";
+import type { Crypto } from "../crypto.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
@@ -177,10 +177,11 @@ export const retryAddressRouting = Effect.fn("retryAddressRouting")(function* (
 export const patchAddress = Effect.fn("patchAddress")(function* (
   deps: ApiDeps,
   id: string,
-  patch: PatchAddressPayload,
+  patch: PatchAddressInput,
 ) {
   const now = yield* currentIso;
-  const address = yield* deps.account.patchAddress(id, patch, now).pipe(storeCall);
+  // The HTTP route hands over its decoded class instance, and Workers RPC only clones plain objects.
+  const address = yield* deps.account.patchAddress(id, { ...patch }, now).pipe(storeCall);
   if (address === null) {
     return yield* notFound("mailbox_not_found", `Mailbox ${id}`);
   }
@@ -252,7 +253,7 @@ export const getThread = Effect.fn("getThread")(function* (
   deps: ApiDeps,
   principal: Principal,
   threadId: string,
-  query: ListThreadMessagesQuery = {},
+  query = new ListThreadMessagesQuery({}),
 ) {
   yield* requireRead(principal);
   const page = yield* deps.account
@@ -606,7 +607,7 @@ const submitPrepared = Effect.fn("submitPrepared")(function* (
   principal: Principal,
   payload: SubmitMessagePayload,
   nowIso: string,
-): Effect.fn.Return<SubmitOutboundResult, StoreHttpError, Crypto.Crypto | Alchemy.RuntimeContext> {
+): Effect.fn.Return<SubmitOutboundResult, StoreHttpError, Crypto | Alchemy.RuntimeContext> {
   const approval = yield* newApprovalCapability(yield* deps.notificationKey, nowIso);
   return yield* deps.account
     .submitOutbound({

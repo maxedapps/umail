@@ -11,7 +11,9 @@ export const ExternalMailAddress = Schema.String.check(
 ).pipe(Schema.brand("ExternalMailAddress"));
 export type ExternalMailAddress = typeof ExternalMailAddress.Type;
 
-export class MailContact extends Schema.Class<MailContact>("MailContact")({
+export class MailContact extends Schema.Class<MailContact, { readonly brand: unique symbol }>(
+  "MailContact",
+)({
   address: ExternalMailAddress,
   displayName: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),

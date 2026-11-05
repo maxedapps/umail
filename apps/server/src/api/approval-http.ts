@@ -5,7 +5,7 @@ import {
   type ApprovalToken,
   type OutboundThreadMessage,
 } from "@umail/api-contract";
-import type * as Crypto from "effect/Crypto";
+import type { Crypto } from "../crypto.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
@@ -37,7 +37,7 @@ export type ApprovalGone = {
 export const reviewApproval = Effect.fn("reviewApproval")(function* (
   deps: ApprovalHttpDeps,
   token: ApprovalToken,
-): Effect.fn.Return<ApprovalReviewOutcome, never, Crypto.Crypto> {
+): Effect.fn.Return<ApprovalReviewOutcome, never, Crypto> {
   const lookup = yield* lookupApproval(deps, token);
   if (lookup.kind === "missing") {
     return { kind: "notFound" };

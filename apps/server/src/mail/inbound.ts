@@ -1,6 +1,6 @@
 import { parseMailboxAddress } from "@umail/api-contract";
-import type * as Cloudflare from "alchemy/Cloudflare";
-import type * as Crypto from "effect/Crypto";
+import type * as Cloudflare from "@alchemy.run/cloudflare";
+import type { Crypto } from "../crypto.ts";
 import * as Effect from "effect/Effect";
 import type { AccountStoreError } from "../account/errors.ts";
 import type { AccountStoreRpc } from "../account/worker.ts";
@@ -34,7 +34,7 @@ export type InboundDeps<R> = {
 export const receiveInbound = <R>(
   message: InboundMessage,
   deps: InboundDeps<R>,
-): Effect.Effect<void, Error | AccountStoreError, R | Crypto.Crypto> =>
+): Effect.Effect<void, Error | AccountStoreError, R | Crypto> =>
   Effect.gen(function* () {
     if (message.bodySize > DEFAULT_MAX_RAW_BYTES) {
       return yield* message.setReject("message too large");

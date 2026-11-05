@@ -6,7 +6,7 @@ import {
   UMAIL_OAUTH_SCOPE,
 } from "@umail/api-contract";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as DateTime from "effect/DateTime";
 import * as Redacted from "effect/Redacted";
 import { hashPassword, verifyPassword } from "better-auth/crypto";

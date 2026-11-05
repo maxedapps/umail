@@ -133,7 +133,7 @@ describe("scoped recipient rules client", () => {
         return yield* (yield* RecipientRules).list("zone");
       }).pipe(Effect.provide(f.layer));
       expect(rules.map(({ id }) => id)).toEqual(["page-1", "page-2"]);
-      expect(f.requests).toHaveLength(3);
+      expect(f.requests).toHaveLength(2);
       expect(
         f.requests.every(
           (request) =>

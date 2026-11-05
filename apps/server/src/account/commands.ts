@@ -237,7 +237,7 @@ function applyMigration(
   } catch (cause) {
     throw new SchemaMigrationError({
       version: migration.version,
-      name: migration.name,
+      migration: migration.name,
       cause,
     });
   }

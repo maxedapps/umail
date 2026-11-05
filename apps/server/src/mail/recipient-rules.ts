@@ -1,4 +1,4 @@
-import { Config, Context, Data, Effect, Layer, Redacted, Stream } from "effect";
+import { Config, Context, Data, Effect, Layer, Stream } from "effect";
 import { fromApiToken, Retry, type CloudflareOpContext } from "@distilled.cloud/cloudflare";
 import * as routing from "@distilled.cloud/cloudflare/email-routing";
 import * as HttpClient from "effect/http/HttpClient";
@@ -32,7 +32,7 @@ export class RecipientRules extends Context.Service<RecipientRules, RecipientRul
     Effect.gen(function* () {
       const token = yield* Config.Redacted("CF_EMAIL_ROUTING_RULES_TOKEN");
       const http = yield* HttpClient.HttpClient;
-      const credentials = fromApiToken({ apiToken: Redacted.value(token) });
+      const credentials = fromApiToken({ apiToken: token });
       const run = <A, E extends { readonly _tag: string; readonly message: string }>(
         operation: Effect.Effect<A, E, CloudflareOpContext>,
       ) =>

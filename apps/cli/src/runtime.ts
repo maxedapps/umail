@@ -1,12 +1,12 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Command from "effect/cli/Command";
 
 import { OAuthCredentialStore } from "./credential-store.ts";
 import { ApprovalTokenSource } from "./approvals.ts";
+import { CliPlatform } from "./platform.ts";
 import { umailCommand } from "./commands/index.ts";
 import { program } from "./main.ts";
 
@@ -21,9 +21,7 @@ export function runCli(argv: ReadonlyArray<string>) {
   // file) is printed like any other failure. Failures are printed once by `program`; the default
   // teardown exits non-zero on failure only.
   NodeRuntime.runMain(
-    program(umailCommand.pipe(Command.provide(CliLive)), argv).pipe(
-      Effect.provide(NodeServices.layer),
-    ),
+    program(umailCommand.pipe(Command.provide(CliLive)), argv).pipe(Effect.provide(CliPlatform)),
     { disableErrorReporting: true },
   );
 }

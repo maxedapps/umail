@@ -13,7 +13,7 @@ import {
   type MailboxAddress,
 } from "@umail/api-contract";
 import * as Console from "effect/Console";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -507,7 +507,7 @@ const resolveRequestId = Effect.fn("resolveRequestId")(function* (
   provided: Option.Option<SubmissionRequestId>,
 ) {
   if (Option.isSome(provided)) return provided.value;
-  const uuid = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+  const uuid = yield* SecureRandom.SecureRandom.use((random) => random.uuidV4());
   return yield* Schema.decodeEffect(SubmissionRequestId)(uuid).pipe(Effect.orDie);
 });
 

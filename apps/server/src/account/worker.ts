@@ -1,12 +1,14 @@
 import { OPERATOR_POLICY, constructMailboxAddress, type MailDomain } from "@umail/api-contract";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { WebCrypto, randomId } from "../crypto.ts";
+import { type Crypto, WebCrypto } from "../crypto.ts";
 import { cloudflareEmailSender } from "../mail/email-sender.ts";
 import { StructuredLogs, appRuntime } from "../app-runtime.ts";
 import { MailIndex } from "../resources.ts";
@@ -67,7 +69,7 @@ const runStore = <A>(run: () => A): Effect.Effect<A, AccountStoreError> =>
 
 export function makeAccountStoreRpc(
   storage: AccountStorage,
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
   domains: ReadonlyArray<MailDomainConfiguration>,
 ) {
   const call =
@@ -82,7 +84,7 @@ export function makeAccountStoreRpc(
     <Args extends ReadonlyArray<unknown>, A>(fn: (storage: AccountStorage, ...args: Args) => A) =>
     (...args: Args) =>
       call(fn)(...args).pipe(Effect.tap(() => arm));
-  const newId = randomId.pipe(Effect.provideService(Crypto.Crypto, crypto));
+  const newId = random.uuidV4();
   return {
     acceptInbound: call(acceptInbound),
     registerInboundReceipt: callAndArm(registerInboundReceipt),
@@ -159,7 +161,10 @@ export const AccountStoreLive = AccountStore.make(
     const email = yield* Cloudflare.Email.Send(Cloudflare.Email.SendEmail("EMAIL"));
     const index = yield* Cloudflare.Queues.WriteQueue(MailIndex);
     const approvalAdminEmail = yield* operatorEmail;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = Context.pick(
+      SecureRandom.SecureRandom,
+      Digest.Digest,
+    )(yield* Effect.context<Crypto>());
     const routes = yield* RecipientRules;
     // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's Durable Object shape: the outer effect runs once per isolate and returns the per-instance initializer.
     return Effect.gen(function* () {
@@ -170,7 +175,11 @@ export const AccountStoreLive = AccountStore.make(
         storage,
         runtime.domains.filter(({ send }) => send).map(({ name }) => name),
       );
-      const rpc = makeAccountStoreRpc(storage, crypto, runtime.domains);
+      const rpc = makeAccountStoreRpc(
+        storage,
+        Context.get(crypto, SecureRandom.SecureRandom),
+        runtime.domains,
+      );
       if (site.kind === "preview") {
         for (const domain of runtime.domains.filter(({ receive }) => receive))
           yield* seedDevelopmentAddresses(rpc, {
@@ -208,7 +217,7 @@ export const AccountStoreLive = AccountStore.make(
         alarm: () =>
           Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
             runDueWork(storage, ports, nowMs),
-          ).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+          ).pipe(Effect.provide(crypto)),
       };
     });
   }).pipe(

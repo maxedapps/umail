@@ -13,7 +13,7 @@ const workerConfig = Effect.gen(function* () {
   const path = yield* Path.Path;
   const stack = yield* evaluateApplication("dev");
   const app = requireWorker(stack, "App");
-  const bundle = yield* bundleWorker(yield* path.fromFileUrl(app.Props.main!), "App", app.Props);
+  const bundle = yield* bundleWorker(app.Props.main!, "App", app.Props);
   const environment = yield* resolveGraphValue(app.Props.env);
   const bindings: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(environment ?? {})) {

@@ -1,7 +1,7 @@
 import * as Output from "alchemy/Output";
 import { inMemoryState } from "alchemy/State";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as Provider from "alchemy/Provider";
 import type { StackSpec } from "alchemy/Stack";

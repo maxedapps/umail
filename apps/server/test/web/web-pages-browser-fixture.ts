@@ -10,6 +10,7 @@ import {
   type Principal,
   type PrincipalPolicy,
 } from "@umail/api-contract";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
@@ -17,7 +18,7 @@ import type { BrowserContext, Frame, Locator, Page } from "playwright";
 import type { Plugin } from "vitest/config";
 import type { Vite } from "vitest/node";
 
-import { randomId, webCrypto } from "../../src/crypto.ts";
+import { randomId } from "../../src/crypto.ts";
 import { submitMessage } from "../../src/api/operations.ts";
 import { PREVIEW_EXTERNAL_ORIGIN, PREVIEW_HTML_SOURCE } from "../api/fakes.ts";
 import { issueMcpAccessToken, registerMcpClient } from "../api/oauth-flow.ts";
@@ -949,7 +950,9 @@ const consentAuthorizePath = Effect.fn("consentAuthorizePath")(function* (world:
   const registered = yield* registerMcpClient(world, { label: "Browser consent" });
   const verifier = "umail-browser-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
   const challenge = Base64Url.encode(
-    yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+    yield* Digest.Digest.use((digest) =>
+      digest.digest(Digest.sha256, new TextEncoder().encode(verifier)),
+    ).pipe(Effect.provide(Digest.layerWebCrypto)),
   );
   const authorize = yield* world.request(
     `http://umail.test/api/auth/oauth2/authorize?${new URLSearchParams({

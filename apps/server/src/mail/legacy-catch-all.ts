@@ -1,4 +1,4 @@
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Provider from "alchemy/Provider";
 import { isResolved } from "alchemy/Diff";
 import { Effect } from "effect";

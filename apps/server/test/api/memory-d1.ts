@@ -1,5 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 

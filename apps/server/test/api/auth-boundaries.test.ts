@@ -2,6 +2,7 @@ import { createPrivateKey, sign as signBytes } from "node:crypto";
 import { describe, expect, it } from "@effect/vitest";
 import { symmetricDecrypt } from "better-auth/crypto";
 import * as Clock from "effect/Clock";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
@@ -9,7 +10,6 @@ import * as Schema from "effect/Schema";
 import { ExternalMailAddress } from "@umail/api-contract";
 
 import { provisionAuth } from "../../src/auth/provisioning.ts";
-import { webCrypto } from "../../src/crypto.ts";
 import { memoryQueryDatabase } from "./memory-d1.ts";
 import { DISABLED_AUTH_PATHS } from "../../src/auth/runtime-surface.ts";
 import { issueMcpAccessToken, registerMcpClient } from "./oauth-flow.ts";
@@ -506,7 +506,9 @@ const pendingAuthorizationCode = Effect.fn("pendingAuthorizationCode")(function*
 ) {
   const verifier = "umail-test-verifier-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFG";
   const challenge = Base64Url.encode(
-    yield* webCrypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+    yield* Digest.Digest.use((digest) =>
+      digest.digest(Digest.sha256, new TextEncoder().encode(verifier)),
+    ).pipe(Effect.provide(Digest.layerWebCrypto)),
   );
   const authorize = yield* world.request(
     `http://umail.test/api/auth/oauth2/authorize?${new URLSearchParams({

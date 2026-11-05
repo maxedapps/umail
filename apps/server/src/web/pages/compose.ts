@@ -1,7 +1,7 @@
 import {
   parseMailAddressList,
   SubmitMessagePayload,
-  type MailContact,
+  MailContact,
   type OutboundJobStatus,
   type Principal,
   type SendingIdentity,
@@ -252,7 +252,9 @@ function contactsFrom(
 ): { readonly contacts: Array<MailContact> } | { readonly invalid: string } {
   const parsed = parseMailAddressList(raw);
   if (parsed.kind !== "ok") return { invalid: `“${parsed.value}” is not an email address.` };
-  return { contacts: parsed.addresses.map((address) => ({ address, displayName: null })) };
+  return {
+    contacts: parsed.addresses.map((address) => new MailContact({ address, displayName: null })),
+  };
 }
 
 export const sendRoute = Effect.fn("sendRoute")(function* (deps: ApiDeps, principal: Principal) {

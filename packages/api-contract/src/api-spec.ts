@@ -17,7 +17,7 @@ import {
   SubmissionRequestId,
 } from "./submission-domain.ts";
 
-export class Address extends Schema.Class<Address>("Address")({
+export class Address extends Schema.Class<Address, { readonly brand: unique symbol }>("Address")({
   id: Schema.String,
   localPart: Schema.String,
   address: Schema.String,
@@ -37,28 +37,37 @@ export class Address extends Schema.Class<Address>("Address")({
   }),
 }) {}
 
-export class ReceivingDomain extends Schema.Class<ReceivingDomain>("ReceivingDomain")({
+export class ReceivingDomain extends Schema.Class<
+  ReceivingDomain,
+  { readonly brand: unique symbol }
+>("ReceivingDomain")({
   name: Schema.String,
   receive: Schema.Boolean,
   send: Schema.Boolean,
   zoneId: Schema.String,
 }) {}
 
-export class RoutingConfiguration extends Schema.Class<RoutingConfiguration>(
-  "RoutingConfiguration",
-)({
+export class RoutingConfiguration extends Schema.Class<
+  RoutingConfiguration,
+  { readonly brand: unique symbol }
+>("RoutingConfiguration")({
   workerName: Schema.String,
   ownerPrefix: Schema.String,
   domains: Schema.Array(ReceivingDomain),
 }) {}
 
-export class SendingIdentity extends Schema.Class<SendingIdentity>("SendingIdentity")({
+export class SendingIdentity extends Schema.Class<
+  SendingIdentity,
+  { readonly brand: unique symbol }
+>("SendingIdentity")({
   id: Schema.String,
   address: MailboxAddress,
   displayName: Schema.NullOr(Schema.String),
 }) {}
 
-export class AttachmentMeta extends Schema.Class<AttachmentMeta>("AttachmentMeta")({
+export class AttachmentMeta extends Schema.Class<AttachmentMeta, { readonly brand: unique symbol }>(
+  "AttachmentMeta",
+)({
   id: Schema.String,
   filename: Schema.String,
   mimeType: Schema.String,
@@ -68,7 +77,9 @@ export class AttachmentMeta extends Schema.Class<AttachmentMeta>("AttachmentMeta
   isInline: Schema.Boolean,
 }) {}
 
-export class ThreadParty extends Schema.Class<ThreadParty>("ThreadParty")({
+export class ThreadParty extends Schema.Class<ThreadParty, { readonly brand: unique symbol }>(
+  "ThreadParty",
+)({
   source: Schema.Literals(["participant", "envelope"]),
   contact: MailContact,
 }) {}
@@ -115,17 +126,19 @@ const threadMessageFields = {
   htmlBody: Schema.NullOr(Schema.String),
 };
 
-export class InboundMailMessageSummary extends Schema.Class<InboundMailMessageSummary>(
-  "InboundMailMessageSummary",
-)({
+export class InboundMailMessageSummary extends Schema.Class<
+  InboundMailMessageSummary,
+  { readonly brand: unique symbol }
+>("InboundMailMessageSummary")({
   direction: Schema.Literal("inbound"),
   ...mailMessageSummaryFields,
   ...inboundMessageStateFields,
 }) {}
 
-export class OutboundMailMessageSummary extends Schema.Class<OutboundMailMessageSummary>(
-  "OutboundMailMessageSummary",
-)({
+export class OutboundMailMessageSummary extends Schema.Class<
+  OutboundMailMessageSummary,
+  { readonly brand: unique symbol }
+>("OutboundMailMessageSummary")({
   direction: Schema.Literal("outbound"),
   ...mailMessageSummaryFields,
   ...outboundMessageStateFields,
@@ -137,17 +150,19 @@ export const MailMessageSummary = Schema.Union([
 ]);
 export type MailMessageSummary = typeof MailMessageSummary.Type;
 
-export class InboundThreadMessage extends Schema.Class<InboundThreadMessage>(
-  "InboundThreadMessage",
-)({
+export class InboundThreadMessage extends Schema.Class<
+  InboundThreadMessage,
+  { readonly brand: unique symbol }
+>("InboundThreadMessage")({
   direction: Schema.Literal("inbound"),
   ...threadMessageFields,
   ...inboundMessageStateFields,
 }) {}
 
-export class OutboundThreadMessage extends Schema.Class<OutboundThreadMessage>(
-  "OutboundThreadMessage",
-)({
+export class OutboundThreadMessage extends Schema.Class<
+  OutboundThreadMessage,
+  { readonly brand: unique symbol }
+>("OutboundThreadMessage")({
   direction: Schema.Literal("outbound"),
   ...threadMessageFields,
   ...outboundMessageStateFields,
@@ -156,12 +171,17 @@ export class OutboundThreadMessage extends Schema.Class<OutboundThreadMessage>(
 export const ThreadMessage = Schema.Union([InboundThreadMessage, OutboundThreadMessage]);
 export type ThreadMessage = typeof ThreadMessage.Type;
 
-export class MessageHeaders extends Schema.Class<MessageHeaders>("MessageHeaders")({
+export class MessageHeaders extends Schema.Class<MessageHeaders, { readonly brand: unique symbol }>(
+  "MessageHeaders",
+)({
   headers: Schema.String,
   truncated: Schema.Boolean,
 }) {}
 
-export class MailThreadSummary extends Schema.Class<MailThreadSummary>("MailThreadSummary")({
+export class MailThreadSummary extends Schema.Class<
+  MailThreadSummary,
+  { readonly brand: unique symbol }
+>("MailThreadSummary")({
   threadId: Schema.String,
   subject: Schema.NullOr(Schema.String),
   latestSender: ThreadParty,
@@ -172,28 +192,42 @@ export class MailThreadSummary extends Schema.Class<MailThreadSummary>("MailThre
   lastActivityAt: Schema.String,
 }) {}
 
-export class MailThreadPage extends Schema.Class<MailThreadPage>("MailThreadPage")({
+export class MailThreadPage extends Schema.Class<MailThreadPage, { readonly brand: unique symbol }>(
+  "MailThreadPage",
+)({
   items: Schema.Array(MailThreadSummary),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
 
-export class MailThreadDetail extends Schema.Class<MailThreadDetail>("MailThreadDetail")({
+export class MailThreadDetail extends Schema.Class<
+  MailThreadDetail,
+  { readonly brand: unique symbol }
+>("MailThreadDetail")({
   threadId: Schema.String,
   messages: Schema.Array(MailMessageSummary),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
 
-export class MailMessagePage extends Schema.Class<MailMessagePage>("MailMessagePage")({
+export class MailMessagePage extends Schema.Class<
+  MailMessagePage,
+  { readonly brand: unique symbol }
+>("MailMessagePage")({
   items: Schema.Array(MailMessageSummary),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
 
-export class ListThreadsQuery extends Schema.Class<ListThreadsQuery>("ListThreadsQuery")({
+export class ListThreadsQuery extends Schema.Class<
+  ListThreadsQuery,
+  { readonly brand: unique symbol }
+>("ListThreadsQuery")({
   limit: Schema.optionalKey(Schema.Int),
   cursor: Schema.optionalKey(Schema.String),
 }) {}
 
-export class ListMessagesQuery extends Schema.Class<ListMessagesQuery>("ListMessagesQuery")({
+export class ListMessagesQuery extends Schema.Class<
+  ListMessagesQuery,
+  { readonly brand: unique symbol }
+>("ListMessagesQuery")({
   direction: Schema.optionalKey(Schema.Literals(["inbound", "outbound"])),
   addressId: Schema.optionalKey(
     Schema.String.annotate({
@@ -206,9 +240,10 @@ export class ListMessagesQuery extends Schema.Class<ListMessagesQuery>("ListMess
   cursor: Schema.optionalKey(Schema.String),
 }) {}
 
-export class ListThreadMessagesQuery extends Schema.Class<ListThreadMessagesQuery>(
-  "ListThreadMessagesQuery",
-)({
+export class ListThreadMessagesQuery extends Schema.Class<
+  ListThreadMessagesQuery,
+  { readonly brand: unique symbol }
+>("ListThreadMessagesQuery")({
   limit: Schema.optionalKey(Schema.Int),
   cursor: Schema.optionalKey(Schema.String),
 }) {}
@@ -245,16 +280,18 @@ export const hasMessageBody = Schema.makeFilter(
       : "A message body is required.",
 );
 
-export class ComposeSubmissionPayload extends Schema.Class<ComposeSubmissionPayload>(
-  "ComposeSubmissionPayload",
-)({
+export class ComposeSubmissionPayload extends Schema.Class<
+  ComposeSubmissionPayload,
+  { readonly brand: unique symbol }
+>("ComposeSubmissionPayload")({
   intent: Schema.Literal("compose"),
   ...composeFields,
 }) {}
 
-export class ReplySubmissionPayload extends Schema.Class<ReplySubmissionPayload>(
-  "ReplySubmissionPayload",
-)({
+export class ReplySubmissionPayload extends Schema.Class<
+  ReplySubmissionPayload,
+  { readonly brand: unique symbol }
+>("ReplySubmissionPayload")({
   intent: Schema.Literal("reply"),
   ...replyFields,
 }) {}
@@ -265,7 +302,10 @@ export const SubmitMessagePayload = Schema.Union([
 ]).annotate({ expected: 'a compose or reply submission (intent: "compose" | "reply")' });
 export type SubmitMessagePayload = typeof SubmitMessagePayload.Type;
 
-export class OutboundJobStatus extends Schema.Class<OutboundJobStatus>("OutboundJobStatus")({
+export class OutboundJobStatus extends Schema.Class<
+  OutboundJobStatus,
+  { readonly brand: unique symbol }
+>("OutboundJobStatus")({
   jobId: Schema.String,
   requestId: Schema.String.check(Schema.isMinLength(1)),
   messageId: Schema.String,
@@ -281,39 +321,50 @@ export class OutboundJobStatus extends Schema.Class<OutboundJobStatus>("Outbound
   updatedAt: Schema.String,
 }) {}
 
-export class ListJobsQuery extends Schema.Class<ListJobsQuery>("ListJobsQuery")({
+export class ListJobsQuery extends Schema.Class<ListJobsQuery, { readonly brand: unique symbol }>(
+  "ListJobsQuery",
+)({
   limit: Schema.optionalKey(Schema.Int),
   cursor: Schema.optionalKey(Schema.String),
 }) {}
 
-export class OutboundJobStatusPage extends Schema.Class<OutboundJobStatusPage>(
-  "OutboundJobStatusPage",
-)({
+export class OutboundJobStatusPage extends Schema.Class<
+  OutboundJobStatusPage,
+  { readonly brand: unique symbol }
+>("OutboundJobStatusPage")({
   items: Schema.Array(OutboundJobStatus),
   nextCursor: Schema.NullOr(Schema.String),
 }) {}
 
-export class CreateAddressPayload extends Schema.Class<CreateAddressPayload>(
-  "CreateAddressPayload",
-)({
+export class CreateAddressPayload extends Schema.Class<
+  CreateAddressPayload,
+  { readonly brand: unique symbol }
+>("CreateAddressPayload")({
   localPart: Schema.String,
   domain: Schema.optionalKey(Schema.String),
   displayName: Schema.optionalKey(Schema.String),
 }) {}
 
-export class PatchAddressPayload extends Schema.Class<PatchAddressPayload>("PatchAddressPayload")({
+export class PatchAddressPayload extends Schema.Class<
+  PatchAddressPayload,
+  { readonly brand: unique symbol }
+>("PatchAddressPayload")({
   displayName: Schema.optionalKey(Schema.NullOr(Schema.String)),
   active: Schema.optionalKey(Schema.Boolean),
 }) {}
 
-export class SetForwardingPayload extends Schema.Class<SetForwardingPayload>(
-  "SetForwardingPayload",
-)({
+export class SetForwardingPayload extends Schema.Class<
+  SetForwardingPayload,
+  { readonly brand: unique symbol }
+>("SetForwardingPayload")({
   email: ExternalMailAddress,
 }) {}
 
 // Cloudflare only forwards to a verified destination; it emails the owner a link until then.
-export class AddressForwarding extends Schema.Class<AddressForwarding>("AddressForwarding")({
+export class AddressForwarding extends Schema.Class<
+  AddressForwarding,
+  { readonly brand: unique symbol }
+>("AddressForwarding")({
   address: Address,
   verified: Schema.Boolean,
 }) {}
@@ -561,15 +612,18 @@ const ApprovalDecisionRedirect = HttpApiSchema.WithHeaders(
   ApprovalRedirectHeaders,
 );
 
-export class ApprovalPageNotFound extends Schema.TaggedError<ApprovalPageNotFound>()(
-  "ApprovalPageNotFound",
-  {
-    html: Schema.String,
-    headers: ApprovalTrustedPageHeaders,
-  },
-) {}
+export class ApprovalPageNotFound extends Schema.TaggedError<
+  ApprovalPageNotFound,
+  { readonly brand: unique symbol }
+>()("ApprovalPageNotFound", {
+  html: Schema.String,
+  headers: ApprovalTrustedPageHeaders,
+}) {}
 
-export class ApprovalPageGone extends Schema.TaggedError<ApprovalPageGone>()("ApprovalPageGone", {
+export class ApprovalPageGone extends Schema.TaggedError<
+  ApprovalPageGone,
+  { readonly brand: unique symbol }
+>()("ApprovalPageGone", {
   html: Schema.String,
   headers: ApprovalTrustedPageHeaders,
 }) {}

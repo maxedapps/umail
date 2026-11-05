@@ -1,5 +1,7 @@
 import {
+  ComposeSubmissionPayload,
   ListMessagesQuery,
+  ListThreadMessagesQuery,
   MailMessagePage,
   MailThreadDetail,
   MailThreadPage,
@@ -11,12 +13,13 @@ import {
   composeFields,
   hasMessageBody,
   replyFields,
+  ReplySubmissionPayload,
   type ApiError,
   type Principal,
 } from "@umail/api-contract";
 import type { CallToolResult, McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
 import type * as Alchemy from "alchemy";
-import type * as Crypto from "effect/Crypto";
+import type { Crypto } from "../../crypto.ts";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -77,7 +80,7 @@ export function registerTools(
   server: McpServer,
   deps: ApiDeps,
   principal: Principal,
-  services: Context.Context<Crypto.Crypto | Alchemy.RuntimeContext>,
+  services: Context.Context<Crypto | Alchemy.RuntimeContext>,
 ) {
   const run = Effect.runPromiseWith(services);
 
@@ -89,7 +92,7 @@ export function registerTools(
       readonly input: Schema.ConstraintDecoder<In>;
       readonly output: Schema.ConstraintDecoder<Out>;
     },
-    handler: (input: In) => Effect.Effect<Out, ApiError, Crypto.Crypto | Alchemy.RuntimeContext>,
+    handler: (input: In) => Effect.Effect<Out, ApiError, Crypto | Alchemy.RuntimeContext>,
   ) {
     // API errors carry client-safe messages written where the cause is known, so they are passed
     // through. Anything else is logged and answered with a fixed text; for a send, it says how to
@@ -178,7 +181,8 @@ export function registerTools(
       input: Schema.Struct({ ...ListMessagesQuery.fields, ...pageFields }),
       output: Schema.Struct({ page: MailMessagePage }),
     },
-    (input) => Effect.map(listMessages(deps, principal, input), (page) => ({ page })),
+    (input) =>
+      Effect.map(listMessages(deps, principal, new ListMessagesQuery(input)), (page) => ({ page })),
   );
 
   tool(
@@ -190,7 +194,10 @@ export function registerTools(
       output: Schema.Struct({ thread: MailThreadDetail }),
     },
     ({ threadId, ...query }) =>
-      Effect.map(getThread(deps, principal, threadId, query), (thread) => ({ thread })),
+      Effect.map(
+        getThread(deps, principal, threadId, new ListThreadMessagesQuery(query)),
+        (thread) => ({ thread }),
+      ),
   );
 
   tool(
@@ -248,9 +255,16 @@ export function registerTools(
       output: Schema.Struct({ job: OutboundJobStatus }),
     },
     (input) =>
-      Effect.map(submitMessage(deps, principal, { intent: "compose", ...input }), (job) => ({
-        job,
-      })),
+      Effect.map(
+        submitMessage(
+          deps,
+          principal,
+          new ComposeSubmissionPayload({ intent: "compose", ...input }),
+        ),
+        (job) => ({
+          job,
+        }),
+      ),
   );
 
   tool(
@@ -263,9 +277,12 @@ export function registerTools(
       output: Schema.Struct({ job: OutboundJobStatus }),
     },
     (input) =>
-      Effect.map(submitMessage(deps, principal, { intent: "reply", ...input }), (job) => ({
-        job,
-      })),
+      Effect.map(
+        submitMessage(deps, principal, new ReplySubmissionPayload({ intent: "reply", ...input })),
+        (job) => ({
+          job,
+        }),
+      ),
   );
 
   tool(

@@ -1,7 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -69,7 +69,7 @@ export const credentialFile = Effect.gen(function* () {
 export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const directory = path.dirname(file);
   const root = path.dirname(directory);
   const lock = `${file}.lock`;
@@ -152,10 +152,7 @@ export const makeCredentialStore = Effect.fn("makeCredentialStore")(function* (f
   const write = Effect.fn("OAuthCredentialStore.write")(function* (credentials: OAuthCredentials) {
     yield* ensureDirectory;
     if ((yield* entryAt(file)) === "entry") yield* assertSafe(file, "File", true);
-    const temporary = path.join(
-      directory,
-      `.oauth-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.tmp`,
-    );
+    const temporary = path.join(directory, `.oauth-${yield* random.uuidV4()}.tmp`);
     yield* fs
       .writeFileString(
         temporary,

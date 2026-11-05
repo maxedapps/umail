@@ -5,7 +5,7 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/valida
 import { operatorPrincipal } from "@umail/api-contract";
 import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import type { Crypto } from "../../src/crypto.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -76,7 +76,7 @@ const scopeOracleDeps = Effect.fn("scopeOracleDeps")(function* () {
 
 const callListSendingIdentities = Effect.fn("callListSendingIdentities")(function* (
   deps: ApiDeps,
-  services: Context.Context<Crypto.Crypto | RuntimeContext>,
+  services: Context.Context<Crypto | RuntimeContext>,
 ) {
   const handler = yield* Effect.acquireRelease(
     Effect.sync(() =>

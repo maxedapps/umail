@@ -44,7 +44,10 @@ type UnavailableCode =
 
 type Props<Code> = { readonly code: Code; readonly message: string };
 
-export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("InvalidRequest", fields, {
+export class InvalidRequest extends Schema.TaggedError<
+  InvalidRequest,
+  { readonly brand: unique symbol }
+>()("InvalidRequest", fields, {
   httpApiStatus: 400,
 }) {
   constructor(props: Props<InvalidRequestCode>, options?: Schema.MakeOptions) {
@@ -52,17 +55,19 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
   }
 }
 
-export class Unauthenticated extends Schema.TaggedError<Unauthenticated>()(
-  "Unauthenticated",
-  fields,
-  { httpApiStatus: 401 },
-) {
+export class Unauthenticated extends Schema.TaggedError<
+  Unauthenticated,
+  { readonly brand: unique symbol }
+>()("Unauthenticated", fields, { httpApiStatus: 401 }) {
   constructor(props: Props<UnauthenticatedCode>, options?: Schema.MakeOptions) {
     super(props, options);
   }
 }
 
-export class NotPermitted extends Schema.TaggedError<NotPermitted>()("NotPermitted", fields, {
+export class NotPermitted extends Schema.TaggedError<
+  NotPermitted,
+  { readonly brand: unique symbol }
+>()("NotPermitted", fields, {
   httpApiStatus: 403,
 }) {
   constructor(props: Props<NotPermittedCode>, options?: Schema.MakeOptions) {
@@ -70,23 +75,34 @@ export class NotPermitted extends Schema.TaggedError<NotPermitted>()("NotPermitt
   }
 }
 
-export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", fields, {
-  httpApiStatus: 404,
-}) {
+export class NotFound extends Schema.TaggedError<NotFound, { readonly brand: unique symbol }>()(
+  "NotFound",
+  fields,
+  {
+    httpApiStatus: 404,
+  },
+) {
   constructor(props: Props<NotFoundCode>, options?: Schema.MakeOptions) {
     super(props, options);
   }
 }
 
-export class Conflict extends Schema.TaggedError<Conflict>()("Conflict", fields, {
-  httpApiStatus: 409,
-}) {
+export class Conflict extends Schema.TaggedError<Conflict, { readonly brand: unique symbol }>()(
+  "Conflict",
+  fields,
+  {
+    httpApiStatus: 409,
+  },
+) {
   constructor(props: Props<ConflictCode>, options?: Schema.MakeOptions) {
     super(props, options);
   }
 }
 
-export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", fields, {
+export class Unavailable extends Schema.TaggedError<
+  Unavailable,
+  { readonly brand: unique symbol }
+>()("Unavailable", fields, {
   httpApiStatus: 502,
 }) {
   constructor(props: Props<UnavailableCode>, options?: Schema.MakeOptions) {

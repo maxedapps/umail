@@ -20,7 +20,10 @@ export type WebPageBrowserFixture = typeof WebPageBrowserFixture.Type;
 export const WebPageBrowserColorScheme = Schema.Literals(["light", "dark"]);
 export type WebPageBrowserColorScheme = typeof WebPageBrowserColorScheme.Type;
 
-export class WebPageBrowserVisit extends Schema.Class<WebPageBrowserVisit>("WebPageBrowserVisit")({
+export class WebPageBrowserVisit extends Schema.Class<
+  WebPageBrowserVisit,
+  { readonly brand: unique symbol }
+>("WebPageBrowserVisit")({
   fixture: WebPageBrowserFixture,
   colorScheme: WebPageBrowserColorScheme,
   viewportWidth: Schema.Finite,

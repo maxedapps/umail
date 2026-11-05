@@ -41,11 +41,11 @@ const READY_POLL_INTERVAL = "5 seconds";
 // alchemy prints a UserFacingError as one line, so the deploy says which records to look at.
 export class EmailRoutingDomainNotReady extends Data.TaggedError("EmailRoutingDomainNotReady")<{
   readonly zoneId: string;
-  readonly name: string;
+  readonly domain: string;
   readonly missing: ReadonlyArray<string>;
 }> {
   readonly [UserFacingError] = true;
-  override readonly message = `Email Routing DNS for ${this.name} is not ready after 60 s.${
+  override readonly message = `Email Routing DNS for ${this.domain} is not ready after 60 s.${
     this.missing.length === 0 ? "" : ` Missing: ${this.missing.join("; ")}.`
   } Check for conflicting MX/TXT records.`;
 }
@@ -112,7 +112,11 @@ function waitUntilReady(domain: EmailRoutingDomainProps, session: ScopedPlanStat
       times: READY_POLLS,
     }),
     Effect.flatMap(({ ready, missing }) =>
-      ready ? Effect.void : Effect.fail(new EmailRoutingDomainNotReady({ ...domain, missing })),
+      ready
+        ? Effect.void
+        : Effect.fail(
+            new EmailRoutingDomainNotReady({ zoneId: domain.zoneId, domain: domain.name, missing }),
+          ),
     ),
   );
 }

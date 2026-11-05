@@ -11,9 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@distilled.cloud/cloudflare": "1.0.0-rc.13",
-    "@effect/platform-node": "4.0.2",
+    "@distilled.cloud/cloudflare": "1.0.0-rc.18",
+    "@effect/platform-node": "4.1.2",
     "@umail/api-contract": "workspace:*",
-    "effect": "4.0.2"
+    "effect": "4.1.2"
   }
 }

@@ -1,7 +1,7 @@
 import type { Address, RoutingConfiguration } from "@umail/api-contract";
 import { fromApiToken, Retry, type CloudflareOpContext } from "@distilled.cloud/cloudflare";
 import * as routing from "@distilled.cloud/cloudflare/email-routing";
-import { Config, Data, Effect, Redacted, Schema, Stream } from "effect";
+import { Config, Data, Effect, Schema, Stream } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 
 export class RecipientCutoverError extends Data.TaggedError("RecipientCutoverError")<{
@@ -36,7 +36,7 @@ export const cutoverCloudflare = Effect.fn("cutoverCloudflare")(function* () {
             message: `Cloudflare ${error._tag}; no further cutover operation was attempted.`,
           }),
       ),
-      Effect.provide(fromApiToken({ apiToken: Redacted.value(token) })),
+      Effect.provide(fromApiToken({ apiToken: token })),
       Effect.provideService(HttpClient.HttpClient, http),
     );
   return {

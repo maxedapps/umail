@@ -35,9 +35,12 @@ export const IndexReceiptWork = Schema.Struct({
 });
 export type IndexReceiptWork = typeof IndexReceiptWork.Type;
 
-class IndexFailure extends Schema.TaggedError<IndexFailure>()("IndexFailure", {
-  reason: Schema.String,
-}) {}
+class IndexFailure extends Schema.TaggedError<IndexFailure, { readonly brand: unique symbol }>()(
+  "IndexFailure",
+  {
+    reason: Schema.String,
+  },
+) {}
 
 // The slice of alchemy's R2 bucket client and the AccountStore that indexing uses.
 export type IndexDeps<R> = {

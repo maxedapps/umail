@@ -24,13 +24,13 @@ export type StoredMailHtml = {
   readonly hasRemoteImages: boolean;
 };
 
-export class MailHtmlPolicyError extends Schema.TaggedError<MailHtmlPolicyError>()(
-  "MailHtmlPolicyError",
-  {
-    reason: Schema.Literals(["resource_exhausted", "rewrite_failed"]),
-    limit: Schema.optionalKey(MailHtmlResourceLimit),
-  },
-) {}
+export class MailHtmlPolicyError extends Schema.TaggedError<
+  MailHtmlPolicyError,
+  { readonly brand: unique symbol }
+>()("MailHtmlPolicyError", {
+  reason: Schema.Literals(["resource_exhausted", "rewrite_failed"]),
+  limit: Schema.optionalKey(MailHtmlResourceLimit),
+}) {}
 
 export interface MailHtmlPolicy {
   sanitizeForStorage(html: string): Effect.Effect<StoredMailHtml, MailHtmlPolicyError>;
