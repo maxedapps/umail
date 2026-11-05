@@ -1,7 +1,10 @@
 packages:
   - apps/*
   - packages/*
+# Off so pnpm reruns @playwright/browser-chromium's download when the browser is gone; `exclude` needs pnpm 12.14.
+sideEffectsCache: false
 allowBuilds:
+  "@playwright/browser-chromium": true
   workerd: true
   esbuild: true
   msgpackr-extract: false

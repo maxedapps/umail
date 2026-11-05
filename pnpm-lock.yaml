@@ -43,6 +43,9 @@ importers:
       '@oxlint/plugins':
         specifier: 1.91.0
         version: 1.91.0
+      '@playwright/browser-chromium':
+        specifier: 1.64.0
+        version: 1.64.0
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -1238,6 +1241,10 @@ packages:
   '@oxlint/plugins@1.91.0':
     resolution: {integrity: sha512-Fh+SOBxMu7/pbSk84WG4BN6npcxxlF4jWNQJ+S4IUNyvSVeQwOVTFQMD/Dx2EqBQ1lVeCADcJ+0rzT1BKQ9cUA==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+
+  '@playwright/browser-chromium@1.64.0':
+    resolution: {integrity: sha512-vnkDCrnSwdXdB+lNlqyBbLS7+iuw7IRn2vAbu+Hf7d+aXdRW2nRDZGZbqu7nezDUOKRDKc0135pnO3HG936clQ==}
+    engines: {node: '>=20'}
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
@@ -3393,6 +3400,10 @@ snapshots:
     optional: true
 
   '@oxlint/plugins@1.91.0': {}
+
+  '@playwright/browser-chromium@1.64.0':
+    dependencies:
+      playwright-core: 1.64.0
 
   '@polka/url@1.0.0-next.29': {}
 

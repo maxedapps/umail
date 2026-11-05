@@ -36,8 +36,4 @@ fi
 suite vitest.worker.config.ts --changed main
 run cd apps/server
 suite vitest.worker.config.ts --changed main
-if [[ ! $list ]]; then
-  # The browser suite needs the Chromium build of the pinned Playwright; once it is there this is a no-op.
-  run playwright install --only-shell chromium
-fi
 suite vitest.browser.config.ts --changed main
